@@ -31,10 +31,9 @@ from app.integrations.llm_client import LLMClient
 from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.services.attachment_service import AttachmentService
 from app.services.message_builder import (
-    append_images_markdown,
     build_user_content,
+    finalize_assistant_text,
     history_to_llm_messages,
-    rewrite_media_urls_in_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,12 +100,13 @@ class AgentOrchestrator:
     @staticmethod
     def _finalize_assistant_text(
         completion_content: str | None,
-        all_image_urls: list[str],
         media_url_rewrites: dict[str, str],
     ) -> str:
-        """Текст ответа с актуальными URL картинок."""
-        body = rewrite_media_urls_in_text(completion_content or "", media_url_rewrites)
-        return append_images_markdown(body, all_image_urls)
+        """Текст ответа без markdown-картинок (изображения — в content_json)."""
+        return finalize_assistant_text(
+            completion_content,
+            media_url_rewrites=media_url_rewrites,
+        )
 
     @staticmethod
     def _tool_loop_overflow_note() -> str:
@@ -131,11 +131,7 @@ class AgentOrchestrator:
         body = content_from_llm or ""
         if overflow_note:
             body = f"{overflow_note}\n\n{body}".strip() if body else overflow_note
-        text = self._finalize_assistant_text(
-            body,
-            all_image_urls,
-            media_url_rewrites,
-        )
+        text = self._finalize_assistant_text(body, media_url_rewrites)
         message = await msg_repo.create(
             conversation_id=conversation.id,
             role=MessageRole.ASSISTANT,
@@ -596,7 +592,7 @@ class AgentOrchestrator:
                     })
                 continue
 
-            text = append_images_markdown(completion.content or "", all_image_urls)
+            text = finalize_assistant_text(completion.content)
             if emit and text:
                 await emit("text_delta", {"content": text})
             if emit:
@@ -604,7 +600,7 @@ class AgentOrchestrator:
             return AgentTurnResult(assistant_text=text, image_urls=all_image_urls)
 
         if all_image_urls:
-            text = append_images_markdown(self._tool_loop_overflow_note(), all_image_urls)
+            text = finalize_assistant_text(self._tool_loop_overflow_note())
             if emit:
                 await emit("text_delta", {"content": text})
                 await emit("done", {})

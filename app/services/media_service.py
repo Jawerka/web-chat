@@ -371,7 +371,10 @@ class MediaService:
         if not content_json and not content_text:
             return content_json, content_text
 
-        from app.services.message_builder import rewrite_media_urls_in_text
+        from app.services.message_builder import (
+            rewrite_media_urls_in_text,
+            strip_markdown_images,
+        )
 
         cj = dict(content_json or {})
         changed = False
@@ -439,6 +442,12 @@ class MediaService:
         if content_text and url_map:
             new_text = rewrite_media_urls_in_text(content_text, url_map)
             if new_text != content_text:
+                changed = True
+
+        if new_images and new_text:
+            stripped = strip_markdown_images(new_text)
+            if stripped != new_text:
+                new_text = stripped
                 changed = True
 
         if not changed:

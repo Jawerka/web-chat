@@ -97,11 +97,11 @@ function formatMarkdown(text) {
   formatted = formatted.replace(/^\s*[-*+]\s+(.+)$/gm, '<li>$1</li>');
   formatted = formatted.replace(/^\s*\d+\.\s+(.+)$/gm, '<li>$1</li>');
   formatted = formatted.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-  formatted = formatted.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   formatted = formatted.replace(
     /!\[(.+?)\]\((.+?)\)/g,
     '<img src="$2" alt="$1" class="md-inline-img" loading="lazy">',
   );
+  formatted = formatted.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
   formatted = formatted.replace(/\n\n+/g, '</p><p>');
   formatted = formatted.replace(/\n/g, '<br>');

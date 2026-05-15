@@ -1041,6 +1041,14 @@ body.dark-theme .loading-overlay {
   margin-top: 12px;
 }
 
+.chat-message.assistant .message-bubble + .message-images {
+  margin-top: 10px;
+}
+
+.chat-message.assistant:not(:has(.message-bubble)) .message-images {
+  margin-top: 0;
+}
+
 .message-images img,
 .md-inline-img {
   width: 100%;

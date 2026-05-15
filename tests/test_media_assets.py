@@ -104,7 +104,8 @@ async def test_list_messages_imports_legacy_generated_to_db(
     assert m["content_json"]["images"]
     assert m["content_json"]["images"][0].startswith("/media/asset/")
     assert m["content_json"]["image_asset_ids"]
-    assert "/media/asset/" in m["content_text"]
+    assert "![test]" not in (m["content_text"] or "")
+    assert m["content_text"].strip() == "Картинка:"
 
     asset_id = uuid.UUID(m["content_json"]["image_asset_ids"][0])
     r = await client.get(f"/media/asset/{asset_id}")

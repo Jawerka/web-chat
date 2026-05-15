@@ -43,6 +43,16 @@ function extractMarkdownImageUrls(text) {
   return urls;
 }
 
+/** Убрать markdown-картинки из текста ассистента (картинки — в content_json / .message-images). */
+function stripMarkdownImages(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function imageUrlsFromParts(parts) {
   if (!parts || !parts.length) return [];
   const urls = [];
@@ -62,7 +72,10 @@ function imageUrlsFromMessage(m) {
   const fromJson = cj.images || [];
   const fromAssets = (cj.image_asset_ids || []).map((id) => `/media/asset/${id}`);
   const fromParts = m.role === 'user' ? imageUrlsFromParts(cj.parts) : [];
-  const fromMd = m.role === 'assistant' ? extractMarkdownImageUrls(m.content_text) : [];
+  const hasStructured = fromJson.length > 0 || fromAssets.length > 0;
+  const fromMd = (
+    m.role === 'assistant' && !hasStructured
+  ) ? extractMarkdownImageUrls(m.content_text) : [];
   const merged = [...fromAssets, ...fromJson, ...fromParts, ...fromMd];
   return [...new Set(merged.map(resolveMediaUrl).filter(Boolean))];
 }
@@ -755,10 +768,16 @@ class ChatApp {
     if (!this.streamEl) return;
     this.streamText += chunk;
     this.hideProgress();
-    this.streamEl.classList.add('has-content');
     this.streamEl.classList.remove('waiting');
     const bubble = this.streamEl.querySelector('.message-bubble');
-    bubble.innerHTML = formatMarkdown(this.streamText);
+    const displayText = stripMarkdownImages(this.streamText);
+    if (displayText) {
+      this.streamEl.classList.add('has-content');
+      bubble.innerHTML = formatMarkdown(displayText);
+    } else {
+      this.streamEl.classList.remove('has-content');
+      bubble.innerHTML = '';
+    }
     bubble.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src');
       if (src) img.src = resolveMediaUrl(src);
@@ -938,20 +957,18 @@ class ChatApp {
   addAssistantBubble(text, imageUrls, messageId = null) {
     const el = document.createElement('div');
     el.className = 'chat-message assistant';
-    const bubble = document.createElement('div');
-    bubble.className = 'message-bubble';
-    if (text) bubble.innerHTML = formatMarkdown(text);
-    bubble.querySelectorAll('img').forEach((img) => {
-      const src = img.getAttribute('src');
-      if (src) img.src = resolveMediaUrl(src);
-    });
-    el.appendChild(bubble);
-    const resolved = imageUrls.map(resolveMediaUrl);
-    const extraUrls = resolved.filter((u) => !(text || '').includes(u));
-    if (extraUrls.length) {
+    const displayText = stripMarkdownImages(text);
+    const urls = [...new Set(imageUrls.map(resolveMediaUrl).filter(Boolean))];
+    if (displayText) {
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+      bubble.innerHTML = formatMarkdown(displayText);
+      el.appendChild(bubble);
+    }
+    if (urls.length) {
       const grid = document.createElement('div');
       grid.className = 'message-images';
-      for (const url of extraUrls) grid.appendChild(this._createImage(url));
+      for (const url of urls) grid.appendChild(this._createImage(url));
       el.appendChild(grid);
     }
     this._bindImageClicks(el);

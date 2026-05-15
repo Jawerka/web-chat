@@ -4,8 +4,12 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any
+
+# Markdown-изображения в тексте ассистента не используем — картинки в content_json + UI.
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 
 from app.db.models import Attachment, Message, MessageRole
 from app.integrations.media_utils import absolute_media_url
@@ -77,10 +81,23 @@ def rewrite_media_urls_in_text(text: str, url_map: dict[str, str]) -> str:
     return result
 
 
-def append_images_markdown(text: str, urls: list[str]) -> str:
-    """Добавить markdown-изображения в конец ответа, если их ещё нет."""
-    result = text
-    for url in urls:
-        if url not in result:
-            result += f"\n\n![Сгенерированное изображение]({url})"
-    return result
+def strip_markdown_images(text: str) -> str:
+    """Убрать ![alt](url) из текста (картинки показывает UI по content_json.images)."""
+    if not text:
+        return text
+    result = _MARKDOWN_IMAGE_RE.sub("", text)
+    result = re.sub(r"[ \t]+\n", "\n", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
+
+def finalize_assistant_text(
+    completion_content: str | None,
+    *,
+    media_url_rewrites: dict[str, str] | None = None,
+) -> str:
+    """Текст ответа ассистента без markdown-картинок и с актуальными URL в prose."""
+    body = completion_content or ""
+    if media_url_rewrites:
+        body = rewrite_media_urls_in_text(body, media_url_rewrites)
+    return strip_markdown_images(body)
