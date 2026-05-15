@@ -18,7 +18,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 # Отредактируйте PUBLIC_BASE_URL — URL, который вводите в браузере
-uvicorn app.main:app --host 0.0.0.0 --port 8090
+uvicorn app.main:app --host 0.0.0.0 --port 8090   # доступ из LAN
 ```
 
 Проверка:

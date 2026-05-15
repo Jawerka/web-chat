@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1419">
+  <title>{{ title }}</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/chat.css">
+</head>
+<body>
+  <div class="sidebar-backdrop hidden" id="sidebar-backdrop" aria-hidden="true"></div>
+
+  <div class="app-shell" id="app">
+    <aside class="conv-sidebar" id="conv-sidebar" aria-label="Боковое меню">
+      <header class="conv-sidebar-header">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </span>
+          <h1 class="app-title">web-chat</h1>
+        </div>
+        <button type="button" class="icon-btn icon-btn-ghost" id="sidebar-close" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </header>
+
+      <button type="button" class="btn-new-chat" id="btn-new-chat">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        Новая беседа
+      </button>
+
+      <ul class="conv-list" id="conv-list" role="list"></ul>
+      <p class="conv-empty hidden" id="conv-empty">Пока нет бесед — создайте первую</p>
+
+      <div class="sidebar-settings hidden" id="sidebar-settings">
+        <div class="sidebar-settings-card">
+        <div class="sidebar-settings-section">
+          <span class="sidebar-settings-label">Текущая беседа</span>
+          <p class="sidebar-chat-title" id="sidebar-chat-title" title="">—</p>
+        </div>
+        <div class="sidebar-settings-section">
+          <label class="sidebar-settings-label" for="preset-select">Пресет</label>
+          <div class="preset-select-wrap">
+            <select class="preset-select" id="preset-select" aria-label="Пресет беседы"></select>
+            <span class="preset-select-chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+          </div>
+        </div>
+        <div class="sidebar-settings-footer">
+          <div class="conn-status-pill">
+            <span class="conn-status" id="conn-status" title="Статус"></span>
+            <span class="conn-status-label" id="conn-status-label">Офлайн</span>
+          </div>
+          <div class="sidebar-settings-actions" role="toolbar" aria-label="Действия">
+          <button type="button" class="icon-btn icon-btn-ghost sidebar-action-btn" id="btn-open-logs" title="Журнал" aria-label="Журнал">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </button>
+          <button type="button" class="icon-btn icon-btn-ghost sidebar-action-btn" id="theme-toggle" title="Тема" aria-label="Тема">
+            <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            <svg class="icon-moon hidden" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+          </div>
+        </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="chat-panel">
+      <button type="button" class="mobile-menu-btn" id="menu-btn" title="Меню" aria-label="Меню">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+
+      <div class="chat-body" id="chat-body">
+        <div class="error-banner hidden" id="error-banner" role="alert">
+          <div class="error-banner-content">
+            <svg class="error-banner-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span class="error-banner-text" id="error-banner-text"></span>
+          </div>
+          <button type="button" class="error-banner-btn" id="error-banner-close" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="placeholder" id="placeholder">
+          <div class="placeholder-icon">
+            <svg class="robot-icon" viewBox="0 0 24 24" width="72" height="72" aria-hidden="true">
+              <defs>
+                <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#06b6d4"/>
+                  <stop offset="100%" stop-color="#8b5cf6"/>
+                </linearGradient>
+              </defs>
+              <path fill="none" stroke="url(#accentGrad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                d="M12 3a2 2 0 0 0-1 3.732V8H8c-3.2 0-4 2.667-4 4v7c0 .667.4 2 2 2h1v-4a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v4h1c1.6 0 2-1.333 2-2v-7c0-3.2-2.667-4-4-4h-3V6.732A2 2 0 0 0 12 3z"/>
+              <circle cx="9" cy="13" r="1.2" fill="#22d3ee"/>
+              <circle cx="15" cy="13" r="1.2" fill="#22d3ee"/>
+            </svg>
+          </div>
+          <h3 class="placeholder-title">Добро пожаловать</h3>
+          <p class="placeholder-text">Откройте меню и создайте беседу</p>
+          <button type="button" class="btn btn-primary btn-cta" id="placeholder-new-chat">Создать беседу</button>
+        </div>
+
+        <div class="chat-history hidden" id="chat-history">
+          <div class="chat-messages-wrap">
+            <div class="chat-messages" id="chat-messages"></div>
+          </div>
+          <button type="button" class="scroll-to-bottom-btn" id="scroll-to-bottom-btn" title="Вниз" aria-label="Вниз">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+        </div>
+
+        <div class="loading-overlay hidden" id="loading-overlay" aria-live="polite">
+          <div class="status-indicator status-indicator--lg"><span class="status-bar"></span><span class="status-bar"></span><span class="status-bar"></span><span class="status-bar"></span></div>
+        </div>
+      </div>
+
+      <footer class="chat-footer hidden" id="chat-footer">
+        <div class="attachment-strip hidden" id="attachment-strip"></div>
+        <div class="chat-input-container" id="drop-zone">
+          <div class="chat-input-wrapper">
+            <label class="attach-btn" title="Файлы">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              <input type="file" id="file-input" multiple hidden>
+            </label>
+            <textarea id="user-input" class="chat-input" rows="1" placeholder="Сообщение…" disabled autocomplete="off"></textarea>
+            <button type="button" class="btn-cancel hidden" id="cancel-btn" title="Стоп">■</button>
+            <button type="button" class="btn-send" id="send-btn" title="Отправить" disabled>
+              <svg class="btn-send-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+          </div>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <dialog class="modal" id="new-conv-modal">
+    <form method="dialog" class="modal-form" id="new-conv-form">
+      <h3 class="modal-title">Новая беседа</h3>
+      <label class="form-label" for="new-conv-title">Название</label>
+      <input type="text" id="new-conv-title" class="form-input" placeholder="Новая беседа" maxlength="200" autocomplete="off">
+      <label class="form-label" for="new-conv-preset">Пресет</label>
+      <select id="new-conv-preset" class="form-input"></select>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="new-conv-cancel">Отмена</button>
+        <button type="submit" class="btn btn-primary">Создать</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="modal logs-modal" id="logs-modal">
+    <div class="logs-modal-inner">
+      <header class="logs-modal-header">
+        <h3 class="modal-title">Журнал</h3>
+        <button type="button" class="icon-btn icon-btn-ghost" id="logs-modal-close" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </header>
+      <div class="logs-toolbar">
+        <button type="button" class="btn btn-secondary btn-sm" id="logs-copy-all">Скопировать всё</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="logs-clear-all">Очистить всё</button>
+        <span class="logs-count" id="logs-count">0 строк</span>
+      </div>
+      <textarea class="logs-output" id="logs-output" readonly spellcheck="false" aria-label="Журнал событий"></textarea>
+    </div>
+  </dialog>
+
+  <div class="lightbox hidden" id="lightbox" role="dialog" aria-modal="true" aria-label="Просмотр изображения">
+    <button type="button" class="lightbox-nav lightbox-prev" id="lightbox-prev" title="Предыдущее" aria-label="Предыдущее изображение">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <button type="button" class="lightbox-nav lightbox-next" id="lightbox-next" title="Следующее" aria-label="Следующее изображение">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <button type="button" class="lightbox-close" id="lightbox-close" title="Закрыть" aria-label="Закрыть">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+    <span class="lightbox-counter hidden" id="lightbox-counter" aria-live="polite"></span>
+    <img id="lightbox-img" alt="">
+  </div>
+
+  <script src="/static/js/markdown.js"></script>
+  <script src="/static/js/app-log.js"></script>
+  <script src="/static/js/chat.js"></script>
+</body>
+</html>

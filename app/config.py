@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     web_host: str = "0.0.0.0"
     web_port: int = 8090
+    mcp_port: int = 0  # 0 = web_port + 1
     public_base_url: str = "http://localhost:8090"
 
     llm_base_url: str = "http://192.168.88.41:8989/v1"
@@ -35,6 +36,13 @@ class Settings(BaseSettings):
     sd_webui_url: str = "http://192.168.88.52:7860"
     sd_auth_user: str = ""
     sd_auth_pass: str = ""
+    sd_negative_prompt: str = ""
+    sd_steps: int = 22
+    sd_sampler: str = "Euler a"
+    sd_schedule_type: str = "Karras"
+    sd_cfg_scale: float = 5.0
+    sd_width: int = 1024
+    sd_height: int = 1024
     request_timeout: int = 600
     mcp_timeout: int = 900
 
@@ -43,6 +51,7 @@ class Settings(BaseSettings):
     max_files_per_message: int = 10
     max_tool_rounds: int = 10
     max_history_messages: int = 60
+    max_extract_chars: int = 50000
 
     upload_retention_days: int = 7
     generated_retention_days: int = 30
@@ -52,6 +61,11 @@ class Settings(BaseSettings):
     def strip_trailing_slash(cls, value: str) -> str:
         """Убрать завершающий слэш — URL картинок собираются явно."""
         return value.rstrip("/")
+
+    @property
+    def effective_mcp_port(self) -> int:
+        """Порт MCP (streamable-http); по умолчанию web_port + 1."""
+        return self.mcp_port if self.mcp_port > 0 else self.web_port + 1
 
     def validate_timeouts(self) -> None:
         """

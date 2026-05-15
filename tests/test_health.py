@@ -1,17 +1,44 @@
 """Тесты эндпоинта health."""
 
-import pytest
-from httpx import ASGITransport, AsyncClient
+from __future__ import annotations
 
-from app.main import create_app
+import pytest
+from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_health_returns_ok() -> None:
-    """GET /api/health возвращает status ok."""
-    app = create_app()
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/health")
+async def test_health_returns_structure(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/health возвращает status и sd."""
+    async def _ok() -> str:
+        return "ok"
+
+    monkeypatch.setattr("app.api.health.check_llm_available", _ok)
+    monkeypatch.setattr("app.api.health.check_sd_available", _ok)
+    response = await client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["llm"] == "ok"
+    assert data["sd"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_health_degraded_when_sd_down(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status=degraded при недоступном SD."""
+    async def _llm_ok() -> str:
+        return "ok"
+
+    async def _sd_down() -> str:
+        return "unavailable"
+
+    monkeypatch.setattr("app.api.health.check_llm_available", _llm_ok)
+    monkeypatch.setattr("app.api.health.check_sd_available", _sd_down)
+    response = await client.get("/api/health")
+    assert response.json()["status"] == "degraded"
+    assert response.json()["sd"] == "unavailable"
