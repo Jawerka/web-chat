@@ -5,6 +5,8 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
+> **Статус реализации (2026-05-15):** этапы **1–7** выполнены; этап **8** в основном готов (UI в LAN); этапы **9–10** частично; этап **11** не начат. Автотесты: `pytest` (40 тестов). Детали — [журнал прогресса](#журнал-прогресса).
+
 ---
 
 ## Содержание
@@ -65,7 +67,7 @@
 ### 0.2. Пользовательские сценарии (обязательные для MVP)
 
 1. Пользователь в локальной сети открывает чат в браузере → создаёт беседу → пишет «нарисуй кота в космосе».
-2. Агент вызывает LLM → модель запрашивает `generate_image` → MCP → SD → файлы в `data/generated/` → URL в ответе → UI показывает **все** картинки.
+2. Агент вызывает LLM → модель запрашивает `generate_image` → MCP → SD → PNG в `data/generated/` → **ingest в SQLite** (`MediaAsset`) → URL `/media/asset/{uuid}` → события WS `image` и сетка `.message-images` под ответом. В `content_text` ассистента **нет** markdown `![...](url)` — только обычный текст.
 3. Пользователь прикрепляет PDF и/или изображения:
    - **изображения** → multimodal-сообщение в LLM (vision);
    - **PDF/DOCX/TXT** → извлечение текста **до** или **через** tool `extract_text`.
@@ -118,6 +120,7 @@
 │                    ┌─────────────────────────────────────────┐   │
 │                    │ AgentOrchestrator                        │   │
 │                    │  • сбор messages + tools                 │   │
+│                    │  • commit user-msg до долгих tools/SD    │   │
 │                    │  • цикл tool_calls (до MAX_TOOL_ROUNDS)  │   │
 │                    │  • события в WebSocket                   │   │
 │                    └───────┬─────────────────┬─────────────────┘   │
@@ -129,16 +132,16 @@
 │              └───────────────────┘   └───────┬──────────────┘     │
 │                                              │                     │
 │                    ┌─────────────────────────▼──────────────┐     │
-│                    │ FastMCP (streamable-http)  /mcp         │     │
+│                    │ FastMCP (streamable-http)  :8091/mcp      │     │
 │                    │  generate_image, extract_text, …        │     │
 │                    │  → POST SD WebUI 192.168.88.52          │     │
-│                    │  → save PNG + thumbs → data/generated/  │     │
+│                    │  → data/generated/ → ingest MediaAsset  │     │
 │                    └─────────────────────────────────────────┘     │
 │                                                                  │
 │  ┌──────────────┐  ┌──────────────────────────────────────────┐  │
-│  │ SQLite       │  │ Файловое хранилище                        │  │
-│  │ SQLAlchemy   │  │ data/uploads/  — вложения пользователя    │  │
-│  │ async        │  │ data/generated/ — SD + thumbs             │  │
+│  │ SQLite       │  │ Файлы + MediaAsset (BLOB в SQLite)        │  │
+│  │ SQLAlchemy   │  │ uploads/ — документы; generated/ — SD     │  │
+│  │ async + WAL  │  │ GET /media/asset/{id} — раздача из БД     │  │
 │  └──────────────┘  └──────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
          │                                    │
@@ -165,7 +168,7 @@
 2. Client WS: { type: "user_message", text, attachment_ids }
 3. Server:
    a. Валидация Pydantic
-   b. Сохранить Message(role=user) в БД
+   b. Сохранить Message(role=user) в БД и **commit** (до долгих LLM/SD/tools — иначе SQLite lock)
    c. AttachmentService: подготовить vision URL / extracted_text
    d. AgentOrchestrator.run_turn(...)
 4. Цикл агента:
@@ -173,7 +176,7 @@
    b. Если tool_calls → ToolExecutor → результаты → messages += tool
    c. Повтор до финального текста или MAX_TOOL_ROUNDS
 5. Server WS: text_delta | tool_* | image | done
-6. Сохранить Message(role=assistant) с content_json (urls, parts)
+6. Сохранить Message(role=assistant): `content_text` без markdown-картинок; `content_json` — `images`, `image_asset_ids`, tool_calls
 ```
 
 ### 1.4. Клиент–сервер: разделение ответственности
@@ -199,6 +202,7 @@
 |------|------|----------|
 | `user_message` | `text`, `attachment_ids[]` | Новый запрос пользователя |
 | `cancel` | — | Отмена текущей генерации (LLM stream) |
+| `regenerate` | `message_id` | Перегенерация ответа ассистента (удаление хвоста истории после user-msg) |
 | `ping` | — | Keepalive; сервер отвечает `pong` |
 
 #### Сервер → клиент
@@ -216,7 +220,7 @@
 | `done` | `assistant_message_id` | Turn завершён |
 | `pong` | — | Ответ на ping |
 
-**Нюанс:** событие `image` может прийти **до** финального `text_delta`, пока модель ещё генерирует текст. UI должен добавлять `<img>` в текущий пузырь ассистента, не дожидаясь `done`.
+**Нюанс:** событие `image` может прийти **до** финального `text_delta`, пока модель ещё генерирует текст. UI добавляет превью в сетку `.message-images` текущего пузыря ассистента, не дожидаясь `done`. Статус («Генерация…») — в `.message-status` внутри пузыря, не в отдельном footer.
 
 ### 1.6. Модель данных (SQLAlchemy 2.0, async)
 
@@ -252,8 +256,17 @@ Attachment
   original_name   str
   mime_type       str
   size_bytes      int
-  storage_path    str            # относительный путь под data/uploads/
+  storage_path    str            # документы: data/uploads/; image/* может быть в MediaAsset
   extracted_text  text nullable  # кэш после extract
+  created_at      datetime
+
+MediaAsset
+  id              UUID PK
+  conversation_id FK nullable
+  mime_type       str
+  data            bytes          # PNG/WebP в SQLite
+  thumb_data      bytes nullable
+  original_name   str nullable
   created_at      datetime
 ```
 
@@ -268,28 +281,21 @@ Attachment
 │   ├── main.py                 # FastAPI factory, lifespan
 │   ├── config.py               # pydantic-settings (декларативный конфиг)
 │   ├── db/
-│   │   ├── session.py
-│   │   ├── models.py
-│   │   └── repositories.py
+│   │   ├── session.py, sqlite.py, migrate.py
+│   │   ├── models.py, repositories.py, seed.py
 │   ├── api/
-│   │   ├── router.py
-│   │   ├── conversations.py
-│   │   ├── presets.py
-│   │   ├── upload.py
-│   │   ├── health.py
-│   │   └── websocket.py
+│   │   ├── router.py, conversations.py, presets.py
+│   │   ├── upload.py, messages.py, media.py
+│   │   ├── health.py, logs_api.py, websocket.py
 │   ├── services/
-│   │   ├── conversation_service.py
-│   │   ├── attachment_service.py
-│   │   ├── agent_orchestrator.py
-│   │   └── preset_service.py
+│   │   ├── attachment_service.py, media_service.py
+│   │   ├── message_builder.py, agent_orchestrator.py
+│   │   └── ws_manager.py
 │   └── integrations/
-│       ├── llm_client.py
-│       ├── tool_executor.py
-│       ├── mcp_server.py
-│       ├── sd_tools.py
-│       ├── media_utils.py
-│       └── document_extractor.py
+│       ├── llm_client.py, tool_executor.py, tool_definitions.py
+│       ├── mcp_server.py, sd_tools.py, document_tools.py
+│       ├── media_utils.py, document_extractor.py
+│       └── ...
 ├── data/
 │   ├── db/web_chat.sqlite
 │   ├── uploads/{attachment_id}/
@@ -366,6 +372,19 @@ GENERATED_RETENTION_DAYS=30
 - Запуск: фоновый `threading.Thread` (daemon), основной поток — Uvicorn (паттерн из `image-gen/code/app/server.py`).
 - Инструменты v1: `generate_image`, `extract_text`.
 - Инструменты v2 (этап 11): `img2img`, `upscale_images`, `get_gallery`.
+
+#### Пайплайн сгенерированных изображений (текущая реализация)
+
+```text
+generate_image (count 1–10, n_iter=count, batch_size=1)
+  → SD WebUI → base64 → data/generated/{file}.png + thumbs/
+  → ingest_sd_output_files → MediaAsset в SQLite
+  → публичный URL: {PUBLIC_BASE_URL}/media/asset/{uuid}
+  → content_json.images + image_asset_ids; WS type=image
+  → UI: .message-images (не markdown в content_text)
+```
+
+Legacy `/media/generated/{file}` остаётся для отладки и импорта старых URL; в новых ответах ассистента предпочтителен `/media/asset/`.
 
 ### 1.11. Обработка вложений
 
@@ -656,22 +675,24 @@ class ConversationOut(BaseModel):
 
 ---
 
-### Этап 1. Каркас проекта и конфигурация
+### Этап 1. Каркас проекта и конфигурация ✅
 
 **Цель:** запускаемый FastAPI с health, настройками и структурой каталогов.
 
 **Задачи:**
 
-- [ ] Создать дерево каталогов (раздел 1.7).
-- [ ] `pyproject.toml` — Ruff/black, pytest, Python >=3.11.
-- [ ] `requirements.txt` (раздел 18).
-- [ ] `app/config.py` — `Settings`, валидация `mcp_timeout > request_timeout`.
-- [ ] `app/main.py` — `create_app()`, `GET /health` (пока статический ok).
-- [ ] `.env.example`, `.gitignore` (`data/`, `.env`, `__pycache__`, `.venv`).
-- [ ] `README.md` — как запустить, ссылки на LLM/SD URL.
-- [ ] `deploy/web-chat.service` — шаблон systemd.
+- [x] Создать дерево каталогов (раздел 1.7).
+- [x] `pyproject.toml` — Ruff/black, pytest, Python >=3.11.
+- [x] `requirements.txt` (раздел 18).
+- [x] `app/config.py` — `Settings`, валидация `mcp_timeout > request_timeout`.
+- [x] `app/main.py` — `create_app()`, `GET /health`.
+- [x] `.env.example`, `.gitignore` (`data/`, `.env`, `__pycache__`, `.venv`).
+- [x] `README.md` — как запустить, ссылки на LLM/SD URL.
+- [x] `deploy/web-chat.service` — шаблон systemd.
 
-**Пример health (этап 1):**
+**Реализовано сверх этапа 1:** `/health` проверяет LLM и SD (`status: ok | degraded`), не только живость процесса.
+
+**Пример health (минимум этапа 1; в коде — расширенный):**
 
 ```python
 @router.get("/health")
@@ -692,19 +713,21 @@ curl -s http://localhost:8090/health
 
 ---
 
-### Этап 2. База данных и REST для бесед
+### Этап 2. База данных и REST для бесед ✅
 
 **Цель:** CRUD бесед и пресетов без чата и WS.
 
 **Задачи:**
 
-- [ ] `app/db/models.py` — Preset, Conversation, Message (Message пока опционально пустой).
-- [ ] `app/db/session.py` — `async_sessionmaker`, `init_db()` → `create_all`.
-- [ ] `app/db/repositories.py` — `ConversationRepository`, `PresetRepository`.
-- [ ] Seed при первом старте: 3 пресета (раздел 16), один `is_default=True`.
-- [ ] `GET/POST /api/conversations`, `GET/PATCH/DELETE /api/conversations/{id}`.
-- [ ] `GET /api/presets`.
-- [ ] `POST /api/presets/{id}/set-default` — переключить default для новых бесед.
+- [x] `app/db/models.py` — Preset, Conversation, Message (полная модель).
+- [x] `app/db/session.py` — `async_sessionmaker`, `init_db()` → `create_all`.
+- [x] `app/db/repositories.py` — `ConversationRepository`, `PresetRepository`.
+- [x] Seed при первом старте: 3 пресета (раздел 16), один `is_default=True`.
+- [x] `GET/POST /api/conversations`, `GET/PATCH/DELETE /api/conversations/{id}`.
+- [x] `GET /api/presets`.
+- [x] `POST /api/presets/{id}/set-default` — переключить default для новых бесед.
+
+**Дополнительно:** `migrate.py` (обновление пресетов в существующей БД), `sqlite.py` (WAL, retry записи).
 
 **Нюанс:** при `POST /api/conversations` без `preset_id` — SQL:
 
@@ -724,18 +747,18 @@ curl http://localhost:8090/api/presets
 
 ---
 
-### Этап 3. Загрузка файлов
+### Этап 3. Загрузка файлов ✅
 
 **Цель:** multipart upload, метаданные в БД, безопасная раздача.
 
 **Задачи:**
 
-- [ ] Модель `Attachment`.
-- [ ] `POST /api/upload` — поле `files[]`, несколько файлов.
-- [ ] Валидация: размер, MIME whitelist, `max_files_per_message`.
-- [ ] Сохранение: `data/uploads/{attachment_id}/{safe_name}`.
-- [ ] `GET /media/uploads/{attachment_id}/{filename}` — `FileResponse` после `safe_filename`.
-- [ ] `AttachmentService.register_upload()` — запись в БД.
+- [x] Модель `Attachment`.
+- [x] `POST /api/upload` — поле `files[]`, несколько файлов.
+- [x] Валидация: размер, MIME whitelist, `max_files_per_message`.
+- [x] Сохранение: `data/uploads/{attachment_id}/{safe_name}` (документы); изображения — также `MediaAsset`.
+- [x] `GET /media/uploads/{attachment_id}/{filename}` — `FileResponse` после `safe_filename`.
+- [x] `AttachmentService.register_upload()` — запись в БД.
 
 **Пример проверки MIME:**
 
@@ -752,40 +775,47 @@ ALLOWED_MIMES = frozenset({
 
 ---
 
-### Этап 4. Встроенный MCP + SD (порт image-gen)
+### Этап 4. Встроенный MCP + SD (порт image-gen) ✅
 
 **Цель:** генерация изображений из процесса web-chat.
 
 **Задачи:**
 
-- [ ] Скопировать и адаптировать `media_utils.py` из `image-gen` (`safe_filename`, `save_image_from_base64`, `make_thumbnail`).
-- [ ] `sd_tools.py` — `register_sd_tools(mcp)` с `generate_image`.
-- [ ] `mcp_server.py` — FastMCP, `start_mcp_background()` на порту `WEB_PORT+1` или отдельный `MCP_PORT`.
-- [ ] `data/generated/`, `data/generated/thumbs/`.
-- [ ] `GET /media/generated/{filename}`, `/media/generated/thumbs/{filename}`.
-- [ ] Расширить `/health` — запрос к SD `GET {SD_WEBUI_URL}/sdapi/v1/sd-models` или options.
+- [x] Скопировать и адаптировать `media_utils.py` из `image-gen` (`safe_filename`, `save_image_from_base64`, `make_thumbnail`).
+- [x] `sd_tools.py` — `register_sd_tools(mcp)` с `generate_image`.
+- [x] `mcp_server.py` — FastMCP, `start_mcp_background()` на порту `WEB_PORT+1` (8091).
+- [x] `data/generated/`, `data/generated/thumbs/`.
+- [x] `GET /media/generated/{filename}`, `/media/generated/thumbs/{filename}`.
+- [x] Расширить `/health` — запрос к SD.
 
-**Нюанс PUBLIC_BASE_URL:** в `generate_image` URL строится как:
+**Отличие от image-gen:** параметр `count` (1–10) → `n_iter=count`, `batch_size=1` за один вызов tool (в image-gen — только `n_iter: 1`, несколько картинок = несколько вызовов).
+
+**URL после ingest (основной путь в чате):**
 
 ```python
-img_url = f"{settings.public_base_url.rstrip('/')}/media/generated/{filename}"
+# media_service / media_utils
+f"{settings.public_base_url.rstrip('/')}/media/asset/{asset_id}"
 ```
 
-**Проверка:** MCP Inspector или тестовый скрипт → файл появился в `data/generated/` и открывается в браузере.
+Отчёт MCP/tool по-прежнему может содержать `URL: .../media/generated/...` до ingest; оркестратор нормализует в `/media/asset/`.
+
+**Проверка:** MCP Inspector или `test_agent` → файлы в `data/generated/`, в чате — `/media/asset/{uuid}`.
 
 ---
 
-### Этап 5. LLM-клиент и ToolExecutor
+### Этап 5. LLM-клиент и ToolExecutor ✅
 
 **Цель:** цикл tool calling без UI.
 
 **Задачи:**
 
-- [ ] `llm_client.py` — `complete()`, `stream()` через AsyncOpenAI.
-- [ ] `TOOL_DEFINITIONS` — декларативный список (раздел 9.1).
-- [ ] `tool_executor.py` — маршрутизация по имени; **in-process** вызов функций из `sd_tools` (быстрее, чем HTTP на свой же MCP).
-- [ ] `agent_orchestrator.py` — цикл до `max_tool_rounds`.
-- [ ] `scripts/test_agent.py` — CLI для ручной проверки.
+- [x] `llm_client.py` — `complete()`, `stream()` через AsyncOpenAI.
+- [x] `TOOL_DEFINITIONS` — декларативный список (раздел 9.1).
+- [x] `tool_executor.py` — маршрутизация по имени; **in-process** вызов функций из `sd_tools`.
+- [x] `agent_orchestrator.py` — цикл до `max_tool_rounds`.
+- [x] `scripts/test_agent.py` — CLI для ручной проверки.
+
+**Дополнительно:** `await session.commit()` после сохранения user-сообщения до долгих SD/tools (избежание `database is locked`).
 
 **Нюанс in-process vs MCP HTTP:**
 
@@ -800,52 +830,57 @@ img_url = f"{settings.public_base_url.rstrip('/')}/media/generated/{filename}"
 
 ```bash
 python -m app.scripts.test_agent "Нарисуй закат над морем"
-# В stdout — URL вида .../media/generated/....png
+# В stdout — URL (generated и/или /media/asset/ после ingest)
 ```
 
 ---
 
-### Этап 6. Document extractor
+### Этап 6. Document extractor ✅
 
 **Цель:** текст из документов для LLM.
 
 **Задачи:**
 
-- [ ] `document_extractor.py`:
+- [x] `document_extractor.py`:
   - PDF — `fitz` (PyMuPDF);
   - DOCX — `python-docx`;
   - TXT/CSV — utf-8 с fallback;
   - изображения — опционально `pytesseract` (если установлен tesseract).
-- [ ] MCP tool `extract_text(attachment_id, max_chars)`.
-- [ ] `AttachmentService.prepare_for_llm()` — eager extract при отправке сообщения.
-- [ ] Обрезка текста + суффикс «… (обрезано, всего N символов)».
+- [x] MCP tool `extract_text(attachment_id, max_chars)` + in-process в ToolExecutor.
+- [x] `AttachmentService.prepare_for_llm()` — eager extract при отправке сообщения.
+- [x] Обрезка текста + суффикс «… (обрезано, всего N символов)».
 
 **Проверка:** upload PDF → test extract → непустой текст, длина <= max_chars.
 
 ---
 
-### Этап 7. WebSocket и сохранение истории
+### Этап 7. WebSocket и сохранение истории ✅
 
 **Цель:** полный серверный цикл чата.
 
 **Задачи:**
 
-- [ ] `ConnectionManager` — словарь `conversation_id → set[WebSocket]` (если несколько вкладок).
-- [ ] Обработка `user_message`, `cancel`, `ping`.
-- [ ] `GET /api/conversations/{id}/messages` — пагинация `limit`, `before`.
-- [ ] Сбор `messages` для LLM (раздел 9.3).
-- [ ] Стриминг всех типов событий WS.
-- [ ] Сохранение `Message` user + assistant с `content_json`.
+- [x] `ConnectionManager` — словарь `conversation_id → set[WebSocket]` (несколько вкладок).
+- [x] Обработка `user_message`, `cancel`, `ping`, **`regenerate`**.
+- [x] `GET /api/conversations/{id}/messages` — пагинация `limit`, `before`; enrich URL при отдаче.
+- [x] Сбор `messages` для LLM (`message_builder`, раздел 9.3).
+- [x] Стриминг всех типов событий WS.
+- [x] Сохранение `Message` user + assistant с `content_json`.
 
-**Пример content_json ассистента:**
+**Пример content_json ассистента (текущий формат):**
 
 ```json
 {
-  "images": ["/media/generated/abc.png"],
+  "images": ["/media/asset/550e8400-e29b-41d4-a716-446655440000"],
+  "image_asset_ids": ["550e8400-e29b-41d4-a716-446655440000"],
   "tool_calls": [{"name": "generate_image", "id": "..."}],
   "reasoning": null
 }
 ```
+
+`content_text` — только проза; markdown `![...](url)` удаляется (`finalize_assistant_text` / `strip_markdown_images`).
+
+**Сверх этапа 7:** `PATCH`/`DELETE` сообщений, `run_regenerate_turn`, API логов (`GET/DELETE /api/logs`).
 
 **Нюанс отмены:** `cancel` устанавливает `asyncio.Event`; stream LLM прерывается; запрос SD может завершиться в фоне — сообщить пользователю честно.
 
@@ -853,48 +888,53 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 
 ---
 
-### Этап 8. UI чата (порт prompt-extension)
+### Этап 8. UI чата (порт prompt-extension) — в основном ✅
 
 **Цель:** рабочий браузерный интерфейс.
 
 **Задачи:**
 
-- [ ] `templates/chat.html` — layout: sidebar бесед, chat, input (раздел 10.1).
-- [ ] `static/css/chat.css` — порт CSS variables и компонентов из `prompt-extension/sidebar.css`.
-- [ ] `static/js/markdown.js` — `formatMarkdown`, `sanitizeHtml`, `parseTables`.
-- [ ] `static/js/chat.js` — REST + WS (раздел 10.2).
-- [ ] Список бесед, создание, переключение.
-- [ ] Пресет: dropdown при создании беседы + отображение текущего.
-- [ ] Превью вложений, multi-file, drag-drop.
-- [ ] Рендер `image` events — grid + lightbox.
+- [x] `templates/chat.html` — layout: sidebar бесед, chat, input (раздел 10.1).
+- [x] `static/css/chat.css` — порт CSS variables и компонентов из `prompt-extension/sidebar.css`.
+- [x] `static/js/markdown.js` — `formatMarkdown`, `sanitizeHtml`, `parseTables` (порядок: image до link).
+- [x] `static/js/chat.js` — REST + WS (раздел 10.2).
+- [x] Список бесед, создание, переключение.
+- [x] Пресет: dropdown / sidebar-settings + отображение текущего.
+- [x] Превью вложений, multi-file, drag-drop.
+- [x] Рендер `image` events — grid `.message-images` + lightbox (prev/next, swipe, клавиатура).
 
-**Проверка:** в браузере по LAN (`http://<хост>:8090`) — полный сценарий: текст + генерация + PDF.
+**Дополнительно:** редактирование/удаление сообщений, перегенерация, модалка логов, sticky auto-scroll, статус в `.message-status` внутри пузыря.
+
+**Проверка:** в браузере по LAN (`http://<хост>:8090`) — полный сценарий: текст + генерация + PDF. После смены static — **Ctrl+F5**.
 
 ---
 
-### Этап 9. Пресеты, настройки, полировка UX
+### Этап 9. Пресеты, настройки, полировка UX — частично
 
 **Задачи:**
 
-- [ ] Default preset для новых бесед из API.
-- [ ] Панель настроек: модель (readonly из server config или override localStorage), тема, размер шрифта.
-- [ ] Progress: «Генерация изображения…» при `tool_start` + `generate_image`.
-- [ ] Error banner (порт из prompt-extension).
-- [ ] Кнопка «прокрутить вниз», thinking dots до первого `text_delta`.
+- [x] Default preset для новых бесед из API.
+- [x] Панель настроек (`sidebar-settings`): пресет, connection pill, кнопки; тема light/dark (`localStorage`).
+- [ ] Модель в UI (readonly из server / override) — не реализовано.
+- [ ] Размер шрифта в настройках — не реализовано.
+- [x] Progress при `tool_start` + `generate_image` — в `.message-status` внутри пузыря ассистента.
+- [x] Error banner (порт из prompt-extension).
+- [x] Прокрутка вниз (sticky zone ~100px), thinking до первого `text_delta`.
 
 **Проверка:** смена пресета на новой беседе меняет поведение (image_gen чаще вызывает tool).
 
 ---
 
-### Этап 10. Надёжность, логи, деплой
+### Этап 10. Надёжность, логи, деплой — частично
 
 **Задачи:**
 
-- [ ] Расширенный `/health` — llm, sd, db, disk (раздел 13.3).
-- [ ] Таймауты и коды `error.code` (раздел 13).
-- [ ] Cleanup: удаление старых uploads/generated по retention.
-- [ ] pytest: unit + integration (раздел 14).
-- [ ] systemd, README deploy (LAN); краткая заметка про будущий WireGuard (раздел 15).
+- [x] Расширенный `/health` — llm, sd (`degraded` при сбое).
+- [x] Таймауты и коды `error.code` (раздел 13).
+- [ ] Cleanup по `UPLOAD_RETENTION_DAYS` / `GENERATED_RETENTION_DAYS` — только в конфиге, cron/timer не подключён.
+- [x] pytest: unit + integration (40 тестов, раздел 14).
+- [x] systemd, README deploy (LAN); WireGuard — в разделе 15.
+- [x] SQLite WAL + retry записи (`app/db/sqlite.py`, `run_write`).
 
 **Проверка:** остановить SD → в UI понятная ошибка; после запуска SD — снова работает.
 
@@ -1006,6 +1046,11 @@ TOOL_DEFINITIONS: list[dict] = [
           "cfg_scale": {"type": "number", "default": 5.0},
           "sampler_name": {"type": "string", "default": "Euler a"},
           "seed": {"type": "integer", "default": -1},
+          "count": {
+            "type": "integer",
+            "default": 1,
+            "description": "Число вариантов (1–10), n_iter в SD",
+          },
         },
         "required": ["prompt"],
       },
@@ -1045,9 +1090,10 @@ import re
 from dataclasses import dataclass
 
 IMAGE_URL_RE = re.compile(
-  r"URL:\s*(\S+)|(/media/generated/[^\s\)]+\.(?:png|jpg|jpeg|webp))",
+  r"URL:\s*(\S+)|(/media/(?:generated|asset)/[^\s\)]+\.(?:png|jpg|jpeg|webp)?)",
   re.IGNORECASE,
 )
+# Для asset без расширения в path: отдельно парсятся /media/asset/{uuid}
 
 
 @dataclass
@@ -1126,16 +1172,21 @@ def build_user_content(
 
 ### 9.4. Post-process ответа ассистента
 
-Если модель забыла вставить картинки в markdown, но `image_urls` не пуст:
+**Текущая политика (не добавлять markdown-картинки в текст):**
 
 ```python
-def append_images_markdown(text: str, urls: list[str]) -> str:
-  """Добавить markdown-изображения в конец ответа, если их ещё нет."""
-  for url in urls:
-    if url not in text:
-      text += f"\n\n![Сгенерированное изображение]({url})"
-  return text
+def finalize_assistant_text(
+  text: str,
+  media_url_rewrites: dict[str, str] | None = None,
+) -> str:
+  """Нормализовать URL в prose и убрать ![alt](url) — UI покажет картинки из content_json."""
+  ...
+  return strip_markdown_images(body)
 ```
+
+- Картинки попадают в `content_json.images` / `image_asset_ids` и в WS `image`.
+- Пресет `image_gen` явно запрещает LLM вставлять `![...](url)` (раздел 16.2).
+- Legacy-сообщения с markdown при `GET .../messages` очищаются через enrich.
 
 ---
 
@@ -1154,7 +1205,7 @@ def append_images_markdown(text: str, urls: list[str]) -> str:
 │                   │  │  .chat-message.user             │   │
 │                   │  │  .chat-message.assistant        │   │
 │                   │  └─────────────────────────────────┘   │
-│                   │  [progress-container]                  │
+│                   │  [.message-status в пузыре ассистента]   │
 │                   │  [attachment-preview-strip]            │
 │                   │  [textarea #user-input] [📎] [Send]    │
 └───────────────────┴─────────────────────────────────────────┘
@@ -1309,6 +1360,9 @@ class ChatSocket {
 | Порты 8080/8081 | 8090 (+8091 MCP) |
 | Нет истории диалогов | Полная история |
 | Клиент — внешний LLM | LLM встроен в оркестратор |
+| `n_iter: 1`, N картинок = N вызовов | `count` 1–10 за один `generate_image` |
+| URL только `/media/generated/` | Основной путь: `/media/asset/{uuid}` в БД |
+| LLM вставляет markdown в ответ | UI: сетка под текстом, без `![...](url)` в `content_text` |
 
 ### 12.3. Совместимость URL
 
@@ -1458,16 +1512,17 @@ WantedBy=multi-user.target
 
 ### 16.2. image_gen
 
+Совпадает с `app/db/seed.py` (`IMAGE_GEN_PROMPT`); при обновлении seed — `migrate.py` обновляет существующую БД.
+
 ```text
 Ты помощник с доступом к генерации изображений через Stable Diffusion (инструмент generate_image).
 
 Когда пользователь просит создать, нарисовать, сгенерировать, изменить картинку:
 1. Сформируй детальный prompt (на английском предпочтительно для SD).
-2. Вызови generate_image с подходящими параметрами.
-3. В ответе пользователю обязательно покажи ВСЕ URL из результата инструмента как markdown-изображения: ![описание](url).
-4. Не придумывай ссылки. Если генерация не удалась — объясни ошибку простым языком.
-
-Если нужно несколько вариантов — увеличь batch или сделай несколько вызовов, если API позволяет.
+2. Вызови generate_image (для нескольких вариантов — параметр count за один вызов, до 10).
+3. В текстовом ответе НЕ вставляй markdown-картинки (![...](url)) и не перечисляй URL —
+   интерфейс сам покажет все сгенерированные изображения под сообщением.
+4. Кратко прокомментируй результат текстом. Не придумывай ссылки. При ошибке — объясни простым языком.
 ```
 
 ### 16.3. document_analysis
@@ -1547,32 +1602,36 @@ ruff>=0.6
 
 MVP считается готовым после завершения **этапов 1–8** и выполнения всех пунктов:
 
-1. UI открывается в браузере по адресу хоста в **локальной сети** (LAN).
-2. Создаются и переключаются ≥2 беседы.
-3. Текстовый запрос стримится от LLM (192.168.88.41).
-4. «Нарисуй …» → tool → изображение(я) видны в чате (SD 192.168.88.52).
-5. PDF прикрепляется и учитывается в ответе.
-6. Пресет по умолчанию применяется к новой беседе без явного выбора.
-7. После F5 история загружается из SQLite через REST.
-8. В логах нет необработанных исключений при штатных сценариях.
+| # | Критерий | Статус (2026-05-15) |
+|---|----------|---------------------|
+| 1 | UI в LAN (`http://<хост>:8090`) | ✅ |
+| 2 | ≥2 беседы, переключение | ✅ |
+| 3 | Стриминг текста от LLM | ✅ |
+| 4 | «Нарисуй …» → tool → картинки в чате (сетка, SD .52) | ✅ |
+| 5 | PDF в ответе | ✅ |
+| 6 | Default preset на новую беседу | ✅ |
+| 7 | F5 → история из REST | ✅ |
+| 8 | Нет необработанных исключений в штатных сценариях | ⚠️ проверять на стенде |
+
+**Итог:** критерии MVP **1–7 выполнены**; пункт 8 — периодический ручной прогон. Формально этап 8 закрыт по функционалу; этапы 9–10 — полировка и эксплуатация.
 
 ---
 
-## Журнал прогресса (заполнять вручную)
+## Журнал прогресса
 
 | Этап | Статус | Дата | Примечание |
 |------|--------|------|------------|
-| 1 | [ ] | | |
-| 2 | [ ] | | |
-| 3 | [ ] | | |
-| 4 | [ ] | | |
-| 5 | [ ] | | |
-| 6 | [ ] | | |
-| 7 | [ ] | | |
-| 8 | [ ] | | |
-| 9 | [ ] | | |
-| 10 | [ ] | | |
-| 11 | [ ] | | |
+| 1 | [x] | 2026-05 | Каркас, config, health (+ LLM/SD) |
+| 2 | [x] | 2026-05 | SQLite, CRUD, seed, migrate |
+| 3 | [x] | 2026-05 | Upload; image → MediaAsset |
+| 4 | [x] | 2026-05 | MCP :8091, SD, ingest, `count` |
+| 5 | [x] | 2026-05 | Agent, ToolExecutor, commit до tools |
+| 6 | [x] | 2026-05 | extract_text, PDF/DOCX |
+| 7 | [x] | 2026-05 | WS, history, regenerate, message actions |
+| 8 | [x] | 2026-05 | UI: chat, lightbox, sidebar-settings |
+| 9 | [~] | | Тема, error banner, status; нет font/model UI |
+| 10 | [~] | | pytest 40, health, WAL; нет retention cron |
+| 11 | [ ] | | img2img, gallery — не начато |
 
 ---
 
