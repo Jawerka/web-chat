@@ -1,0 +1,71 @@
+"""
+Настройки приложения из переменных окружения.
+
+Все значения по умолчанию заданы здесь; переопределение — через .env.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+
+class Settings(BaseSettings):
+    """Центральный конфиг web-chat."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    web_host: str = "0.0.0.0"
+    web_port: int = 8090
+    public_base_url: str = "http://localhost:8090"
+
+    llm_base_url: str = "http://192.168.88.41:8989/v1"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_timeout_sec: int = 300
+
+    sd_webui_url: str = "http://192.168.88.52:7860"
+    sd_auth_user: str = ""
+    sd_auth_pass: str = ""
+    request_timeout: int = 600
+    mcp_timeout: int = 900
+
+    database_url: str = "sqlite+aiosqlite:///./data/db/web_chat.sqlite"
+    max_upload_mb: int = 25
+    max_files_per_message: int = 10
+    max_tool_rounds: int = 10
+    max_history_messages: int = 60
+
+    upload_retention_days: int = 7
+    generated_retention_days: int = 30
+
+    @field_validator("public_base_url")
+    @classmethod
+    def strip_trailing_slash(cls, value: str) -> str:
+        """Убрать завершающий слэш — URL картинок собираются явно."""
+        return value.rstrip("/")
+
+    def validate_timeouts(self) -> None:
+        """
+        Проверить согласованность таймаутов MCP и SD.
+
+        Если MCP_TIMEOUT <= REQUEST_TIMEOUT, логируется предупреждение
+        (паттерн из image-gen validate_settings).
+        """
+        if self.mcp_timeout <= self.request_timeout:
+            logger.warning(
+                "MCP_TIMEOUT (%s) должен быть больше REQUEST_TIMEOUT (%s)",
+                self.mcp_timeout,
+                self.request_timeout,
+            )
+
+
+settings = Settings()

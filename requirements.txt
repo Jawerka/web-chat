@@ -1,0 +1,33 @@
+# Web
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.9
+jinja2>=3.1
+
+# Config & validation
+pydantic-settings>=2.0
+
+# Database
+sqlalchemy[asyncio]>=2.0
+aiosqlite>=0.20
+
+# LLM & HTTP
+openai>=1.50
+httpx>=0.27
+
+# MCP & images
+fastmcp>=3.0
+pillow>=10.0
+requests>=2.31
+
+# Documents
+pymupdf>=1.24
+python-docx>=1.1
+
+# Utils
+python-dotenv>=1.0
+
+# Dev
+pytest>=8.0
+pytest-asyncio>=0.24
+ruff>=0.6

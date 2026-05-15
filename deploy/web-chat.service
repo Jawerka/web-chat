@@ -1,0 +1,15 @@
+[Unit]
+Description=web-chat — монолит чат + MCP + агент
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/web-chat
+EnvironmentFile=/root/web-chat/.env
+ExecStart=/root/web-chat/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8090
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
