@@ -196,8 +196,28 @@ class ToolExecutor:
         return None
 
     async def _img2img(self, arguments: dict[str, Any]) -> ToolResult:
-        """img2img с разрешением init_image из asset, upload, generated или attachment_id."""
+        """img2img с разрешением init_image из asset, upload, generated или attachment_id.
+
+        При вызове инструмента LLM может вернуть некорректный ``init_image_url`` или вовсе его не указать.
+        Для надёжного fallback мы сначала пытаемся получить исходное изображение из сообщения,
+        которое инициировало текущий ход (``source_user_message_id``). Если удалось загрузить
+        изображение, переопределяем соответствующие аргументы и логируем предупреждение.
+        """
         args = dict(arguments)
+        # Принудительный fallback: попытаться взять init из оригинального user‑сообщения
+        init_data = await self._resolve_user_message_init()
+        if init_data is not None:
+            # init_data – (bytes, filename). Мы сохраняем его во временный файл и передаём путь.
+            # Для простоты используем уже существующий механизм: сохраняем в /tmp и передаём путь.
+            import tempfile, os
+            data, filename = init_data
+            tmp_path = os.path.join(tempfile.gettempdir(), f"init_{filename}")
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            # Переопределяем аргументы, отдавая путь как init_image_url (будет обработан ниже)
+            args["init_image_url"] = tmp_path
+            logger.warning("img2img: init_image взят из user‑сообщения fallback, переопределён аргумент init_image_url")
+        # Далее обычная обработка аргументов
         init_url = args.pop("init_image_url", None)
         raw_att = args.pop("attachment_id", None)
         att_uuid: uuid.UUID | None = None
