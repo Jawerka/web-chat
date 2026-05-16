@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; часть v2 (export, search, inline title, production-скрипты). Автотесты: `pytest` (72 теста). Детали — [журнал прогресса](#журнал-прогресса).
+> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Production: `deploy/install.sh` + systemd из шаблонов. Автотесты: **88** (`pytest -q`). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки). Журнал — [ниже](#журнал-прогресса).
 
 ---
 
@@ -30,7 +30,8 @@
 16. [Seed-данные пресетов (полные тексты)](#16-seed-данные-пресетов-полные-тексты)  
 17. [Дорожная карта v2](#17-дорожная-карта-v2)  
 18. [Зависимости (requirements)](#18-зависимости-requirements)  
-19. [Критерий готовности MVP](#19-критерий-готовности-mvp)
+19. [Критерий готовности MVP](#19-критерий-готовности-mvp)  
+20. [Доработки после MVP (итерации разработки)](#20-доработки-после-mvp-итерации-разработки)
 
 ---
 
@@ -209,7 +210,7 @@
 
 | type | Поля | Описание |
 |------|------|----------|
-| `connected` | `conversation_id` | Подтверждение сессии WS |
+| `connected` | `conversation_id`, `in_progress`, `streaming_message_id`, `phase`, `active_tool` | Подтверждение WS + состояние генерации для resume после F5 |
 | `ack` | `user_message_id` | Сообщение пользователя сохранено |
 | `text_delta` | `content` | Часть текста ассистента |
 | `reasoning_delta` | `content` | Опционально: «размышления» модели |
@@ -277,45 +278,38 @@ MediaAsset
 ```text
 /root/web-chat/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI factory, lifespan
-│   ├── config.py               # pydantic-settings (декларативный конфиг)
-│   ├── db/
-│   │   ├── session.py, sqlite.py, migrate.py
-│   │   ├── models.py, repositories.py, seed.py
+│   ├── main.py, config.py, logging_buffer.py, constants.py
+│   ├── db/           session, sqlite (WAL), migrate, models, repositories, seed
 │   ├── api/
-│   │   ├── router.py, conversations.py, presets.py
-│   │   ├── upload.py, messages.py, media.py
-│   │   ├── health.py, logs_api.py, websocket.py
+│   │   router.py, conversations.py, messages.py, presets.py, upload.py
+│   │   media.py, health.py, logs_api.py, websocket.py, ws_manager.py
+│   │   pages.py (/, /gallery, /macros), gallery.py, search.py
+│   │   prompt_macros.py, config_api.py, schemas.py
 │   ├── services/
-│   │   ├── attachment_service.py, media_service.py
-│   │   ├── message_builder.py, agent_orchestrator.py
-│   │   └── ws_manager.py
-│   └── integrations/
-│       ├── llm_client.py, tool_executor.py, tool_definitions.py
-│       ├── mcp_server.py, sd_tools.py, document_tools.py
-│       ├── media_utils.py, document_extractor.py
-│       └── ...
-├── data/
-│   ├── db/web_chat.sqlite
-│   ├── uploads/{attachment_id}/
-│   └── generated/
-│       └── thumbs/
-├── static/
-│   ├── css/chat.css
-│   └── js/
-│       ├── markdown.js
-│       └── chat.js
-├── templates/
-│   └── chat.html
-├── tests/
+│   │   agent_orchestrator.py, message_builder.py, attachment_service.py
+│   │   media_service.py, streaming_draft.py, generation_state.py
+│   │   prompt_macro_service.py, conversation_title_service.py
+│   │   conversation_export_service.py, gallery_service.py, cleanup_service.py
+│   │   retention_task.py, search_snippet.py
+│   ├── integrations/
+│   │   llm_client.py, llm_health.py, tool_executor.py, tool_definitions.py
+│   │   mcp_server.py, sd_tools.py, sd_health.py, document_tools.py
+│   │   document_extractor.py, media_utils.py, runtime_config.py
+│   └── scripts/    run_cleanup.py, test_agent.py
+├── static/css/chat.css
+├── static/js/      chat.js, markdown.js, prompt-macros.js, macros-page.js, gallery.js
+├── templates/      chat.html, gallery.html, macros.html
+├── tests/          88 pytest (generation_state, prompt_macros, llm_vision, …)
 ├── deploy/
-│   └── web-chat.service
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-├── requirements.txt
-└── README.md
+│   install.sh, DEPLOY.md, backup-data.sh
+│   web-chat.service.template, web-chat-cleanup.service.template
+│   web-chat-cleanup.timer, logrotate-web-chat.conf.template
+│   web-chat.service (пример для /root/web-chat), generated/ (gitignore)
+├── restart.sh
+├── data/           runtime: db/, uploads/, generated/ (не в git)
+├── logs/           uvicorn.log в dev (не в git)
+├── .env.example, TODO.md, README.md
+└── requirements.txt, requirements-dev.txt, pyproject.toml
 ```
 
 Каталог `data/` в `.gitignore`; в репозитории только `.gitkeep` при необходимости.
@@ -932,7 +926,7 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 - [x] Расширенный `/health` — llm, sd (`degraded` при сбое).
 - [x] Таймауты и коды `error.code` (раздел 13).
 - [x] Cleanup по `UPLOAD_RETENTION_DAYS` / `GENERATED_RETENTION_DAYS`: фоновая задача при старте + `deploy/web-chat-cleanup.timer`.
-- [x] pytest: unit + integration (45 тестов, раздел 14).
+- [x] pytest: unit + integration (**88** тестов, раздел 14).
 - [x] systemd, README deploy (LAN); WireGuard — в разделе 15.
 - [x] SQLite WAL + retry записи (`app/db/sqlite.py`, `run_write`).
 
@@ -989,9 +983,10 @@ Seed выполнять в `init_db()` только если таблица `pre
 - [ ] SD запущен с `--api`.
 - [ ] (Опционально) WireGuard: туннель для удалённого доступа, не обязателен для первого релиза в LAN.
 - [ ] `.env` не в git; права на `data/` ограничены.
-- [x] Резервное копирование — скрипт `deploy/backup-data.sh`.
-- [x] systemd `Restart=on-failure` — в `deploy/web-chat.service`.
-- [x] Логи ротируются — пример `deploy/logrotate-web-chat.conf` (или journald).
+- [x] Резервное копирование — `deploy/backup-data.sh`.
+- [x] systemd + **автозапуск после reboot** — `sudo ./deploy/install.sh` (шаблоны `*.service.template`).
+- [x] Логи — journald и/или `deploy/logrotate-web-chat.conf` (`install.sh --logrotate`).
+- [ ] На стенде: `systemctl is-enabled web-chat.service` → `enabled`.
 
 ---
 
@@ -1282,6 +1277,39 @@ class ChatSocket {
 }
 ```
 
+### 10.5. Lightbox (реализовано)
+
+- Полноэкранный просмотр: prev/next, swipe, Escape.
+- **Верхний левый угол:** прикрепить текущее изображение в composer (fetch blob → `uploadFiles` → скрепка в поле ввода).
+- **Верхний правый угол:** скачать PNG (`downloadLightboxImage`), закрыть.
+- Загрузка нового файла из lightbox **убрана** — только attach/download.
+
+### 10.6. Быстрые промпты `@alias`
+
+- Страница `/macros` — CRUD макросов (`static/js/macros-page.js`).
+- В чате: `prompt-macros.js` — автодополнение `@alias`, спойлер `<details class="prompt-macro-spoiler">`.
+- Ввод `@@alias` — один `@` в UI (CSS `::before` + текст без дублирования `@`).
+- На сервере: `expand_macro_text` / `expand_parts_for_llm` в `message_builder` и `agent_orchestrator`.
+- REST: `/api/prompt-macros`, категории `character`, `style`, `scene`, …
+
+### 10.7. Resume генерации после F5
+
+**Проблема:** при перезагрузке страницы во время SD/LLM UI терял классы, дублировал картинки, показывал пустой пузырь.
+
+**Сервер:**
+
+- `AssistantStreamDraft` — черновик assistant в SQLite (`content_json.streaming`, `phase`, `active_tool`, `images`).
+- `enter_tool_round()` — **не** удалять черновик при tool round; `add_images()` пишет URL в `content_json`.
+- `get_generation_state()` — `in_progress`, `streaming_message_id`, `phase`, `active_tool`.
+- WS при connect: `type: connected` + поля generation state (не устаревшее `generation_in_progress`).
+
+**Клиент (`chat.js`):**
+
+- После `loadMessages()` → `_resumeOngoingGeneration()` если `connected.in_progress`.
+- Poll каждые ~2 с: `_refreshStreamingBubbleFromServer()`.
+- Дедуп картинок: `imageUrlKey()`, `_setGridImages`, `dataset.url` на `<img>`.
+- Поле ввода **не** `disabled` во время генерации; блокируется только **Send** (`streaming`).
+
 ---
 
 ## 11. REST API: полные контракты
@@ -1296,6 +1324,10 @@ class ChatSocket {
 | PATCH | `/api/conversations/{id}` | `{ "title"?, "preset_id"? }` |
 | DELETE | `/api/conversations/{id}` | Удалить (каскад messages) |
 | GET | `/api/conversations/{id}/messages` | История |
+| GET | `/api/conversations/{id}/generation-status` | Resume UI: `in_progress`, `streaming_message_id`, `phase` |
+| GET | `/api/conversations/{id}/export` | Скачать беседу Markdown |
+| GET | `/api/search?q=` | Поиск по `content_text` |
+| PATCH/DELETE | `/api/messages/{id}` | Редактирование / удаление сообщения |
 
 **Query messages:** `limit=50`, `before=<message_id>` для cursor pagination.
 
@@ -1328,7 +1360,18 @@ class ChatSocket {
 
 **Ошибки:** `413` размер, `415` MIME, `400` слишком много файлов.
 
-### 11.4. Config (опционально для UI)
+### 11.4. Prompt macros
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/prompt-macros` | Список (`?category=`) |
+| POST | `/api/prompt-macros` | Создать |
+| PATCH/DELETE | `/api/prompt-macros/{id}` | Обновить / удалить |
+| GET | `/api/prompt-macros/categories` | Категории для UI |
+
+Alias: латиница, цифры, `_`, `-`; в чате — `@alias`.
+
+### 11.5. Config (для UI)
 
 **GET `/api/config`** — публичные лимиты без секретов:
 
@@ -1439,6 +1482,21 @@ async def test_agent_generate_image_mock_llm(client, mock_sd):
 
 ## 15. Деплой и сеть (LAN / WireGuard)
 
+### 15.0. Установка одной командой (актуально)
+
+```bash
+cd /opt/web-chat
+sudo ./deploy/install.sh
+```
+
+Скрипт: venv, `.env`, каталоги `data/`, генерация systemd из `deploy/*.service.template`, `enable --now`, опционально pytest и health.
+
+Параметры: `--install-root`, `--user`, `--port`, `--skip-systemd`, `--dev-deps`, `--logrotate`, `--uninstall`.
+
+Документация: **`deploy/DEPLOY.md`** (минимальные требования: 2 GB RAM, Python 3.11+, curl, sqlite3).
+
+Управление: `./restart.sh`, `systemctl restart web-chat`.
+
 ### 15.1. Топология
 
 **MVP — локальная сеть:**
@@ -1468,23 +1526,14 @@ async def test_agent_generate_image_mock_llm(client, mock_sd):
 
 ### 15.2. systemd
 
-```ini
-[Unit]
-Description=web-chat — монолит чат + MCP + агент
-After=network.target
+Не редактировать пути в `/etc/systemd/system/` вручную — использовать **`deploy/install.sh`**.
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/web-chat
-EnvironmentFile=/root/web-chat/.env
-ExecStart=/root/web-chat/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8090
-Restart=on-failure
-RestartSec=5
+Шаблон `deploy/web-chat.service.template`:
 
-[Install]
-WantedBy=multi-user.target
-```
+- `After=network-online.target`, `Restart=on-failure`, `EnvironmentFile`, `LimitNOFILE=65535`
+- `ExecStart={INSTALL_ROOT}/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port {WEB_PORT}`
+
+Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 
 ### 15.3. PUBLIC_BASE_URL
 
@@ -1617,6 +1666,76 @@ MVP считается готовым после завершения **этап
 
 ---
 
+## 20. Доработки после MVP (итерации разработки)
+
+Сводка изменений, внесённых **после** закрытия этапов 1–11 — для повторной разработки и онбординга.
+
+### 20.1. Персистентный стриминг и resume (критично)
+
+| Компонент | Файл | Поведение |
+|-----------|------|-----------|
+| Черновик в БД | `streaming_draft.py` | `AssistantStreamDraft`: flush текста, `phase`, `images`, `streaming: true` |
+| Tool round | `streaming_draft.py` | `enter_tool_round()` вместо `discard()` — черновик живёт во время SD |
+| Картинки в JSON | `streaming_draft.py` | `add_images(urls)` → `content_json.images` |
+| Состояние API | `generation_state.py` | REST + поля в WS `connected` |
+| Busy flag | `ws_manager.py` | `is_busy`, `set_streaming_message` |
+| Оркестратор | `agent_orchestrator.py` | Использует draft API; vision URL `/media/asset/{id}/llm` |
+| WS | `websocket.py` | `connected` + `**gen_state` |
+| UI | `chat.js` | `_resumeOngoingGeneration`, poll, dedupe grid |
+
+**Баги, которые закрыты:** поле `generation_in_progress` (устарело) → `in_progress`; дубли картинок при resume; пустой `.message-images` при наличии `data-raw-content`.
+
+**Тесты:** `tests/test_generation_state.py`.
+
+### 20.2. Быстрые промпты (macros)
+
+- Модель `PromptMacro` в SQLite (`app/db/models.py`).
+- UI: `/macros`, кнопка в шапке чата, `prompt-macros.js`.
+- Regex: `@?@([a-zA-Z0-9_-]+)` — поддержка ввода `@@alias` без двойного `@` в отображении.
+- Раскрытие для LLM на сервере до отправки в модель.
+
+**Тесты:** `tests/test_prompt_macros.py`.
+
+### 20.3. UX чата (итерации)
+
+| Изменение | Деталь |
+|-----------|--------|
+| Textarea при генерации | **Не** `disabled` — пользователь может печатать; Send скрыт/заблокирован через `streaming` |
+| Lightbox | Download (top-right), attach to composer (top-left); убран upload из lightbox |
+| Runtime config | `integrations/runtime_config.py` — override `llm_base_url`, `sd_webui_url`, `model` из WS |
+| Заголовок беседы | `conversation_title_service.py` — авто из первого сообщения + inline edit в списке |
+| Сообщения | PATCH/DELETE, regenerate (`regenerate` в WS) |
+| Vision | `GET /media/asset/{id}/llm` — JPEG ≤ `LLM_VISION_MAX_BYTES` для llama-server |
+
+**Тесты:** `tests/test_llm_vision_compress.py`, `tests/test_config_api.py`.
+
+### 20.4. Деплой и эксплуатация
+
+| Артефакт | Назначение |
+|----------|------------|
+| `deploy/install.sh` | venv, .env, data dirs, systemd enable, pytest, health smoke |
+| `*.service.template` | Подстановка `INSTALL_ROOT`, `RUN_USER`, `WEB_PORT` |
+| `deploy/generated/` | Выход install.sh (в `.gitignore`) |
+| `deploy/DEPLOY.md` | Полная инструкция, мин. требования, troubleshooting |
+| `restart.sh` | dev/systemd/status |
+
+### 20.5. Не реализовано / отложено
+
+- Rate limit (upload, generate_image) — в §1.12 запланирован, **нет в коде**.
+- `reasoning_delta` в WS — в протоколе описан, UI опционален.
+- Расширенный `/api/health` (disk_free, generated_count) — упрощённый вариант в коде.
+- PostgreSQL, auth, RAG — §17.
+
+### 20.6. Чеклист регрессии после правок
+
+- [ ] Генерация SD → F5 → статус и сетка картинок восстановились, без дублей.
+- [ ] `@@macro` в поле ввода → один `@` в спойлере.
+- [ ] Lightbox: download и attach в composer.
+- [ ] `sudo ./deploy/install.sh` → reboot → `systemctl status web-chat` active.
+- [ ] `pytest -q` → 88 passed.
+
+---
+
 ## Журнал прогресса
 
 | Этап | Статус | Дата | Примечание |
@@ -1633,6 +1752,8 @@ MVP считается готовым после завершения **этап
 | 10 | [x] | 2026-05-15 | retention cleanup + timer, pytest |
 | 11 | [x] | 2026-05-16 | img2img, upscale, get_gallery, /gallery |
 | v2 (часть) | [x] | 2026-05-16 | export MD, search, inline title, health config, backup/logrotate |
+| post-MVP | [x] | 2026-05-16 | prompt macros, generation resume, lightbox attach/download, vision /llm |
+| deploy | [x] | 2026-05-16 | install.sh, systemd templates, DEPLOY.md, 88 pytest |
 
 ---
 

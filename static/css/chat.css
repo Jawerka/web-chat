@@ -2808,6 +2808,42 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   pointer-events: none;
 }
 
+.lightbox-action {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  z-index: 2;
+}
+
+.lightbox-action:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.lightbox-action:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.lightbox-attach-current {
+  left: max(16px, env(safe-area-inset-left));
+  right: auto;
+}
+
+.lightbox-save {
+  right: calc(max(16px, env(safe-area-inset-right)) + 52px);
+}
+
 .lightbox-close {
   position: absolute;
   top: max(16px, env(safe-area-inset-top));
@@ -2823,6 +2859,7 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   align-items: center;
   justify-content: center;
   transition: background 0.2s;
+  z-index: 2;
 }
 
 .lightbox-close:hover {
@@ -2841,6 +2878,20 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
 
   .lightbox-next {
     right: max(6px, env(safe-area-inset-right));
+  }
+
+  .lightbox-attach-current {
+    left: max(6px, env(safe-area-inset-left));
+  }
+
+  .lightbox-save {
+    right: calc(max(6px, env(safe-area-inset-right)) + 46px);
+  }
+
+  .lightbox-action,
+  .lightbox-close {
+    width: 40px;
+    height: 40px;
   }
 }
 
@@ -3028,6 +3079,23 @@ body.gallery-lightbox-open {
   display: block;
   background: var(--bg-elevated);
   pointer-events: none;
+}
+
+.gallery-card-attach-tl {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s var(--ease);
+}
+
+.gallery-card:hover .gallery-card-attach-tl,
+.gallery-card:focus-within .gallery-card-attach-tl,
+.gallery-card.delete-pending .gallery-card-attach-tl {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .gallery-card-actions {
@@ -3229,7 +3297,8 @@ body.gallery-lightbox-open {
 
 
 @media (hover: none) {
-  .gallery-card-actions {
+  .gallery-card-actions,
+  .gallery-card-attach-tl {
     opacity: 1;
     pointer-events: auto;
   }

@@ -1,0 +1,12 @@
+# Шаблон logrotate для logs/*.log (режим dev / restart.sh dev).
+# Генерируется deploy/install.sh
+
+@@INSTALL_ROOT@@/logs/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

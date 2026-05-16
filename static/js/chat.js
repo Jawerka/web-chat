@@ -7,6 +7,8 @@
 const SCROLL_STICKY_PX = 100;
 
 const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
+/** Вложения после перехода из галереи (скрепка → новый чат) */
+const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
 const PRESET_LAST_EDIT_STORAGE_KEY = 'webchat_preset_last_edit_id';
 
 const TOOL_PROGRESS_LABELS = {
@@ -309,6 +311,8 @@ class ChatApp {
       lightboxPrev: document.getElementById('lightbox-prev'),
       lightboxNext: document.getElementById('lightbox-next'),
       lightboxCounter: document.getElementById('lightbox-counter'),
+      lightboxSave: document.getElementById('lightbox-save'),
+      lightboxAttachCurrent: document.getElementById('lightbox-attach-current'),
       themeToggle: document.getElementById('theme-toggle'),
       themeToggleLabel: document.getElementById('theme-toggle-label'),
       llmBaseUrlInput: document.getElementById('llm-base-url-input'),
@@ -460,6 +464,14 @@ class ChatApp {
     });
 
     document.getElementById('lightbox-close').addEventListener('click', () => this.closeLightbox());
+    this.$.lightboxSave?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void this.downloadLightboxImage();
+    });
+    this.$.lightboxAttachCurrent?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void this.attachLightboxImageToComposer();
+    });
     this.$.lightboxPrev.addEventListener('click', (e) => {
       e.stopPropagation();
       this._lightboxStep(-1);
@@ -1308,6 +1320,7 @@ class ChatApp {
 
     await this.loadMessages();
     await this._resumeOngoingGeneration();
+    this._restorePendingAttachmentsFromSession();
     this._scrollStuckToBottom = true;
     this.renderConvList();
     this.connectSocket();
@@ -1515,7 +1528,6 @@ class ChatApp {
     this.$.sendBtn.classList.add('hidden');
     this.$.sendBtn.disabled = true;
     this.$.cancelBtn.classList.remove('hidden');
-    this.$.userInput.disabled = true;
 
     const el = document.createElement('div');
     el.className = 'chat-message assistant streaming waiting';
@@ -1648,7 +1660,6 @@ class ChatApp {
     this.$.sendBtn.classList.add('hidden');
     this.$.sendBtn.disabled = true;
     this.$.cancelBtn.classList.remove('hidden');
-    this.$.userInput.disabled = true;
   }
 
   _bindStreamToMessageId(messageId) {
@@ -1898,8 +1909,9 @@ class ChatApp {
     this.$.sendBtn.classList.remove('hidden', 'loading');
     this.$.sendBtn.disabled = false;
     this.$.cancelBtn.classList.add('hidden');
-    this.$.userInput.disabled = false;
-    this.$.userInput.focus();
+    if (!this.$.userInput.disabled) {
+      this.$.userInput.focus();
+    }
 
     if (this.streamEl) {
       this.streamEl.classList.remove('streaming', 'waiting', 'is-busy', 'has-content', 'has-images');
@@ -2307,6 +2319,31 @@ class ChatApp {
     this.$.attachmentStrip.classList.add('hidden');
   }
 
+  _restorePendingAttachmentsFromSession() {
+    const raw = sessionStorage.getItem(PENDING_ATTACHMENTS_KEY);
+    if (!raw) return;
+    sessionStorage.removeItem(PENDING_ATTACHMENTS_KEY);
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (payload.conversation_id && payload.conversation_id !== this.currentConvId) return;
+    const list = payload.attachments;
+    if (!Array.isArray(list) || !list.length) return;
+    for (const att of list) {
+      if (!att?.id) continue;
+      if (this.pendingAttachments.some((a) => a.id === att.id)) continue;
+      this.pendingAttachments.push(att);
+      this.renderAttachmentChip(att);
+    }
+    if (this.pendingAttachments.length) {
+      this.$.attachmentStrip.classList.remove('hidden');
+      this.$.userInput?.focus();
+    }
+  }
+
   _setSettingsChatTitle(title) {
     const el = this.$.settingsChatTitle;
     if (!el) return;
@@ -2506,6 +2543,77 @@ class ChatApp {
     return urls;
   }
 
+  _lightboxCurrentUrl() {
+    return this._lightboxUrls[this._lightboxIndex] || this.$.lightboxImg?.src || '';
+  }
+
+  _filenameFromLightboxUrl(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      const base = u.pathname.split('/').pop() || '';
+      if (base && /\.[a-z0-9]+$/i.test(base)) return base;
+      const assetMatch = u.pathname.match(/\/media\/asset\/([0-9a-f-]{36})/i);
+      if (assetMatch) return `asset-${assetMatch[1].slice(0, 8)}.png`;
+    } catch {
+      /* ignore */
+    }
+    return `image-${Date.now()}.png`;
+  }
+
+  async downloadLightboxImage() {
+    const url = resolveMediaUrl(this._lightboxCurrentUrl());
+    if (!url) return;
+    const btn = this.$.lightboxSave;
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Не удалось загрузить файл');
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = this._filenameFromLightboxUrl(url);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      this.showError(err.message || 'Не удалось скачать изображение');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async attachLightboxImageToComposer() {
+    const url = resolveMediaUrl(this._lightboxCurrentUrl());
+    if (!url) return;
+    if (!this.currentConvId) {
+      this.showError('Сначала выберите или создайте беседу');
+      return;
+    }
+    const key = imageUrlKey(url);
+    if (this.pendingAttachments.some((a) => imageUrlKey(resolveMediaUrl(a.preview_url)) === key)) {
+      this.showError('Это изображение уже прикреплено', 3000);
+      return;
+    }
+    const btn = this.$.lightboxAttachCurrent;
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Не удалось загрузить изображение');
+      const blob = await res.blob();
+      const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
+      const file = new File([blob], this._filenameFromLightboxUrl(url), { type: mime });
+      await this.uploadFiles([file]);
+      this.closeLightbox();
+      this.$.userInput?.focus();
+    } catch (err) {
+      this.showError(err.message || 'Ошибка прикрепления');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   openLightbox(url) {
     const resolved = resolveMediaUrl(url);
     this._lightboxUrls = this._collectGalleryUrls();
@@ -2529,6 +2637,13 @@ class ChatApp {
     this.$.lightboxImg.alt = `Изображение ${this._lightboxIndex + 1} из ${this._lightboxUrls.length}`;
     this.$.lightbox.classList.remove('hidden');
     this._updateLightboxNav();
+    this._updateLightboxActions();
+  }
+
+  _updateLightboxActions() {
+    if (this.$.lightboxAttachCurrent) {
+      this.$.lightboxAttachCurrent.disabled = !this.currentConvId;
+    }
   }
 
   _updateLightboxNav() {
@@ -2574,6 +2689,7 @@ class ChatApp {
     this._lightboxUrls = [];
     this._lightboxIndex = 0;
     this._lightboxTouchStart = null;
+    if (this.$.lightboxAttachCurrent) this.$.lightboxAttachCurrent.disabled = false;
     if (!this.$.convSidebar.classList.contains('open')) {
       document.body.style.overflow = '';
     }

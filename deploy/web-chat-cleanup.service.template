@@ -1,0 +1,15 @@
+# Шаблон oneshot-сервиса очистки uploads/generated.
+# Генерируется deploy/install.sh
+
+[Unit]
+Description=web-chat retention cleanup (uploads and generated files)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=@@RUN_USER@@
+Group=@@RUN_GROUP@@
+WorkingDirectory=@@INSTALL_ROOT@@
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=@@INSTALL_ROOT@@/.env
+ExecStart=@@INSTALL_ROOT@@/.venv/bin/python -m app.scripts.run_cleanup

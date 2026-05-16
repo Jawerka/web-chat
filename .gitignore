@@ -16,6 +16,9 @@ build/
 .coverage
 htmlcov/
 
+# Deploy generated units (install.sh)
+deploy/generated/
+
 # Runtime data
 logs/
 data/db/

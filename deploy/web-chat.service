@@ -1,15 +1,24 @@
+# Пример unit для /root/web-chat (ручная установка).
+# Рекомендуется: sudo ./deploy/install.sh — генерирует unit из web-chat.service.template
+# с подстановкой INSTALL_ROOT, RUN_USER, WEB_PORT.
+
 [Unit]
 Description=web-chat — монолит чат + MCP + агент
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
+Group=root
 WorkingDirectory=/root/web-chat
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/root/web-chat/.env
 ExecStart=/root/web-chat/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8090
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=60
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target

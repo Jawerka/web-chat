@@ -4,7 +4,13 @@
 
 const POLL_MS = 5000;
 const GALLERY_LIMIT = 200;
+/** См. chat.js — восстановление вложений после перехода в чат */
+const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
+const DEFAULT_CONV_TITLE = 'Новая беседа';
+const IMAGE_GEN_PRESET_SLUG = 'image_gen';
 
+const ICON_ATTACH =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 const ICON_SAVE =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 const ICON_DELETE =
@@ -35,6 +41,7 @@ class GalleryApp {
       lightboxCounter: $('#gallery-lightbox-counter'),
       lightboxTitle: $('#gallery-lightbox-title'),
       lightboxSave: $('#gallery-lightbox-save'),
+      lightboxAttach: $('#gallery-lightbox-attach'),
       lightboxDelete: $('#gallery-lightbox-delete'),
     };
   }
@@ -66,6 +73,11 @@ class GalleryApp {
       e.stopPropagation();
       this.saveItem(this.currentItem());
     });
+    this.els.lightboxAttach?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = this.currentItem();
+      if (item) void this.attachToNewChat(item, this.els.lightboxAttach);
+    });
     this.els.lightboxDelete?.addEventListener('click', (e) => {
       e.stopPropagation();
       const item = this.currentItem();
@@ -84,6 +96,16 @@ class GalleryApp {
     });
 
     this.els.grid?.addEventListener('click', (e) => {
+      const attachBtn = e.target.closest('.gallery-card-attach');
+      if (attachBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = attachBtn.closest('.gallery-card');
+        const item = card ? this.itemById.get(card.dataset.id) : null;
+        if (item) void this.attachToNewChat(item, attachBtn);
+        return;
+      }
+
       const saveBtn = e.target.closest('.gallery-card-save');
       if (saveBtn) {
         e.preventDefault();
@@ -234,6 +256,7 @@ class GalleryApp {
     card.innerHTML = `
       <div class="gallery-card-media">
         <img src="${this.escapeAttr(item.thumb_url)}" alt="${this.escapeAttr(item.filename)}" loading="lazy" decoding="async">
+        <button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl" data-id="${this.escapeAttr(item.id)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${ICON_ATTACH}</button>
         <div class="gallery-card-actions">
           <button type="button" class="gallery-card-action gallery-card-save" data-id="${this.escapeAttr(item.id)}" title="Сохранить" aria-label="Сохранить">${ICON_SAVE}</button>
           <button type="button" class="gallery-card-action gallery-card-delete danger" data-id="${this.escapeAttr(item.id)}" title="Удалить" aria-label="Удалить">${ICON_DELETE}</button>
@@ -322,6 +345,63 @@ class GalleryApp {
 
   currentItem() {
     return this.items[this.lightboxIndex] || null;
+  }
+
+  async attachToNewChat(item, btn) {
+    if (!item?.url) return;
+    const prevDisabled = btn?.disabled;
+    if (btn) btn.disabled = true;
+    this.flashStatus('Создаём чат…');
+    try {
+      const presetsRes = await fetch('/api/presets');
+      if (!presetsRes.ok) throw new Error('Не удалось загрузить пресеты');
+      const presets = await presetsRes.json();
+      const imageGen = presets.find((p) => p.slug === IMAGE_GEN_PRESET_SLUG);
+
+      const convBody = { title: DEFAULT_CONV_TITLE };
+      if (imageGen?.id) convBody.preset_id = imageGen.id;
+
+      const convRes = await fetch('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(convBody),
+      });
+      if (!convRes.ok) {
+        const errBody = await convRes.json().catch(() => ({}));
+        throw new Error(errBody.detail || convRes.statusText);
+      }
+      const conv = await convRes.json();
+
+      const imgRes = await fetch(item.url);
+      if (!imgRes.ok) throw new Error('Не удалось загрузить изображение');
+      const blob = await imgRes.blob();
+      const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
+      const file = new File([blob], item.filename || 'image.png', { type: mime });
+
+      const fd = new FormData();
+      fd.append('files', file);
+      fd.append('conversation_id', conv.id);
+
+      const upRes = await fetch('/api/upload', { method: 'POST', body: fd });
+      if (!upRes.ok) {
+        const errBody = await upRes.json().catch(() => ({}));
+        throw new Error(errBody.detail || 'Ошибка загрузки вложения');
+      }
+      const uploadData = await upRes.json();
+
+      sessionStorage.setItem(
+        PENDING_ATTACHMENTS_KEY,
+        JSON.stringify({
+          conversation_id: conv.id,
+          attachments: uploadData.attachments || [],
+        }),
+      );
+      localStorage.setItem('webchat_conv_id', conv.id);
+      window.location.href = '/';
+    } catch (err) {
+      this.flashStatus(err.message || 'Ошибка', true);
+      if (btn) btn.disabled = prevDisabled ?? false;
+    }
   }
 
   async saveItem(item) {

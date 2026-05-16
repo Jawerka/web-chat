@@ -7,7 +7,8 @@ from typing import Any
 
 from app.db.models import PromptMacro, PromptMacroCategory
 
-_MACRO_MENTION_RE = re.compile(r"@([a-zA-Z0-9_-]+)")
+# @@alias — экранирование: оба @ не попадают в текст для LLM
+_MACRO_MENTION_RE = re.compile(r"@?@([a-zA-Z0-9_-]+)")
 _ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
 

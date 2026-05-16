@@ -11,7 +11,8 @@ const PROMPT_MACRO_CATEGORIES = [
   { id: 'other', label: 'Прочее' },
 ];
 
-const MACRO_MENTION_RE = /@([a-zA-Z0-9_-]+)/g;
+/** @alias или @@alias (второй @ — экранирование, в UI один @). */
+const MACRO_MENTION_RE = /@?@([a-zA-Z0-9_-]+)/g;
 
 function escapeHtml(s) {
   const d = document.createElement('div');
@@ -65,20 +66,17 @@ class PromptMacrosUI {
     while ((match = re.exec(text)) !== null) {
       const alias = match[1];
       const macro = this.macroByAlias(alias);
-      let spanStart = match.index;
-      // @@alias → один @ в пузыре (лишний @ перед упоминанием не показываем)
-      if (macro && spanStart > 0 && text[spanStart - 1] === '@') {
-        spanStart -= 1;
-      }
+      const spanStart = match.index;
+      const spanEnd = match.index + match[0].length;
       if (spanStart > last) {
         container.appendChild(document.createTextNode(text.slice(last, spanStart)));
       }
       if (macro) {
         container.appendChild(this._createMentionSpoiler(macro));
       } else {
-        container.appendChild(document.createTextNode(text.slice(spanStart, match.index + match[0].length)));
+        container.appendChild(document.createTextNode(text.slice(spanStart, spanEnd)));
       }
-      last = match.index + match[0].length;
+      last = spanEnd;
     }
     if (last < text.length) {
       container.appendChild(document.createTextNode(text.slice(last)));
@@ -91,7 +89,8 @@ class PromptMacrosUI {
     const summary = document.createElement('summary');
     summary.className = 'mention-spoiler-summary';
     const label = macro.label ? `${macro.label}` : `@${macro.alias}`;
-    summary.textContent = `@${macro.alias}`;
+    // Символ @ рисует CSS (.mention-spoiler-summary::before)
+    summary.textContent = macro.alias;
     summary.title = label;
     const body = document.createElement('div');
     body.className = 'mention-spoiler-body';

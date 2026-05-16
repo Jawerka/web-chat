@@ -30,6 +30,15 @@ def test_expand_unknown_alias_unchanged() -> None:
     assert out == text
 
 
+def test_expand_double_at_alias() -> None:
+    """@@alias — развёртка без лишнего @ перед телом макроса."""
+    body = "rainbow_dash, pegasus, wings"
+    text = "обнимает @@rainbow_dash"
+    out = expand_macro_text(text, {"rainbow_dash": body})
+    assert out == f"обнимает {body}"
+    assert "@@" not in out
+
+
 @pytest.mark.asyncio
 async def test_prompt_macros_crud(client: AsyncClient) -> None:
     created = await client.post(
