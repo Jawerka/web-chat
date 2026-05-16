@@ -68,22 +68,24 @@ def _ensure_db_directory() -> None:
 
 
 async def init_db() -> None:
-    """Создать таблицы и заполнить пресеты при первом запуске."""
+    """Создать таблицы, миграции и синхронизировать пресеты из seed."""
     _ensure_db_directory()
     ensure_media_directories()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await run_sqlite_migrations(engine)
-    await _seed_presets_if_empty()
+    await _sync_seed_presets()
 
 
-async def _seed_presets_if_empty() -> None:
-    """Добавить три пресета из раздела 16, если таблица пуста."""
+async def _sync_seed_presets() -> None:
+    """Заполнить пресеты из seed: все при пустой таблице или только отсутствующие slug."""
     async with async_session_factory() as session:
-        result = await session.execute(select(Preset.id).limit(1))
-        if result.scalar_one_or_none() is not None:
-            return
+        result = await session.execute(select(Preset.slug))
+        existing = set(result.scalars().all())
+        added = 0
         for seed in PRESET_SEEDS:
+            if seed.slug in existing:
+                continue
             session.add(
                 Preset(
                     name=seed.name,
@@ -93,8 +95,10 @@ async def _seed_presets_if_empty() -> None:
                     sort_order=seed.sort_order,
                 )
             )
-        await session.commit()
-        logger.info("Загружены seed-пресеты (%d шт.)", len(PRESET_SEEDS))
+            added += 1
+        if added:
+            await session.commit()
+            logger.info("Добавлены seed-пресеты (%d шт.)", added)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

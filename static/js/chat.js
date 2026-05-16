@@ -11,6 +11,14 @@ const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
 const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
 const PRESET_LAST_EDIT_STORAGE_KEY = 'webchat_preset_last_edit_id';
 
+/** Короткие подписи в плавающем селекте пресета чата */
+const CHAT_PRESET_SHORT_LABELS = {
+  default: 'Default',
+  image_gen: 'txt2img',
+  img2img: 'img2img',
+  document_analysis: 'Docs',
+};
+
 const TOOL_PROGRESS_LABELS = {
   generate_image: 'Генерация изображения',
   img2img: 'Доработка изображения',
@@ -240,7 +248,7 @@ class ChatApp {
     this.editingMessageId = null;
     this.editingRole = null;
     this._regenerating = false;
-    this._inputPlaceholderDefault = 'Сообщение…';
+    this._inputPlaceholderDefault = 'Сообщение';
     this._serverLogLines = [];
     this._logsUnsub = null;
     this._pendingDeleteConvId = null;
@@ -281,6 +289,8 @@ class ChatApp {
       settingsChatTitle: document.getElementById('settings-chat-title'),
       exportConversationBtn: document.getElementById('export-conversation-btn'),
       convPresetSelect: document.getElementById('conv-preset-select'),
+      chatPresetToolbar: document.getElementById('chat-preset-toolbar'),
+      chatPresetSelect: document.getElementById('chat-preset-select'),
       presetSelect: document.getElementById('preset-select'),
       presetSystemPrompt: document.getElementById('preset-system-prompt'),
       presetPromptSaveBtn: document.getElementById('preset-prompt-save-btn'),
@@ -407,8 +417,10 @@ class ChatApp {
       }
     });
     this.$.userInput.addEventListener('input', () => this.autoResizeInput());
+    requestAnimationFrame(() => this.autoResizeInput());
     this.$.fileInput.addEventListener('change', (e) => this.uploadFiles(e.target.files));
     this.$.presetSelect?.addEventListener('change', () => this.onPresetSelectChange());
+    this.$.chatPresetSelect?.addEventListener('change', () => this.onChatPresetChange());
     this.$.presetPromptSaveBtn?.addEventListener('click', () => this.savePresetPrompt());
     this.$.presetSetDefaultBtn?.addEventListener('click', () => this.setDefaultPreset());
     this.$.presetSystemPrompt?.addEventListener('input', () => this._onPresetPromptInput());
@@ -759,14 +771,60 @@ class ChatApp {
     this._updatePresetDefaultButton();
   }
 
+  _chatPresetShortLabel(preset) {
+    return CHAT_PRESET_SHORT_LABELS[preset.slug] ?? preset.name;
+  }
+
   populateConvPresetSelect(selectedId) {
-    if (!this.$.convPresetSelect || this.presets.length === 0) return;
+    if (this.presets.length === 0) return;
     const fallback = this.presets.find((p) => p.is_default)?.id ?? this.presets[0].id;
     const activeId = selectedId ?? fallback;
-    this.$.convPresetSelect.innerHTML = this.presets
-      .map((p) => `<option value="${p.id}"${p.id === activeId ? ' selected' : ''}>${this.escape(p.name)}</option>`)
+    const optionAttrs = (p) => `value="${p.id}"${p.id === activeId ? ' selected' : ''}`;
+    const optionsHtml = this.presets
+      .map((p) => `<option ${optionAttrs(p)}>${this.escape(p.name)}</option>`)
       .join('');
-    this.$.convPresetSelect.disabled = !this.currentConvId;
+    const chatOptionsHtml = this.presets
+      .map((p) => `<option ${optionAttrs(p)}>${this.escape(this._chatPresetShortLabel(p))}</option>`)
+      .join('');
+    const disabled = !this.currentConvId;
+    if (this.$.convPresetSelect) {
+      this.$.convPresetSelect.innerHTML = optionsHtml;
+      this.$.convPresetSelect.disabled = disabled;
+    }
+    if (this.$.chatPresetSelect) {
+      this.$.chatPresetSelect.innerHTML = chatOptionsHtml;
+      this.$.chatPresetSelect.disabled = disabled;
+      this.$.chatPresetSelect.title = 'Пресет для следующего сообщения';
+    }
+    this._updateChatPresetToolbar();
+  }
+
+  _updateChatPresetToolbar() {
+    const show = Boolean(this.currentConvId) && !this.$.chatHistory?.classList.contains('hidden');
+    this.$.chatPresetToolbar?.classList.toggle('hidden', !show);
+  }
+
+  async onChatPresetChange() {
+    const presetId = this.$.chatPresetSelect?.value;
+    if (!presetId || !this.currentConvId) return;
+    if (this.$.convPresetSelect) this.$.convPresetSelect.value = presetId;
+    await this._applyConversationPreset(presetId);
+  }
+
+  async _applyConversationPreset(presetId) {
+    if (!this.currentConvId || this.currentConv?.preset_id === presetId) return;
+    try {
+      this.currentConv = await this.api(`/api/conversations/${this.currentConvId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preset_id: presetId }),
+      });
+      if (this.$.convPresetSelect) this.$.convPresetSelect.value = presetId;
+      if (this.$.chatPresetSelect) this.$.chatPresetSelect.value = presetId;
+    } catch (err) {
+      this.showError(err.message || 'Не удалось сменить пресет');
+      this.populateConvPresetSelect(this.currentConv?.preset_id);
+    }
   }
 
   syncPresetPromptField() {
@@ -1256,6 +1314,7 @@ class ChatApp {
     this.populateConvPresetSelect();
     this.$.placeholder.classList.remove('hidden');
     this.$.chatHistory.classList.add('hidden');
+    this.$.chatPresetToolbar?.classList.add('hidden');
     this.$.chatComposer.classList.add('hidden');
     this.$.chatMessages.innerHTML = '';
     this.$.userInput.value = '';
@@ -1312,6 +1371,7 @@ class ChatApp {
 
       this.$.placeholder.classList.add('hidden');
       this.$.chatHistory.classList.remove('hidden');
+      this._updateChatPresetToolbar();
       this.$.chatComposer.classList.remove('hidden');
       this.$.userInput.disabled = false;
       this.$.sendBtn.disabled = false;
@@ -2397,6 +2457,9 @@ class ChatApp {
           const conv = this.conversations.find((c) => c.id === this.currentConvId);
           if (conv) conv.title = this.currentConv.title;
           this.renderConvList();
+          if (patch.preset_id) {
+            if (this.$.chatPresetSelect) this.$.chatPresetSelect.value = patch.preset_id;
+          }
         }
       }
 
@@ -2698,16 +2761,26 @@ class ChatApp {
   autoResizeInput() {
     const ta = this.$.userInput;
     if (!ta) return;
-    const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20;
-    const padY = 18;
-    const minH = lineHeight + padY;
-    const maxH = lineHeight * 7 + padY;
-    ta.style.height = 'auto';
+
+    const style = getComputedStyle(ta);
+    const lineHeight = parseFloat(style.lineHeight) || 20;
+    const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const borderY = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    const maxRows = 7;
+    const minH = Math.max(
+      parseFloat(style.minHeight) || 0,
+      lineHeight + padY + borderY,
+    );
+    const maxH = lineHeight * maxRows + padY + borderY;
+
+    ta.style.height = '0px';
     const contentH = ta.scrollHeight;
     const next = Math.min(Math.max(contentH, minH), maxH);
-    ta.style.height = `${Math.ceil(next)}px`;
-    ta.style.overflowY = contentH > maxH ? 'auto' : 'hidden';
-    ta.scrollTop = Math.max(0, ta.scrollHeight - ta.clientHeight);
+    ta.style.height = `${next}px`;
+    ta.classList.toggle('chat-input--scrollable', contentH > maxH + 1);
+    if (contentH > maxH) {
+      ta.scrollTop = ta.scrollHeight;
+    }
   }
 
   _loadTheme() {
@@ -2843,6 +2916,7 @@ class ChatApp {
     this.$.fontSizeInput.value = String(clamped);
     document.documentElement.style.setProperty('--font-size', `${clamped}px`);
     localStorage.setItem('webchat_font_size', String(clamped));
+    this.autoResizeInput();
   }
 
   changeFontSize(delta) {

@@ -7,7 +7,7 @@ const GALLERY_LIMIT = 200;
 /** См. chat.js — восстановление вложений после перехода в чат */
 const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
 const DEFAULT_CONV_TITLE = 'Новая беседа';
-const IMAGE_GEN_PRESET_SLUG = 'image_gen';
+const IMG2IMG_PRESET_SLUG = 'img2img';
 
 const ICON_ATTACH =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
@@ -356,10 +356,10 @@ class GalleryApp {
       const presetsRes = await fetch('/api/presets');
       if (!presetsRes.ok) throw new Error('Не удалось загрузить пресеты');
       const presets = await presetsRes.json();
-      const imageGen = presets.find((p) => p.slug === IMAGE_GEN_PRESET_SLUG);
+      const img2imgPreset = presets.find((p) => p.slug === IMG2IMG_PRESET_SLUG);
 
       const convBody = { title: DEFAULT_CONV_TITLE };
-      if (imageGen?.id) convBody.preset_id = imageGen.id;
+      if (img2imgPreset?.id) convBody.preset_id = img2imgPreset.id;
 
       const convRes = await fetch('/api/conversations', {
         method: 'POST',

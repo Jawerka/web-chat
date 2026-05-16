@@ -12,7 +12,8 @@ TOOL_DEFINITIONS: list[dict] = [
         "function": {
             "name": "generate_image",
             "description": (
-                "Сгенерировать изображение по текстовому описанию через Stable Diffusion. "
+                "Сгенерировать изображение по текстовому описанию через Stable Diffusion (txt2img). "
+                "Только для новой картинки с нуля. Пресет беседы: «Генерация с нуля (txt2img)». "
                 "После вызова картинки автоматически появятся в чате; в тексте ответа "
                 "пользователю URL и markdown-картинки не нужны. "
                 "Для нескольких картинок (до 10) укажи count за один вызов."
@@ -73,23 +74,41 @@ TOOL_DEFINITIONS: list[dict] = [
         "function": {
             "name": "img2img",
             "description": (
-                "Доработать существующее изображение (img2img). "
-                "init_image_url — URL из чата (/media/asset/… или /media/generated/…) "
-                "или имя файла. denoising_strength: 0.20–0.36 мелкие правки/апскейл-логика, "
-                "0.37–0.48 косметика, 0.49–0.62 средние изменения, 0.63–0.74 сильные, "
-                "0.75–0.92 почти новая картинка. По умолчанию 0.52."
+                "Перерисовать или доработать существующее изображение (img2img, SD WebUI). "
+                "Пресет беседы: «Перерисовка (img2img)». "
+                "Обязателен исходник: init_image_url из истории (строка URL: …/media/asset/…) "
+                "или attachment_id вложения в текущем сообщении. "
+                "Не использовать для картинки с нуля — для этого другой пресет и generate_image. "
+                "width/height: 0 = размер исходника. "
+                "denoising_strength: 0.20–0.36 мелкие правки; 0.37–0.48 косметика; "
+                "0.49–0.62 средние; 0.63–0.74 сильные; 0.75–0.92 почти новая картинка (по умолчанию 0.52)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string", "description": "Что изменить/добавить"},
+                    "prompt": {
+                        "type": "string",
+                        "description": "Что изменить (теги Danbooru-style на английском)",
+                    },
                     "init_image_url": {
                         "type": "string",
-                        "description": "URL или имя исходного изображения",
+                        "description": "URL исходника из чата или имя файла в generated/",
+                    },
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "UUID вложения-картинки в текущем сообщении",
                     },
                     "negative_prompt": {"type": "string", "default": ""},
-                    "width": {"type": "integer", "default": 1024},
-                    "height": {"type": "integer", "default": 1024},
+                    "width": {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "0 = как у исходника; иначе 512–2048, кратно 8",
+                    },
+                    "height": {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "0 = как у исходника; иначе 512–2048, кратно 8",
+                    },
                     "steps": {"type": "integer", "default": 22},
                     "cfg_scale": {"type": "number", "default": 5.0},
                     "sampler_name": {"type": "string", "default": "Euler a"},
@@ -104,13 +123,13 @@ TOOL_DEFINITIONS: list[dict] = [
                     "resize_mode": {
                         "type": "integer",
                         "default": 0,
-                        "description": "0–3, режим ресайза init",
+                        "description": "0 just resize, 1 crop, 2 fill, 3 latent upscale",
                     },
                     "restore_faces": {"type": "boolean", "default": False},
                     "tiling": {"type": "boolean", "default": False},
                     "description": {"type": "string", "default": ""},
                 },
-                "required": ["prompt", "init_image_url"],
+                "required": ["prompt"],
             },
         },
     },
@@ -163,3 +182,25 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
 ]
+
+# Какие tools отдавать LLM в зависимости от slug пресета беседы.
+PRESET_TOOL_NAMES: dict[str, tuple[str, ...]] = {
+    "image_gen": ("generate_image", "upscale_images", "get_gallery"),
+    "img2img": ("img2img", "upscale_images", "get_gallery"),
+    "document_analysis": ("extract_text",),
+}
+
+_TOOL_BY_NAME: dict[str, dict] = {
+    t["function"]["name"]: t for t in TOOL_DEFINITIONS
+}
+
+
+def tools_for_preset_slug(slug: str | None) -> list[dict]:
+    """
+    Подмножество TOOL_DEFINITIONS для пресета.
+
+    None / default — все инструменты. image_gen и img2img — раздельные наборы.
+    """
+    if not slug or slug not in PRESET_TOOL_NAMES:
+        return list(TOOL_DEFINITIONS)
+    return [_TOOL_BY_NAME[name] for name in PRESET_TOOL_NAMES[slug] if name in _TOOL_BY_NAME]

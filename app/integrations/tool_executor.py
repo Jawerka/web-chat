@@ -18,8 +18,15 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db.repositories import AttachmentRepository, MessageRepository
 from app.db.session import async_session_factory
-from app.integrations.media_utils import parse_asset_id_from_url, resolve_trusted_generated_source
+from app.services.message_builder import _public_url_from_image_part
+from app.integrations.media_utils import (
+    parse_asset_id_from_url,
+    parse_upload_from_url,
+    resolve_trusted_generated_source,
+    resolve_upload_file,
+)
 from app.integrations.sd_tools import generate_image, get_gallery, img2img, upscale_images
 from app.services.attachment_service import AttachmentService
 from app.services.media_service import MediaService
@@ -51,11 +58,13 @@ class ToolExecutor:
         *,
         conversation_id: uuid.UUID | None = None,
         sd_webui_url: str | None = None,
+        source_user_message_id: uuid.UUID | None = None,
     ) -> None:
         """Опциональная async-сессия БД (для оркестратора с открытой транзакцией)."""
         self._session = session
         self._conversation_id = conversation_id
         self._sd_webui_url = sd_webui_url
+        self._source_user_message_id = source_user_message_id
 
     async def run(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         """
@@ -82,9 +91,42 @@ class ToolExecutor:
             return ToolResult(content=text, image_urls=[])
         raise ValueError(f"Неизвестный инструмент: {name}")
 
-    async def _load_init_image(self, url_or_path: str) -> tuple[bytes, str]:
-        """Загрузить исходник для img2img: asset из БД или файл generated/."""
-        asset_id = parse_asset_id_from_url(url_or_path)
+    async def _load_init_image(
+        self,
+        url_or_path: str | None = None,
+        *,
+        attachment_id: uuid.UUID | None = None,
+    ) -> tuple[bytes, str]:
+        """
+        Загрузить исходник для img2img.
+
+        Источники: MediaAsset (/media/asset/…), upload (/media/uploads/…),
+        generated (/media/generated/… или имя файла), attachment_id.
+        """
+        if attachment_id is not None:
+            if self._session is None:
+                raise ValueError("Нет сессии БД для чтения вложения")
+            service = AttachmentService(self._session)
+            att = await service._repo.get_by_id(attachment_id)
+            if att is None:
+                raise ValueError(f"Вложение {attachment_id} не найдено")
+            if not att.mime_type.startswith("image/"):
+                raise ValueError("img2img поддерживает только изображения")
+            if att.media_asset_id is not None:
+                media = MediaService(self._session)
+                result = await media.get_bytes(att.media_asset_id)
+                if result is None:
+                    raise ValueError(f"Изображение вложения {attachment_id} не найдено в БД")
+                data, _mime = result
+                return data, att.original_name
+            path = AttachmentService.file_path(att)
+            return path.read_bytes(), att.original_name
+
+        if not url_or_path or not str(url_or_path).strip():
+            raise ValueError("Укажите init_image_url или attachment_id")
+
+        raw = str(url_or_path).strip()
+        asset_id = parse_asset_id_from_url(raw)
         if asset_id is not None:
             if self._session is None:
                 raise ValueError("Нет сессии БД для чтения /media/asset/…")
@@ -95,22 +137,122 @@ class ToolExecutor:
             data, _mime = result
             return data, f"{asset_id}.png"
 
-        path = resolve_trusted_generated_source(url_or_path)
+        upload = parse_upload_from_url(raw)
+        if upload is not None:
+            att_id, filename = upload
+            path = resolve_upload_file(att_id, filename)
+            return path.read_bytes(), filename
+
+        path = resolve_trusted_generated_source(raw)
         return path.read_bytes(), path.name
 
+    async def _resolve_user_message_init(self) -> tuple[bytes, str] | None:
+        """
+        Исходник img2img из user-сообщения текущего хода.
+
+        1) Attachment с message_id в БД
+        2) image_url / asset_id в content_json.parts (старые сообщения без link_to_message)
+        """
+        if self._session is None or self._source_user_message_id is None:
+            return None
+
+        att_repo = AttachmentRepository(self._session)
+        attachments = await att_repo.list_for_message(self._source_user_message_id)
+        for att in attachments:
+            if att.mime_type.startswith("image/"):
+                try:
+                    return await self._load_init_image(attachment_id=att.id)
+                except (ValueError, FileNotFoundError, RuntimeError) as exc:
+                    logger.warning(
+                        "img2img: вложение %s не загружено: %s",
+                        att.id,
+                        exc,
+                    )
+
+        msg = await MessageRepository(self._session).get_by_id(self._source_user_message_id)
+        if msg and msg.content_json and isinstance(msg.content_json.get("parts"), list):
+            for part in msg.content_json["parts"]:
+                if part.get("type") != "image_url":
+                    continue
+                url = _public_url_from_image_part(part)
+                raw_asset = part.get("asset_id")
+                try:
+                    if raw_asset:
+                        aid = uuid.UUID(str(raw_asset))
+                        if self._session is not None:
+                            media = MediaService(self._session)
+                            result = await media.get_bytes(aid)
+                            if result is not None:
+                                data, _mime = result
+                                return data, f"{aid}.png"
+                    if url:
+                        return await self._load_init_image(url)
+                except (ValueError, FileNotFoundError, RuntimeError) as exc:
+                    logger.warning(
+                        "img2img: part user-сообщения не загружен: %s",
+                        exc,
+                    )
+
+        return None
+
     async def _img2img(self, arguments: dict[str, Any]) -> ToolResult:
-        """img2img с разрешением init_image из asset или generated."""
+        """img2img с разрешением init_image из asset, upload, generated или attachment_id."""
         args = dict(arguments)
         init_url = args.pop("init_image_url", None)
-        if not init_url:
-            return ToolResult(content="Ошибка: не указан init_image_url", image_urls=[])
-        try:
-            init_bytes, init_name = await self._load_init_image(str(init_url))
-        except (ValueError, FileNotFoundError) as exc:
-            return ToolResult(content=f"Ошибка img2img: {exc}", image_urls=[])
+        raw_att = args.pop("attachment_id", None)
+        att_uuid: uuid.UUID | None = None
+        if raw_att:
+            try:
+                att_uuid = uuid.UUID(str(raw_att))
+            except ValueError:
+                return ToolResult(
+                    content=f"Ошибка img2img: некорректный attachment_id: {raw_att}",
+                    image_urls=[],
+                )
+
+        init_bytes: bytes | None = None
+        init_name = ""
+        load_error: str | None = None
+
+        if init_url or att_uuid is not None:
+            try:
+                init_bytes, init_name = await self._load_init_image(
+                    str(init_url) if init_url else None,
+                    attachment_id=att_uuid,
+                )
+            except (ValueError, FileNotFoundError) as exc:
+                load_error = str(exc)
+            except RuntimeError as exc:
+                load_error = str(exc)
+
+        if init_bytes is None:
+            fallback = await self._resolve_user_message_init()
+            if fallback is not None:
+                init_bytes, init_name = fallback
+                logger.info(
+                    "img2img: init взят из user-сообщения %s (%s)",
+                    self._source_user_message_id,
+                    init_name,
+                )
+            elif not init_url and att_uuid is None:
+                return ToolResult(
+                    content="Ошибка: укажите init_image_url (URL из чата) или attachment_id",
+                    image_urls=[],
+                )
+            else:
+                return ToolResult(
+                    content=f"Ошибка img2img: {load_error or 'не удалось загрузить исходник'}",
+                    image_urls=[],
+                )
         args["init_image_bytes"] = init_bytes
         args["init_source_name"] = init_name
-        return await self._run_sd_image_tool(img2img, args, "img2img")
+        try:
+            return await self._run_sd_image_tool(img2img, args, "img2img")
+        except ValueError as exc:
+            logger.warning("img2img: %s", exc)
+            return ToolResult(content=f"Ошибка img2img: {exc}", image_urls=[])
+        except RuntimeError as exc:
+            return ToolResult(content=str(exc), image_urls=[])
 
     async def _run_sd_image_tool(
         self,

@@ -5,16 +5,104 @@
 from __future__ import annotations
 
 import re
+import uuid
 from copy import deepcopy
 from typing import Any
 
 from app.db.models import Attachment, Message, MessageRole
-from app.integrations.media_utils import rewrite_image_url_for_llm
+from app.integrations.media_utils import (
+    absolute_media_url,
+    asset_media_url,
+    parse_asset_id_from_url,
+    rewrite_image_url_for_llm,
+)
 from app.services.attachment_service import AttachmentService
 from app.services.prompt_macro_service import expand_macro_text, expand_parts_for_llm
 
 # Markdown-изображения в тексте ассистента не используем — картинки в content_json + UI.
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+
+
+def _public_url_from_image_part(part: dict[str, Any]) -> str | None:
+    """Публичный URL картинки из part сообщения (не /llm)."""
+    raw_asset = part.get("asset_id")
+    if raw_asset:
+        try:
+            return asset_media_url(uuid.UUID(str(raw_asset)), absolute=True)
+        except ValueError:
+            pass
+    url = (part.get("image_url") or {}).get("url") or ""
+    if not url:
+        return None
+    asset_id = parse_asset_id_from_url(url)
+    if asset_id is not None:
+        return asset_media_url(asset_id, absolute=True)
+    if url.startswith("/media/"):
+        return absolute_media_url(url.split("/llm")[0].rstrip("/"))
+    return url
+
+
+def collect_img2img_init_lines(
+    attachments: list[Attachment],
+    parts: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """
+    Строки attachment_id / init_image_url для подсказки LLM и логов.
+
+    Источники: строки Attachment в БД и image_url parts (если message_id не привязан).
+    """
+    lines: list[str] = []
+    seen_urls: set[str] = set()
+
+    for att in attachments:
+        if not att.mime_type.startswith("image/"):
+            continue
+        url = AttachmentService.public_url(att)
+        if url.startswith("/media/"):
+            url = absolute_media_url(url)
+        seen_urls.add(url)
+        lines.append(f"attachment_id={att.id}")
+        lines.append(f"init_image_url={url}")
+
+    for part in parts or []:
+        if part.get("type") != "image_url":
+            continue
+        url = _public_url_from_image_part(part)
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        lines.append(f"init_image_url={url}")
+
+    return lines
+
+
+def build_img2img_init_hint_text(
+    attachments: list[Attachment],
+    parts: list[dict[str, Any]] | None = None,
+) -> str:
+    """Явные attachment_id и URL для img2img — модель часто не связывает vision с tool args."""
+    lines = collect_img2img_init_lines(attachments, parts)
+    if not lines:
+        return ""
+    return (
+        "[Для img2img используйте эти параметры исходника (скопируйте в вызов инструмента):]\n"
+        + "\n".join(lines)
+    )
+
+
+def append_img2img_init_hints(
+    parts: list[dict[str, Any]],
+    attachments: list[Attachment],
+    *,
+    image_parts: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Добавить текстовую подсказку с ID/URL вложений-картинок."""
+    hint = build_img2img_init_hint_text(attachments, image_parts if image_parts is not None else parts)
+    if not hint:
+        return parts
+    out = list(parts)
+    out.append({"type": "text", "text": hint})
+    return out
 
 
 def build_user_content(

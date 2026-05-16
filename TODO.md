@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Production: `deploy/install.sh` + systemd из шаблонов. Автотесты: **88** (`pytest -q`). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки). Журнал — [ниже](#журнал-прогресса).
+> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Production: `deploy/install.sh` + systemd из шаблонов. Автотесты: **105** (`pytest -q`). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки). Журнал — [ниже](#журнал-прогресса).
 
 ---
 
@@ -20,7 +20,7 @@
 6. [Системные промпты (seed)](#6-системные-промпты-seed)  
 7. [Чеклист перед production](#7-чеклист-перед-production)  
 8. [Риски и митигация](#8-риски-и-митигация)  
-9. [AI-агент и tool calling (детально)](#9-ai-агент-и-tool-calling-детально)  
+9. [AI-агент и tool calling (детально)](#9-ai-агент-и-tool-calling-детально) — в т.ч. [§9.5 Пайплайн img2img](#95-пайплайн-img2img-пресет-img2img)  
 10. [Фронтенд: структура и поведение](#10-фронтенд-структура-и-поведение)  
 11. [REST API: полные контракты](#11-rest-api-полные-контракты)  
 12. [Интеграция с image-gen (192.168.88.16)](#12-интеграция-с-image-gen-1921688816)  
@@ -299,7 +299,7 @@ MediaAsset
 ├── static/css/chat.css
 ├── static/js/      chat.js, markdown.js, prompt-macros.js, macros-page.js, gallery.js
 ├── templates/      chat.html, gallery.html, macros.html
-├── tests/          88 pytest (generation_state, prompt_macros, llm_vision, …)
+├── tests/          105 pytest (generation_state, prompt_macros, llm_vision, img2img, …)
 ├── deploy/
 │   install.sh, DEPLOY.md, backup-data.sh
 │   web-chat.service.template, web-chat-cleanup.service.template
@@ -379,6 +379,22 @@ generate_image (count 1–10, n_iter=count, batch_size=1)
 ```
 
 Legacy `/media/generated/{file}` остаётся для отладки и импорта старых URL; в новых ответах ассистента предпочтителен `/media/asset/`.
+
+#### Пайплайн img2img (пресет `img2img`, перерисовка вложения)
+
+Краткая схема — в [§9.5](#95-пайплайн-img2img-пресет-img2img). Отличие от txt2img: исходник **уже есть** (вложение пользователя); LLM анализирует его через **vision**, собирает промпт и `denoising_strength`, затем вызывает tool `img2img`; SD получает **байты файла с сервера**, а не картинку «из головы» модели.
+
+```text
+user: текст + image (attachment → MediaAsset)
+  → LLM vision (/media/asset/{id}/llm) + подсказки attachment_id / init_image_url
+  → tool_call img2img(prompt, denoising_strength, init_image_url | attachment_id)
+  → ToolExecutor: загрузка init (fallback на вложение user-сообщения)
+  → SD POST /sdapi/v1/img2img → data/generated/ → ingest → /media/asset/{uuid}
+  → role=tool: текст + URL; WS image + content_json.images в ответе ассистента
+  → (опционально) ещё раунд LLM — финальный текст пользователю
+```
+
+Пресеты разделены: `image_gen` → только `generate_image`; `img2img` → только `img2img` (+ upscale, gallery). Фильтр tools: `tools_for_preset_slug()` в `agent_orchestrator.py`.
 
 ### 1.11. Обработка вложений
 
@@ -926,7 +942,7 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 - [x] Расширенный `/health` — llm, sd (`degraded` при сбое).
 - [x] Таймауты и коды `error.code` (раздел 13).
 - [x] Cleanup по `UPLOAD_RETENTION_DAYS` / `GENERATED_RETENTION_DAYS`: фоновая задача при старте + `deploy/web-chat-cleanup.timer`.
-- [x] pytest: unit + integration (**88** тестов, раздел 14).
+- [x] pytest: unit + integration (**105** тестов, раздел 14).
 - [x] systemd, README deploy (LAN); WireGuard — в разделе 15.
 - [x] SQLite WAL + retry записи (`app/db/sqlite.py`, `run_write`).
 
@@ -968,7 +984,8 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 | slug | name | is_default |
 |------|------|------------|
 | `default` | По умолчанию | true |
-| `image_gen` | Генерация изображений | false |
+| `image_gen` | Генерация с нуля (txt2img) | false |
+| `img2img` | Перерисовка (img2img) | false |
 | `document_analysis` | Анализ документов | false |
 
 Seed выполнять в `init_db()` только если таблица `presets` пуста.
@@ -1182,6 +1199,102 @@ def finalize_assistant_text(
 - Картинки попадают в `content_json.images` / `image_asset_ids` и в WS `image`.
 - Пресет `image_gen` явно запрещает LLM вставлять `![...](url)` (раздел 16.2).
 - Legacy-сообщения с markdown при `GET .../messages` очищаются через enrich.
+
+### 9.5. Пайплайн img2img (пресет `img2img`)
+
+> **Назначение раздела:** зафиксировать целевую логику перерисовки прикреплённого изображения — как она **реализована сейчас** в коде (`agent_orchestrator.py`, `tool_executor.py`, `sd_tools.py`, `img2img_service.py`, `message_builder.py`). Не путать с txt2img (`image_gen` + `generate_image`).
+
+#### 9.5.1. Целевой сценарий (что должно происходить)
+
+1. Пользователь в беседе с пресетом **`img2img`** пишет задачу («перерисуй», «измени фон»…) и **прикрепляет изображение** (или указывает картинку из недавней истории).
+2. Исходник попадает в **vision LLM** — модель анализирует картинку и формулирует **prompt** (теги) и **denoising_strength**.
+3. Модель вызывает инструмент **`img2img`** с `init_image_url` и/или `attachment_id`.
+4. Сервер загружает байты исходника, отправляет их в **SD WebUI** (`POST /sdapi/v1/img2img`).
+5. Результат сохраняется в БД (`MediaAsset`), в чат уходит **новое изображение** + короткий текст ассистента.
+6. Модель может сделать **ещё один раунд** LLM после tool (по тексту отчёта tool; vision результата в v1 **не** подмешивается — см. [§9.5.4](#954-ограничения-и-отличия-от-идеала)).
+
+#### 9.5.2. Диаграмма последовательности (реализованный поток)
+
+```mermaid
+sequenceDiagram
+    participant U as Пользователь
+    participant UI as Чат (браузер)
+    participant Orch as AgentOrchestrator
+    participant LLM as LLM (vision + tools)
+    participant TE as ToolExecutor
+    participant SD as SD WebUI
+
+    U->>UI: Текст + вложение-картинка
+    UI->>Orch: WS send / regenerate
+    Orch->>Orch: build_user_content + append_img2img_init_hints
+    Orch->>LLM: system + history + user (text + image_url)
+    Note over LLM: Анализ vision, выбор prompt и denoising
+    LLM->>Orch: tool_calls img2img
+    Orch->>TE: run(img2img, args)
+    TE->>TE: _load_init_image / fallback на вложение user-msg
+    TE->>SD: POST /sdapi/v1/img2img
+    SD-->>TE: images base64
+    TE->>TE: save PNG + ingest_sd_output_files
+    TE-->>Orch: ToolResult (текст + URL + asset_ids)
+    Orch->>UI: WS image (превью в пузыре ассистента)
+    Orch->>LLM: role=tool (текст с URL и метаданными)
+    LLM->>Orch: финальный content (текст)
+    Orch->>UI: done + content_json.images
+```
+
+#### 9.5.3. Подробно по шагам (код и данные)
+
+| Шаг | Что происходит | Где в коде |
+|-----|----------------|------------|
+| **A. Приём сообщения** | Upload → `Attachment` (+ опционально `media_asset_id`). При отправке: `prepare_for_llm`, `build_user_content` (text + `image_url`), для пресета `img2img` — `append_img2img_init_hints` (явные `attachment_id` и `init_image_url` в тексте). Сохранение `content_json.parts` в `Message`. | `run_conversation_turn`, `message_builder.py`, `attachment_service.py` |
+| **B. Vision для LLM** | URL картинки переписывается на абсолютный `/media/asset/{id}/llm` (JPEG ≤ лимита для llama-server). В контекст **не** кладётся base64. | `_llm_user_parts`, `rewrite_image_url_for_llm` |
+| **C. Цикл агента** | До `max_tool_rounds` раундов: `complete_with_stream` → при `tool_calls` — выполнение tools → `role=tool` в историю → снова LLM. Tools пресета: только `img2img`, `upscale_images`, `get_gallery` (`tools_for_preset_slug`). | `agent_orchestrator.py` |
+| **D. Вызов img2img** | LLM передаёт `prompt`, `denoising_strength`, `width`/`height` (0 = как у исходника), `init_image_url` или `attachment_id`. | `tool_definitions.py` |
+| **E. Загрузка исходника** | `ToolExecutor._load_init_image`: `/media/asset/…`, `/media/uploads/…`, `/media/generated/…`, или `attachment_id`. Если URL от модели неверный — **fallback**: первое image-вложение текущего user-сообщения (`source_user_message_id`). | `tool_executor.py` |
+| **F. Подготовка к SD** | `prepare_init_image` (RGB, уменьшение длинной стороны ≤ 2048), `sanitize_llm_dimension` / `resolve_output_dimensions`, `validate_img2img_request`, payload → WebUI. | `img2img_service.py`, `sd_tools.img2img` |
+| **G. SD и сохранение** | Ответ WebUI → `data/generated/{file}.png` → `ingest_sd_output_files` → `MediaAsset`, публичный URL `{PUBLIC_BASE_URL}/media/asset/{uuid}`. | `sd_tools.py`, `media_service.py` |
+| **H. Ответ tool в LLM** | В `llm_messages` добавляется `{"role": "tool", "content": "… URL: …"}`. **Без** `image_url` в tool message — только текст. | `agent_orchestrator.py` |
+| **I. UI пользователя** | Параллельно: `emit("image")`, `stream_draft.add_images`, в финале `content_json.images` / `image_asset_ids`. Текст ассистента без markdown `![](url)`. | `streaming_draft.py`, `finalize_assistant_text` |
+
+**Перегенерация (regenerate):** тот же цикл в `run_regenerate_turn`: история до user-сообщения; user parts из `content_json`; вложения подгружаются через `AttachmentRepository.list_for_message`; снова hints + `source_user_message_id` для fallback в ToolExecutor.
+
+**Важно:** пиксели в SD идут **напрямую с диска/БД** (`init_image_bytes`). Vision нужен модели только для **смысла** (промпт, сила denoise), не как транспорт изображения в WebUI.
+
+#### 9.5.4. Ограничения и отличия от «идеала»
+
+| Ожидание | Реализация сейчас |
+|----------|-------------------|
+| LLM «видит» результат img2img глазами перед финальным ответом | **Нет** — после tool модель получает только **текст** (`role=tool`) с URL и параметрами. Картинка в чате есть у пользователя сразу (WS + `content_json`). |
+| Жёсткий pipeline «vision → SD → vision → ответ» | **Нет** — один **agent loop**; модель сама решает, когда вызвать tool; возможны лишние tools (`get_gallery`) или повторный `img2img` при ошибке init. |
+| Отдельный MCP-клиент для tools | **Нет** в рантайме оркестратора — `ToolExecutor` in-process (MCP thread на :8091 для внешних клиентов, дублирует те же функции). |
+| Init всегда из вложения | **Почти** — при ошибке URL срабатывает fallback на вложение user-сообщения; без вложения и без валидного URL — ошибка tool и просьба приложить файл. |
+
+**Возможное улучшение (v2):** после успешного ingest подставлять в контекст LLM multimodal block с `image_url` результата для финальной оценки качества.
+
+#### 9.5.5. Связанные файлы
+
+| Файл | Роль |
+|------|------|
+| `app/db/seed.py` | Промпт пресета `IMG2IMG_PRESET_PROMPT` |
+| `app/integrations/tool_definitions.py` | Схема `img2img`, `tools_for_preset_slug()` |
+| `app/services/agent_orchestrator.py` | Цикл LLM ↔ tools, regenerate, hints |
+| `app/services/message_builder.py` | `build_img2img_init_hint_text`, `append_img2img_init_hints` |
+| `app/integrations/tool_executor.py` | `_img2img`, fallback вложений |
+| `app/integrations/img2img_service.py` | Подготовка init, размеры, payload |
+| `app/integrations/sd_tools.py` | HTTP к WebUI, сохранение PNG |
+| `tests/test_img2img_service.py`, `tests/test_img2img_init_hints.py` | Unit-тесты |
+
+#### 9.5.6. denoising_strength (напоминание для промпта)
+
+| Диапазон | Назначение |
+|----------|------------|
+| 0.20–0.36 | Мелкие правки, цвет, детали |
+| 0.37–0.48 | Лёгкая косметика, стиль |
+| 0.49–0.62 | Средние изменения (**по умолчанию 0.52**) |
+| 0.63–0.74 | Сильные: поза, анатомия |
+| 0.75–0.92 | Почти новая картинка при сохранении композиции |
+
+Полный текст инструкций — seed `img2img`, [§16](#16-seed-данные-пресетов-полные-тексты).
 
 ---
 
@@ -1732,7 +1845,7 @@ MVP считается готовым после завершения **этап
 - [ ] `@@macro` в поле ввода → один `@` в спойлере.
 - [ ] Lightbox: download и attach в composer.
 - [ ] `sudo ./deploy/install.sh` → reboot → `systemctl status web-chat` active.
-- [ ] `pytest -q` → 88 passed.
+- [ ] `pytest -q` → 105 passed.
 
 ---
 
@@ -1753,7 +1866,8 @@ MVP считается готовым после завершения **этап
 | 11 | [x] | 2026-05-16 | img2img, upscale, get_gallery, /gallery |
 | v2 (часть) | [x] | 2026-05-16 | export MD, search, inline title, health config, backup/logrotate |
 | post-MVP | [x] | 2026-05-16 | prompt macros, generation resume, lightbox attach/download, vision /llm |
-| deploy | [x] | 2026-05-16 | install.sh, systemd templates, DEPLOY.md, 88 pytest |
+| deploy | [x] | 2026-05-16 | install.sh, systemd templates, DEPLOY.md |
+| img2img doc | [x] | 2026-05-16 | §9.5 пайплайн, пресеты txt2img/img2img, init hints, fallback, 105 pytest |
 
 ---
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import String, cast, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -37,7 +37,16 @@ class PresetRepository:
 
     async def get_by_id(self, preset_id: uuid.UUID) -> Preset | None:
         """Пресет по id или None."""
-        return await self._session.get(Preset, preset_id)
+        preset = await self._session.get(Preset, preset_id)
+        if preset is not None:
+            return preset
+        # SQLite: id мог быть вставлен с дефисами (сырой SQL в migrate до нормализации).
+        result = await self._session.execute(
+            select(Preset).where(
+                func.replace(cast(Preset.id, String), "-", "") == preset_id.hex,
+            ).limit(1),
+        )
+        return result.scalar_one_or_none()
 
     async def get_default(self) -> Preset | None:
         """Пресет с is_default=true."""

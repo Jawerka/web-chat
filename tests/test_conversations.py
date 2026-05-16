@@ -8,13 +8,13 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 async def test_presets_seeded(client: AsyncClient) -> None:
-    """После старта доступны три seed-пресета."""
+    """После старта доступны seed-пресеты, включая img2img."""
     response = await client.get("/api/presets")
     assert response.status_code == 200
     presets = response.json()
-    assert len(presets) == 3
+    assert len(presets) >= 4
     slugs = {p["slug"] for p in presets}
-    assert slugs == {"default", "image_gen", "document_analysis"}
+    assert slugs >= {"default", "image_gen", "img2img", "document_analysis"}
     defaults = [p for p in presets if p["is_default"]]
     assert len(defaults) == 1
     assert defaults[0]["slug"] == "default"
@@ -71,6 +71,23 @@ async def test_patch_and_delete_conversation(client: AsyncClient) -> None:
 
     missing = await client.get(f"/api/conversations/{conv_id}")
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_patch_conversation_preset_to_img2img(client: AsyncClient) -> None:
+    """PATCH preset_id на img2img (регрессия: UUID с дефисами в SQLite)."""
+    presets = (await client.get("/api/presets")).json()
+    img2img = next(p for p in presets if p["slug"] == "img2img")
+
+    created = await client.post("/api/conversations", json={"title": "Img2img preset"})
+    conv_id = created.json()["id"]
+
+    patched = await client.patch(
+        f"/api/conversations/{conv_id}",
+        json={"preset_id": img2img["id"]},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["preset_id"] == img2img["id"]
 
 
 @pytest.mark.asyncio

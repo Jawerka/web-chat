@@ -27,11 +27,14 @@ from app.db.repositories import (
     PromptMacroRepository,
 )
 from app.integrations.llm_client import LLMClient
+from app.integrations.tool_definitions import tools_for_preset_slug
 from app.integrations.media_utils import rewrite_image_url_for_llm
 from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.services.attachment_service import AttachmentService
 from app.services.conversation_title_service import maybe_generate_conversation_title
 from app.services.message_builder import (
+    append_img2img_init_hints,
+    build_img2img_init_hint_text,
     build_user_content,
     finalize_assistant_text,
     history_to_llm_messages,
@@ -81,6 +84,8 @@ class AgentOrchestrator:
         self,
         session: AsyncSession,
         conversation_id: uuid.UUID,
+        *,
+        source_user_message_id: uuid.UUID | None = None,
     ) -> ToolExecutor:
         if self._tools is not None:
             return self._tools
@@ -88,6 +93,7 @@ class AgentOrchestrator:
             session,
             conversation_id=conversation_id,
             sd_webui_url=self._sd_webui_url,
+            source_user_message_id=source_user_message_id,
         )
 
     @staticmethod
@@ -279,11 +285,18 @@ class AgentOrchestrator:
 
         preset = await preset_repo.get_by_id(conversation.preset_id)
         system_prompt = preset.system_prompt if preset else ""
+        preset_tools = tools_for_preset_slug(preset.slug if preset else None)
 
         att_service = AttachmentService(session)
         attachments = await att_service.prepare_for_llm(attachment_ids)
 
         user_parts = build_user_content(user_text, attachments)
+        if preset and preset.slug == "img2img":
+            user_parts = append_img2img_init_hints(
+                user_parts,
+                attachments,
+                image_parts=user_parts,
+            )
         user_message = await msg_repo.create(
             conversation_id=conversation_id,
             role=MessageRole.USER,
@@ -349,6 +362,7 @@ class AgentOrchestrator:
                 llm_messages,
                 on_text_delta=_on_delta,
                 cancel_event=cancel_event,
+                tools=preset_tools,
                 model=llm_model,
             )
 
@@ -380,6 +394,7 @@ class AgentOrchestrator:
                         result = await self._executor(
                             session,
                             conversation_id,
+                            source_user_message_id=user_message.id,
                         ).run(name, args)
                         result_content = result.content
                     except Exception as exc:
@@ -495,6 +510,7 @@ class AgentOrchestrator:
 
         preset = await preset_repo.get_by_id(conversation.preset_id)
         system_prompt = preset.system_prompt if preset else ""
+        preset_tools = tools_for_preset_slug(preset.slug if preset else None)
 
         user_parts: list[dict[str, Any]] | str
         if user_message.content_json and "parts" in user_message.content_json:
@@ -518,26 +534,39 @@ class AgentOrchestrator:
         )
         history = [m for m in history if m.created_at < user_message.created_at]
 
+        att_repo = AttachmentRepository(session)
+        user_attachments = await att_repo.list_for_message(user_message_id)
+
         llm_messages: list[dict[str, Any]] = []
         if system_prompt:
             llm_messages.append({"role": "system", "content": system_prompt})
         llm_messages.extend(history_to_llm_messages(history, alias_to_body=alias_to_body))
         if isinstance(user_parts, list):
+            regen_parts = expand_parts_for_llm(user_parts, alias_to_body)
+            if preset and preset.slug == "img2img":
+                regen_parts = append_img2img_init_hints(
+                    regen_parts,
+                    user_attachments,
+                    image_parts=user_parts,
+                )
             llm_messages.append(
                 {
                     "role": "user",
-                    "content": self._llm_user_parts(
-                        expand_parts_for_llm(user_parts, alias_to_body),
-                    ),
+                    "content": self._llm_user_parts(regen_parts),
                 }
             )
         else:
             from app.services.prompt_macro_service import expand_macro_text
 
+            regen_text = expand_macro_text(str(user_parts), alias_to_body)
+            if preset and preset.slug == "img2img":
+                hint = build_img2img_init_hint_text(user_attachments, None)
+                if hint:
+                    regen_text = f"{regen_text}\n\n{hint}" if regen_text else hint
             llm_messages.append(
                 {
                     "role": "user",
-                    "content": expand_macro_text(str(user_parts), alias_to_body),
+                    "content": regen_text,
                 }
             )
 
@@ -564,6 +593,7 @@ class AgentOrchestrator:
                 llm_messages,
                 on_text_delta=_on_delta,
                 cancel_event=cancel_event,
+                tools=preset_tools,
                 model=llm_model,
             )
 
@@ -593,6 +623,7 @@ class AgentOrchestrator:
                         result = await self._executor(
                             session,
                             conversation_id,
+                            source_user_message_id=user_message.id,
                         ).run(name, args)
                         result_content = result.content
                     except Exception as exc:

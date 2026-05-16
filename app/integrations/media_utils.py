@@ -23,6 +23,10 @@ _ASSET_URL_RE = re.compile(
     r"/media/asset/([0-9a-fA-F-]{36})(?:/(?:thumb|llm))?",
     re.IGNORECASE,
 )
+_UPLOAD_URL_RE = re.compile(
+    r"/media/uploads/([0-9a-fA-F-]{36})/([^/\s\)?#]+)",
+    re.IGNORECASE,
+)
 
 UPLOAD_ROOT = Path("data/uploads")
 GENERATED_ROOT = Path("data/generated")
@@ -160,6 +164,17 @@ def asset_llm_media_url(asset_id: uuid.UUID, *, absolute: bool = False) -> str:
     if absolute:
         return f"{settings.public_base_url.rstrip('/')}{path}"
     return path
+
+
+def parse_upload_from_url(url: str) -> tuple[uuid.UUID, str] | None:
+    """Извлечь attachment_id и имя файла из URL вложения."""
+    m = _UPLOAD_URL_RE.search(url)
+    if not m:
+        return None
+    try:
+        return uuid.UUID(m.group(1)), m.group(2)
+    except ValueError:
+        return None
 
 
 def parse_asset_id_from_url(url: str) -> uuid.UUID | None:

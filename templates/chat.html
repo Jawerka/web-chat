@@ -99,6 +99,15 @@
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
       </button>
 
+      <div class="chat-preset-toolbar hidden" id="chat-preset-toolbar" aria-label="Пресет для следующего сообщения">
+        <div class="preset-select-wrap chat-preset-select-wrap">
+          <select class="preset-select form-input chat-preset-select" id="chat-preset-select" aria-label="Пресет для следующего сообщения" disabled></select>
+          <span class="preset-select-chevron" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </div>
+      </div>
+
       <div class="chat-body" id="chat-body">
         <div class="error-banner hidden" id="error-banner" role="alert">
           <div class="error-banner-content">
@@ -152,7 +161,7 @@
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 8h10M7 12h6M7 16h8"/><circle cx="17" cy="8" r="3"/></svg>
               </button>
               <div class="chat-input-wrap">
-                <textarea id="user-input" class="chat-input" rows="1" placeholder="Сообщение… (@alias для промпта)" disabled autocomplete="off" spellcheck="true"></textarea>
+                <textarea id="user-input" class="chat-input" rows="1" placeholder="Сообщение" title="Enter — отправить, Shift+Enter — новая строка" disabled autocomplete="off" spellcheck="true"></textarea>
                 <div class="macro-mention-list hidden" id="macro-mention-list" role="listbox" aria-label="Подсказки @alias"></div>
               </div>
               <button type="button" class="btn-cancel hidden" id="cancel-btn" title="Стоп" aria-label="Стоп">

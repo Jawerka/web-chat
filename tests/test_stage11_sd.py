@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 from pathlib import Path
 
 import pytest
@@ -95,4 +96,53 @@ async def test_list_gallery_images_merges_db_and_disk(
 
 def test_img2img_requires_prompt() -> None:
     with pytest.raises(ValueError, match="prompt"):
-        img2img("", init_image_url="x.png", init_image_bytes=b"fake")
+        img2img("", init_image_url="x.png", init_image_bytes=MINIMAL_PNG)
+
+
+def test_img2img_auto_dimensions_from_init(monkeypatch: pytest.MonkeyPatch) -> None:
+    """width/height=0 подставляют размер подготовленного исходника."""
+    from app.integrations import sd_tools as mod
+
+    captured: dict = {}
+
+    def fake_post(*_args, **kwargs) -> object:
+        captured["payload"] = kwargs["json"]
+
+        class Resp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {
+                    "images": [base64.b64encode(MINIMAL_PNG).decode()],
+                    "parameters": {},
+                    "info": "{}",
+                }
+
+        return Resp()
+
+    monkeypatch.setattr(mod, "get_sd_session", lambda: type("S", (), {"post": fake_post})())
+    monkeypatch.setattr(mod, "resolve_sd_webui_url", lambda u=None: "http://test")
+    monkeypatch.setattr(mod, "save_image_from_base64", lambda b: "out.png")
+    monkeypatch.setattr(mod, "make_thumbnail", lambda f: None)
+    monkeypatch.setattr(mod, "generated_media_url", lambda f: f"/media/generated/{f}")
+
+    raw = _make_png_for_test(768, 768)
+    result = mod.img2img(
+        "edit cat",
+        init_image_bytes=raw,
+        init_source_name="ref.png",
+        width=0,
+        height=0,
+    )
+    assert "img2img завершён" in result
+    assert captured["payload"]["width"] == 768
+    assert captured["payload"]["height"] == 768
+
+
+def _make_png_for_test(w: int, h: int) -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h)).save(buf, format="PNG")
+    return buf.getvalue()

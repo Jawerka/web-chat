@@ -20,6 +20,18 @@ from PIL import Image as PILImage
 from PIL import PngImagePlugin
 
 from app.config import settings
+from app.integrations.img2img_service import (
+    Img2ImgRequest,
+    build_img2img_payload,
+    encode_init_image_b64,
+    format_generation_meta,
+    pick_seed,
+    prepare_init_image,
+    resolve_output_dimensions,
+    sanitize_llm_dimension,
+    sd_error_message,
+    validate_img2img_request,
+)
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     generate_filename,
@@ -225,8 +237,8 @@ def img2img(
     init_source_name: str = "",
     negative_prompt: str = "",
     steps: int = 22,
-    width: int = 1024,
-    height: int = 1024,
+    width: int = 0,
+    height: int = 0,
     cfg_scale: float = 5.0,
     sampler_name: str = "Euler a",
     scheduler: str = "",
@@ -242,10 +254,8 @@ def img2img(
     img2img: доработка существующего изображения через SD WebUI.
 
     init_image_url — URL или имя файла (если bytes не переданы из ToolExecutor).
+    width/height = 0 — размер как у исходника (после prepare_init_image).
     """
-    if not prompt.strip():
-        raise ValueError("prompt не может быть пустым")
-
     if init_image_bytes is None:
         if not init_image_url.strip():
             raise ValueError("Укажите init_image_url или передайте init_image_bytes")
@@ -253,71 +263,90 @@ def img2img(
         init_image_bytes = init_path.read_bytes()
         init_source_name = init_source_name or init_path.name
 
-    if not (1 <= steps <= 150):
-        raise ValueError("steps должен быть от 1 до 150")
-    if not (512 <= width <= 2048):
-        raise ValueError("width должен быть от 512 до 2048")
-    if width % 8 != 0:
-        raise ValueError("width должен быть кратен 8")
-    if not (512 <= height <= 2048):
-        raise ValueError("height должен быть от 512 до 2048")
-    if height % 8 != 0:
-        raise ValueError("height должен быть кратен 8")
-    if not (1 <= cfg_scale <= 30):
-        raise ValueError("cfg_scale должен быть от 1 до 30")
-    if not (0.0 <= denoising_strength <= 1.0):
-        raise ValueError("denoising_strength должен быть от 0.0 до 1.0")
-    if resize_mode not in (0, 1, 2, 3):
-        raise ValueError("resize_mode должен быть от 0 до 3")
+    raw_w, raw_h = width, height
+    width = sanitize_llm_dimension(width)
+    height = sanitize_llm_dimension(height)
+    if (raw_w, raw_h) != (width, height):
+        logger.info(
+            "img2img: размеры LLM %sx%s → %sx%s",
+            raw_w,
+            raw_h,
+            width,
+            height,
+        )
 
-    current_seed = seed if seed != -1 else random.randint(0, 2**32 - 1)
-    init_b64 = base64.b64encode(init_image_bytes).decode("utf-8")
+    prepared = prepare_init_image(
+        init_image_bytes,
+        source_name=init_source_name,
+    )
+    out_w, out_h = resolve_output_dimensions(
+        width,
+        height,
+        prepared.width,
+        prepared.height,
+    )
 
-    payload = {
-        "prompt": prompt,
-        "negative_prompt": negative_prompt or settings.sd_negative_prompt,
-        "steps": steps,
-        "width": width,
-        "height": height,
-        "cfg_scale": cfg_scale,
-        "sampler_name": sampler_name or settings.sd_sampler,
-        "scheduler": scheduler or settings.sd_schedule_type,
-        "seed": current_seed,
-        "n_iter": 1,
-        "tiling": tiling,
-        "restore_faces": restore_faces,
-        "init_images": [init_b64],
-        "resize_mode": resize_mode,
-        "denoising_strength": denoising_strength,
-        "send_images": True,
-        "save_images": False,
-    }
+    req = Img2ImgRequest(
+        prompt=prompt,
+        init_image_bytes=prepared.png_bytes,
+        init_source_name=prepared.source_name,
+        negative_prompt=negative_prompt,
+        steps=steps,
+        width=out_w,
+        height=out_h,
+        cfg_scale=cfg_scale,
+        sampler_name=sampler_name,
+        scheduler=scheduler,
+        seed=seed,
+        denoising_strength=denoising_strength,
+        restore_faces=restore_faces,
+        tiling=tiling,
+        resize_mode=resize_mode,
+        description=description,
+    )
+    validate_img2img_request(req)
+    current_seed = pick_seed(seed)
+    init_b64 = encode_init_image_b64(prepared.png_bytes)
+    payload = build_img2img_payload(
+        req,
+        init_b64=init_b64,
+        width=out_w,
+        height=out_h,
+        seed=current_seed,
+    )
 
     sd_base = resolve_sd_webui_url(sd_webui_url)
     session = get_sd_session()
     t0 = time.monotonic()
+    url = f"{sd_base}/sdapi/v1/img2img"
+    logger.info(
+        "img2img: %dx%d denoise=%.2f resize_mode=%d init=%s prompt=%r",
+        out_w,
+        out_h,
+        denoising_strength,
+        resize_mode,
+        prepared.source_name,
+        prompt[:80],
+    )
     try:
-        resp = session.post(
-            f"{sd_base}/sdapi/v1/img2img",
-            json=payload,
-            timeout=settings.request_timeout,
-        )
+        resp = session.post(url, json=payload, timeout=settings.request_timeout)
         resp.raise_for_status()
     except requests.RequestException as exc:
-        logger.error("SD img2img ошибка: %s", exc)
-        raise
+        msg = sd_error_message(exc)
+        logger.error("SD img2img ошибка за %.1fs: %s (url=%s)", time.monotonic() - t0, msg, url)
+        raise RuntimeError(f"SD img2img: {msg}") from exc
 
     data = resp.json()
     images_b64 = data.get("images", [])
     if not images_b64:
+        logger.error(
+            "SD img2img: пустой images за %.1fs, keys=%s",
+            time.monotonic() - t0,
+            list(data.keys()),
+        )
         return "Ошибка: WebUI не вернул изображений."
 
-    parameters = data.get("parameters", {})
-    info_text = data.get("info", "")
-    if isinstance(parameters, str):
-        png_params = parameters
-    else:
-        png_params = json.dumps(parameters, ensure_ascii=False, indent=2)
+    png_params, info_text = format_generation_meta(data)
 
     results: list[dict[str, str | int]] = []
     for img_b64 in images_b64:
@@ -331,11 +360,10 @@ def img2img(
                 if png_params:
                     meta.add_text("parameters", png_params)
                 if info_text:
-                    meta.add_text("info", str(info_text))
+                    meta.add_text("info", info_text)
                 if description:
                     meta.add_text("Description", description)
-                if init_source_name:
-                    meta.add_text("Init image", init_source_name)
+                meta.add_text("Init image", prepared.source_name)
                 img.save(img_path, pnginfo=meta)
         except OSError as exc:
             logger.warning("Метаданные PNG для %s: %s", filename, exc)
@@ -352,8 +380,8 @@ def img2img(
     lines = [
         f"img2img завершён ({len(results)} изображений).",
         f"Prompt: {prompt}",
-        f"Исходник: {init_source_name}",
-        f"Denoising strength: {denoising_strength}",
+        f"Исходник: {prepared.source_name} ({prepared.width}×{prepared.height})",
+        f"Выход: {out_w}×{out_h}, denoising_strength: {denoising_strength}, resize_mode: {resize_mode}",
         "",
     ]
     for i, item in enumerate(results, 1):
@@ -363,7 +391,7 @@ def img2img(
             lines.append(f"  Thumbnail: {item['thumb_url']}")
         lines.append("")
 
-    lines.extend(["--- Параметры генерации ---", str(info_text or png_params)])
+    lines.extend(["--- Параметры генерации ---", info_text or png_params])
     logger.info("img2img готово за %.1fs", time.monotonic() - t0)
     return "\n".join(lines)
 
@@ -551,8 +579,8 @@ def register_sd_tools(mcp: FastMCP) -> None:
         init_image_url: str,
         negative_prompt: str = "",
         steps: int = 22,
-        width: int = 1024,
-        height: int = 1024,
+        width: int = 0,
+        height: int = 0,
         cfg_scale: float = 5.0,
         sampler_name: str = "Euler a",
         scheduler: str = "",
@@ -563,7 +591,7 @@ def register_sd_tools(mcp: FastMCP) -> None:
         resize_mode: int = 0,
         description: str = "",
     ) -> str:
-        """Доработать изображение (img2img). init_image_url — URL из чата или имя файла."""
+        """Доработать изображение (img2img). init_image_url — URL из чата; width/height 0 = размер исходника."""
         return img2img(
             prompt=prompt,
             init_image_url=init_image_url,
