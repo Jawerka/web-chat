@@ -28,11 +28,21 @@ class ConnectionManager:
         self._connections[conversation_id].add(websocket)
         logger.info("WS подключён: беседа %s", conversation_id)
 
-    def disconnect(self, conversation_id: uuid.UUID, websocket: WebSocket) -> None:
-        """Убрать WebSocket из пула."""
-        self._connections[conversation_id].discard(websocket)
-        if not self._connections[conversation_id]:
+    def disconnect(self, conversation_id: uuid.UUID, websocket: WebSocket) -> bool:
+        """
+        Убрать WebSocket из пула.
+
+        Returns:
+            True, если к беседе больше нет активных подключений.
+        """
+        conns = self._connections.get(conversation_id)
+        if not conns:
+            return True
+        conns.discard(websocket)
+        if not conns:
             del self._connections[conversation_id]
+            return True
+        return False
 
     async def send_json(
         self,

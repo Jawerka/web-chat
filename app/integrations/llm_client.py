@@ -15,6 +15,7 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from app.config import settings
+from app.integrations.runtime_config import resolve_llm_base_url
 from app.integrations.tool_definitions import TOOL_DEFINITIONS
 
 logger = logging.getLogger(__name__)
@@ -36,16 +37,24 @@ class LLMCompletion:
 class LLMClient:
     """Async OpenAI-клиент к локальному LLM."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, base_url: str | None = None) -> None:
+        self._base_url = resolve_llm_base_url(base_url)
         self._client = AsyncOpenAI(
-            base_url=settings.llm_base_url.rstrip("/"),
+            base_url=self._base_url,
             api_key=settings.llm_api_key or "not-needed",
             timeout=settings.llm_timeout_sec,
         )
         self._model: str | None = settings.llm_model or None
 
-    async def resolve_model(self) -> str:
-        """Вернуть имя модели: из настроек или первую из GET /v1/models."""
+    async def resolve_model(self, override: str | None = None) -> str:
+        """
+        Вернуть имя модели: override, из настроек или первая из GET /v1/models.
+
+        Args:
+            override: Явная модель от клиента (пустая строка игнорируется).
+        """
+        if override and override.strip():
+            return override.strip()
         if self._model:
             return self._model
         try:
@@ -80,11 +89,63 @@ class LLMClient:
             finish_reason=choice.finish_reason,
         )
 
+    async def complete_plain_text(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        max_tokens: int = 64,
+        temperature: float = 0.3,
+        disable_thinking: bool = False,
+        allow_reasoning_fallback: bool = True,
+    ) -> str:
+        """
+        Короткий текстовый ответ без tools (заголовки, метки и т.п.).
+
+        disable_thinking — для Qwen/vLLM: chat_template_kwargs.enable_thinking=false.
+
+        Raises:
+            LLMError: Ошибка API или сети.
+        """
+        model_name = await self.resolve_model(model)
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if disable_thinking:
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        try:
+            response = await self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            raise LLMError(f"Ошибка LLM: {exc}") from exc
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if content:
+            return content
+        if not allow_reasoning_fallback:
+            return ""
+        reasoning = getattr(choice.message, "reasoning_content", None)
+        if isinstance(reasoning, str) and reasoning.strip():
+            logger.debug(
+                "complete_plain_text: пустой content, finish_reason=%s — пробуем reasoning_content",
+                choice.finish_reason,
+            )
+            for line in reversed(reasoning.strip().splitlines()):
+                line = line.strip().strip('"\'«»“”')
+                if line and len(line) <= 200:
+                    return line
+        return ""
+
     async def complete(
         self,
         messages: list[dict[str, Any]],
         *,
         tools: list[dict] | None = None,
+        model: str | None = None,
     ) -> LLMCompletion:
         """
         Один запрос chat.completions без стриминга.
@@ -96,10 +157,10 @@ class LLMClient:
         Raises:
             LLMError: Ошибка API или сети.
         """
-        model = await self.resolve_model()
+        model_name = await self.resolve_model(model)
         try:
             response = await self._client.chat.completions.create(
-                model=model,
+                model=model_name,
                 messages=messages,
                 tools=tools if tools is not None else TOOL_DEFINITIONS,
                 tool_choice="auto",
@@ -115,16 +176,17 @@ class LLMClient:
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
         cancel_event: asyncio.Event | None = None,
         tools: list[dict] | None = None,
+        model: str | None = None,
     ) -> LLMCompletion:
         """
         Стриминг с накоплением content и tool_calls.
 
         Вызывает on_text_delta для каждого фрагмента текста.
         """
-        model = await self.resolve_model()
+        model_name = await self.resolve_model(model)
         try:
             stream = await self._client.chat.completions.create(
-                model=model,
+                model=model_name,
                 messages=messages,
                 tools=tools if tools is not None else TOOL_DEFINITIONS,
                 tool_choice="auto",
@@ -182,6 +244,7 @@ class LLMClient:
         messages: list[dict[str, Any]],
         *,
         tools: list[dict] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         """
         Стриминг chat.completions (для WebSocket на этапе 7).
@@ -189,10 +252,10 @@ class LLMClient:
         Yields:
             Чанки ответа OpenAI.
         """
-        model = await self.resolve_model()
+        model_name = await self.resolve_model(model)
         try:
             stream = await self._client.chat.completions.create(
-                model=model,
+                model=model_name,
                 messages=messages,
                 tools=tools if tools is not None else TOOL_DEFINITIONS,
                 tool_choice="auto",

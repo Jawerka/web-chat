@@ -10,12 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ConversationCreate, ConversationOut, ConversationUpdate
+from app.constants import DEFAULT_CONVERSATION_TITLE
 from app.db.repositories import ConversationRepository, PresetRepository
 from app.db.session import get_db
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
-
-DEFAULT_CONVERSATION_TITLE = "Новая беседа"
 
 
 @router.get("", response_model=list[ConversationOut])

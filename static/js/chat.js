@@ -6,6 +6,9 @@
 /** Зона у низа чата: внутри — «прилипание» к автоскроллу. */
 const SCROLL_STICKY_PX = 100;
 
+const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
+const PRESET_LAST_EDIT_STORAGE_KEY = 'webchat_preset_last_edit_id';
+
 const MESSAGE_STATUS_HTML = `
   <div class="message-status" role="status">
     <div class="status-indicator status-indicator--inline" aria-hidden="true">
@@ -81,6 +84,8 @@ function imageUrlsFromMessage(m) {
 }
 
 const MSG_ICONS = {
+  copy: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>',
   edit: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
   regen: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
   delete: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
@@ -148,15 +153,17 @@ class ChatSocket {
     this._reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
-  sendUserMessage(text, attachmentIds) {
+  sendUserMessage(text, attachmentIds, integration) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Нет соединения с сервером');
     }
-    this.ws.send(JSON.stringify({
+    const payload = {
       type: 'user_message',
       text,
       attachment_ids: attachmentIds,
-    }));
+      ...integration,
+    };
+    this.ws.send(JSON.stringify(payload));
   }
 
   cancel() {
@@ -165,11 +172,15 @@ class ChatSocket {
     }
   }
 
-  sendRegenerate(messageId) {
+  sendRegenerate(messageId, integration = {}) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Нет соединения с сервером');
     }
-    this.ws.send(JSON.stringify({ type: 'regenerate', message_id: messageId }));
+    this.ws.send(JSON.stringify({
+      type: 'regenerate',
+      message_id: messageId,
+      ...integration,
+    }));
   }
 
   _dispatch(msg) {
@@ -181,7 +192,7 @@ class ChatSocket {
       case 'image': h.onImages?.(msg.urls || []); break;
       case 'tool_start': h.onToolStart?.(msg.name, msg.arguments); break;
       case 'tool_done': h.onToolDone?.(msg.name, msg.summary); break;
-      case 'done': h.onDone?.(msg.assistant_message_id); break;
+      case 'done': h.onDone?.(msg); break;
       case 'error': h.onWsError?.(msg.message, msg.code); break;
       default: break;
     }
@@ -214,6 +225,13 @@ class ChatApp {
     this._lightboxUrls = [];
     this._lightboxIndex = 0;
     this._lightboxTouchStart = null;
+    this._serverLlmModel = '';
+    this._serverLlmSource = 'auto';
+    this._settingsSaveStatusTimer = null;
+    this._settingsSaveBtnTimer = null;
+    this._presetPromptSaveBtnTimer = null;
+    this._presetDraftDebounceTimer = null;
+    this._editingPresetId = null;
     this.log = window.appLog;
 
     this.$ = {
@@ -221,15 +239,24 @@ class ChatApp {
       convList: document.getElementById('conv-list'),
       convEmpty: document.getElementById('conv-empty'),
       convSidebar: document.getElementById('conv-sidebar'),
-      sidebarSettings: document.getElementById('sidebar-settings'),
-      sidebarChatTitle: document.getElementById('sidebar-chat-title'),
+      settingsPanel: document.getElementById('settings-panel'),
+      logsPanel: document.getElementById('logs-panel'),
+      settingsChatTitle: document.getElementById('settings-chat-title'),
+      convPresetSelect: document.getElementById('conv-preset-select'),
       presetSelect: document.getElementById('preset-select'),
+      presetSystemPrompt: document.getElementById('preset-system-prompt'),
+      presetPromptSaveBtn: document.getElementById('preset-prompt-save-btn'),
+      presetSetDefaultBtn: document.getElementById('preset-set-default-btn'),
+      settingsSaveBtn: document.getElementById('settings-save-btn'),
+      settingsSaveStatus: document.getElementById('settings-save-status'),
+      settingsBtn: document.getElementById('settings-btn'),
+      logsBtn: document.getElementById('logs-btn'),
       connStatus: document.getElementById('conn-status'),
       connStatusLabel: document.getElementById('conn-status-label'),
       placeholder: document.getElementById('placeholder'),
       chatHistory: document.getElementById('chat-history'),
       chatMessages: document.getElementById('chat-messages'),
-      chatFooter: document.getElementById('chat-footer'),
+      chatComposer: document.getElementById('chat-composer'),
       userInput: document.getElementById('user-input'),
       sendBtn: document.getElementById('send-btn'),
       cancelBtn: document.getElementById('cancel-btn'),
@@ -247,7 +274,14 @@ class ChatApp {
       lightboxNext: document.getElementById('lightbox-next'),
       lightboxCounter: document.getElementById('lightbox-counter'),
       themeToggle: document.getElementById('theme-toggle'),
-      logsModal: document.getElementById('logs-modal'),
+      themeToggleLabel: document.getElementById('theme-toggle-label'),
+      llmBaseUrlInput: document.getElementById('llm-base-url-input'),
+      llmModelInput: document.getElementById('llm-model-input'),
+      sdWebuiUrlInput: document.getElementById('sd-webui-url-input'),
+      useServerModel: document.getElementById('use-server-model'),
+      fontSizeInput: document.getElementById('font-size'),
+      fontSizeDecrease: document.getElementById('font-size-decrease'),
+      fontSizeIncrease: document.getElementById('font-size-increase'),
       logsOutput: document.getElementById('logs-output'),
       logsCount: document.getElementById('logs-count'),
     };
@@ -255,6 +289,10 @@ class ChatApp {
     this.log?.info('app', 'Интерфейс загружен');
     this._bindEvents();
     this._loadTheme();
+    this._updateThemeToggleLabel();
+    this._loadFontSize();
+    this._loadModelSettings();
+    this.showPanel('main');
     this.init();
   }
 
@@ -262,7 +300,9 @@ class ChatApp {
     try {
       const cfg = await this.api('/api/config');
       this.config = { ...this.config, ...cfg };
+      this._loadIntegrationUrlFields();
     } catch { /* optional */ }
+    this.loadLlmModelInfo().catch(() => {});
 
     await Promise.all([this.loadPresets(), this.loadConversations()]);
     const saved = localStorage.getItem('webchat_conv_id');
@@ -274,22 +314,28 @@ class ChatApp {
   _bindEvents() {
     document.getElementById('btn-new-chat').addEventListener('click', () => this.openNewConvModal());
     document.getElementById('placeholder-new-chat').addEventListener('click', () => this.openNewConvModal());
-    document.getElementById('new-conv-cancel').addEventListener('click', () => this.$.newConvModal.close());
+    const closeNewConvModal = () => this.$.newConvModal.close();
+    document.getElementById('new-conv-cancel')?.addEventListener('click', closeNewConvModal);
+    document.getElementById('new-conv-close')?.addEventListener('click', closeNewConvModal);
     document.getElementById('new-conv-form').addEventListener('submit', (e) => {
       e.preventDefault();
       this.createConversation();
     });
 
     document.getElementById('menu-btn').addEventListener('click', () => this.openSidebar());
-    document.getElementById('sidebar-close').addEventListener('click', () => this.closeSidebar());
     this.$.backdrop.addEventListener('click', () => this.closeSidebar());
 
-    this.$.themeToggle.addEventListener('click', () => this.toggleTheme());
-    document.getElementById('btn-open-logs').addEventListener('click', () => this.openLogsModal());
-    document.getElementById('logs-modal-close').addEventListener('click', () => this.closeLogsModal());
-    document.getElementById('logs-copy-all').addEventListener('click', () => this.copyAllLogs());
-    document.getElementById('logs-clear-all').addEventListener('click', () => this.clearAllLogs());
-    this.$.logsModal.addEventListener('close', () => this._stopLogsLiveUpdate());
+    this.$.settingsBtn?.addEventListener('click', () => this.showPanel('settings'));
+    this.$.logsBtn?.addEventListener('click', () => this.openLogsPanel());
+    document.getElementById('settings-close')?.addEventListener('click', () => this.showPanel('main'));
+    document.getElementById('logs-close')?.addEventListener('click', () => this.closeLogsPanel());
+    this.$.themeToggle?.addEventListener('click', () => this.toggleTheme());
+    this.$.llmModelInput?.addEventListener('change', () => this._saveModelOverride());
+    this.$.fontSizeDecrease?.addEventListener('click', () => this.changeFontSize(-1));
+    this.$.fontSizeIncrease?.addEventListener('click', () => this.changeFontSize(1));
+    this.$.fontSizeInput?.addEventListener('change', () => this.applyFontSize());
+    document.getElementById('logs-copy-all')?.addEventListener('click', () => this.copyAllLogs());
+    document.getElementById('logs-clear-all')?.addEventListener('click', () => this.clearAllLogs());
     document.getElementById('error-banner-close').addEventListener('click', () => this.hideError());
     this.$.sendBtn.addEventListener('click', () => this.sendMessage());
     this.$.cancelBtn.addEventListener('click', () => this.cancelGeneration());
@@ -302,7 +348,24 @@ class ChatApp {
     });
     this.$.userInput.addEventListener('input', () => this.autoResizeInput());
     this.$.fileInput.addEventListener('change', (e) => this.uploadFiles(e.target.files));
-    this.$.presetSelect.addEventListener('change', () => this.changePreset());
+    this.$.presetSelect?.addEventListener('change', () => this.onPresetSelectChange());
+    this.$.presetPromptSaveBtn?.addEventListener('click', () => this.savePresetPrompt());
+    this.$.presetSetDefaultBtn?.addEventListener('click', () => this.setDefaultPreset());
+    this.$.presetSystemPrompt?.addEventListener('input', () => this._onPresetPromptInput());
+    window.addEventListener('beforeunload', (e) => {
+      if (this._hasUnsyncedPresetDrafts()) {
+        this._flushPresetDraftsToStorage();
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+    this.$.settingsSaveBtn?.addEventListener('click', () => this.saveSettings());
+    this.$.settingsChatTitle?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.saveSettings();
+      }
+    });
     this.$.chatHistory.addEventListener('scroll', () => this._onChatScroll());
     this.$.scrollBtn.addEventListener('click', () => this.scrollToBottom(true));
 
@@ -340,8 +403,9 @@ class ChatApp {
         }
       }
       if (e.key === 'Escape') {
-        if (this.$.logsModal.open) {
-          this.closeLogsModal();
+        if (this._isLogsPanelOpen()
+          || !this.$.settingsPanel?.classList.contains('hidden')) {
+          this.showPanel('main');
           return;
         }
         if (this.editingMessageId) {
@@ -378,6 +442,30 @@ class ChatApp {
       this._cancelPendingDelete();
     };
     document.addEventListener('click', this._onDocumentClickCancelDelete);
+  }
+
+  /**
+   * Переключение панелей чата (как prompt-extension).
+   * @param {'main'|'settings'|'logs'} panelName
+   */
+  showPanel(panelName) {
+    this.$.settingsPanel?.classList.add('hidden');
+    this.$.logsPanel?.classList.add('hidden');
+    if (panelName === 'settings') {
+      this.$.settingsPanel?.classList.remove('hidden');
+      this.syncPresetPromptField();
+      this._hideSettingsSaveStatus();
+      this.closeSidebar();
+    } else if (panelName === 'logs') {
+      this.$.logsPanel?.classList.remove('hidden');
+      this.closeSidebar();
+    } else {
+      this._stopLogsLiveUpdate();
+    }
+  }
+
+  _isLogsPanelOpen() {
+    return this.$.logsPanel && !this.$.logsPanel.classList.contains('hidden');
   }
 
   openSidebar() {
@@ -436,13 +524,288 @@ class ChatApp {
     return res.json();
   }
 
+  _readPresetDrafts() {
+    try {
+      const raw = localStorage.getItem(PRESET_DRAFTS_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  _writePresetDrafts(drafts) {
+    try {
+      localStorage.setItem(PRESET_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+    } catch (err) {
+      this.log?.warn('settings', `Не удалось записать черновики пресетов: ${err.message}`);
+    }
+  }
+
+  _flushPresetDraftsToStorage() {
+    const presetId = this._editingPresetId || this.$.presetSelect?.value;
+    if (presetId && this.$.presetSystemPrompt) {
+      this._writePresetDraft(presetId, this.$.presetSystemPrompt.value, false);
+    }
+  }
+
+  _writePresetDraft(presetId, text, synced = false) {
+    if (!presetId) return;
+    const drafts = this._readPresetDrafts();
+    drafts[presetId] = { text, synced, updatedAt: Date.now() };
+    this._writePresetDrafts(drafts);
+  }
+
+  _markPresetDraftSynced(presetId, text) {
+    this._writePresetDraft(presetId, text, true);
+  }
+
+  _hasUnsyncedPresetDrafts() {
+    const drafts = this._readPresetDrafts();
+    return Object.values(drafts).some((d) => d && d.synced === false);
+  }
+
+  _getPresetPromptText(presetId) {
+    const preset = this.presets.find((p) => p.id === presetId);
+    const serverText = preset?.system_prompt ?? '';
+    const draft = this._readPresetDrafts()[presetId];
+    if (draft && draft.synced === false && typeof draft.text === 'string') {
+      return draft.text;
+    }
+    return serverText;
+  }
+
+  _presetPromptDiffers(presetId, text) {
+    const preset = this.presets.find((p) => p.id === presetId);
+    return (preset?.system_prompt ?? '') !== text;
+  }
+
+  _isPresetPromptDirty(presetId = this._editingPresetId || this.$.presetSelect?.value) {
+    if (!presetId || !this.$.presetSystemPrompt) return false;
+    return this._presetPromptDiffers(presetId, this.$.presetSystemPrompt.value);
+  }
+
+  _onPresetPromptInput() {
+    const presetId = this._editingPresetId || this.$.presetSelect?.value;
+    if (!presetId) return;
+    clearTimeout(this._presetDraftDebounceTimer);
+    this._presetDraftDebounceTimer = setTimeout(() => {
+      this._writePresetDraft(presetId, this.$.presetSystemPrompt.value, false);
+    }, 280);
+  }
+
   async loadPresets() {
     this.presets = await this.api('/api/presets');
-    this.$.newConvPreset.innerHTML = this.presets
+    this._mergeUnsyncedPresetDrafts();
+    await this._syncPendingPresetDrafts();
+    const optionsHtml = this.presets
       .map((p) => `<option value="${p.id}">${this.escape(p.name)}</option>`)
       .join('');
-    const def = this.presets.find((p) => p.is_default);
-    if (def) this.$.newConvPreset.value = def.id;
+    if (this.$.newConvPreset) {
+      this.$.newConvPreset.innerHTML = optionsHtml;
+      const def = this.presets.find((p) => p.is_default);
+      if (def) this.$.newConvPreset.value = def.id;
+    }
+    this.populateGlobalPresetSelect();
+    this.populateConvPresetSelect(this.currentConv?.preset_id);
+  }
+
+  _mergeUnsyncedPresetDrafts() {
+    const drafts = this._readPresetDrafts();
+    for (const preset of this.presets) {
+      const draft = drafts[preset.id];
+      if (draft && draft.synced === false && typeof draft.text === 'string') {
+        preset.system_prompt = draft.text;
+      }
+    }
+  }
+
+  async _syncPendingPresetDrafts() {
+    const drafts = this._readPresetDrafts();
+    for (const preset of this.presets) {
+      const draft = drafts[preset.id];
+      if (!draft || draft.synced !== false || typeof draft.text !== 'string') continue;
+      if (!this._presetPromptDiffers(preset.id, draft.text)) {
+        this._markPresetDraftSynced(preset.id, draft.text);
+        continue;
+      }
+      try {
+        await this.savePresetPromptForId(preset.id, draft.text, { silent: true });
+      } catch {
+        /* черновик остаётся в localStorage */
+      }
+    }
+  }
+
+  populateGlobalPresetSelect() {
+    if (!this.$.presetSelect || this.presets.length === 0) return;
+    const stored = localStorage.getItem(PRESET_LAST_EDIT_STORAGE_KEY);
+    const fallback = this.presets.find((p) => p.is_default)?.id ?? this.presets[0].id;
+    const activeId = (stored && this.presets.some((p) => p.id === stored))
+      ? stored
+      : fallback;
+    this.$.presetSelect.innerHTML = this.presets
+      .map((p) => `<option value="${p.id}"${p.id === activeId ? ' selected' : ''}>${this.escape(p.name)}</option>`)
+      .join('');
+    this.$.presetSelect.disabled = false;
+    if (this.$.presetSystemPrompt) this.$.presetSystemPrompt.disabled = false;
+    this._editingPresetId = activeId;
+    localStorage.setItem(PRESET_LAST_EDIT_STORAGE_KEY, activeId);
+    this.syncPresetPromptField();
+    this._updatePresetDefaultButton();
+  }
+
+  populateConvPresetSelect(selectedId) {
+    if (!this.$.convPresetSelect || this.presets.length === 0) return;
+    const fallback = this.presets.find((p) => p.is_default)?.id ?? this.presets[0].id;
+    const activeId = selectedId ?? fallback;
+    this.$.convPresetSelect.innerHTML = this.presets
+      .map((p) => `<option value="${p.id}"${p.id === activeId ? ' selected' : ''}>${this.escape(p.name)}</option>`)
+      .join('');
+    this.$.convPresetSelect.disabled = !this.currentConvId;
+  }
+
+  syncPresetPromptField() {
+    if (!this.$.presetSelect || !this.$.presetSystemPrompt) return;
+    const presetId = this.$.presetSelect.value;
+    if (!presetId) {
+      this.$.presetSystemPrompt.value = '';
+      this._editingPresetId = null;
+      return;
+    }
+    this._editingPresetId = presetId;
+    this.$.presetSystemPrompt.value = this._getPresetPromptText(presetId);
+    this._resetPresetPromptSaveBtn();
+    this._updatePresetDefaultButton();
+  }
+
+  _updatePresetDefaultButton() {
+    const btn = this.$.presetSetDefaultBtn;
+    const presetId = this.$.presetSelect?.value;
+    if (!btn || !presetId) {
+      if (btn) btn.disabled = true;
+      return;
+    }
+    const preset = this.presets.find((p) => p.id === presetId);
+    btn.disabled = Boolean(preset?.is_default);
+    btn.textContent = preset?.is_default
+      ? 'Пресет по умолчанию'
+      : 'Сделать пресетом по умолчанию';
+  }
+
+  async onPresetSelectChange() {
+    const oldId = this._editingPresetId;
+    const newId = this.$.presetSelect?.value;
+    if (oldId && oldId !== newId && this.$.presetSystemPrompt) {
+      const text = this.$.presetSystemPrompt.value;
+      this._writePresetDraft(oldId, text, false);
+      if (this._presetPromptDiffers(oldId, text)) {
+        try {
+          await this.savePresetPromptForId(oldId, text, { silent: true });
+        } catch (err) {
+          this._showSettingsSaveStatus('error', err.message || 'Не удалось сохранить пресет');
+          this.$.presetSelect.value = oldId;
+          return;
+        }
+      }
+    }
+    if (newId) localStorage.setItem(PRESET_LAST_EDIT_STORAGE_KEY, newId);
+    this._editingPresetId = newId;
+    this.syncPresetPromptField();
+    this._hideSettingsSaveStatus();
+  }
+
+  _resetPresetPromptSaveBtn() {
+    const btn = this.$.presetPromptSaveBtn;
+    if (!btn) return;
+    clearTimeout(this._presetPromptSaveBtnTimer);
+    btn.disabled = false;
+    btn.setAttribute('aria-label', 'Сохранить промпт на сервер');
+    btn.classList.remove('is-success', 'is-error', 'is-saving');
+  }
+
+  async savePresetPrompt(options = {}) {
+    const presetId = this.$.presetSelect?.value;
+    if (!presetId || !this.$.presetSystemPrompt) return false;
+    return this.savePresetPromptForId(
+      presetId,
+      this.$.presetSystemPrompt.value,
+      options,
+    );
+  }
+
+  async savePresetPromptIfDirty(options = {}) {
+    if (!this._isPresetPromptDirty()) return true;
+    return this.savePresetPrompt(options);
+  }
+
+  async savePresetPromptForId(presetId, text, { silent = false } = {}) {
+    const btn = this.$.presetPromptSaveBtn;
+    if (!presetId) return false;
+
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.remove('is-success', 'is-error');
+      btn.classList.add('is-saving');
+      btn.setAttribute('aria-label', 'Сохранение…');
+    }
+
+    try {
+      const updated = await this.api(`/api/presets/${presetId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system_prompt: text }),
+      });
+      const idx = this.presets.findIndex((p) => p.id === presetId);
+      if (idx >= 0) this.presets[idx] = updated;
+      this._markPresetDraftSynced(presetId, text);
+      if (btn) {
+        btn.classList.remove('is-saving');
+        btn.classList.add('is-success');
+        btn.setAttribute('aria-label', 'Сохранено');
+      }
+      this.log?.info('settings', `Глобальный промпт пресета ${presetId} сохранён`);
+      return true;
+    } catch (err) {
+      this._writePresetDraft(presetId, text, false);
+      if (btn) {
+        btn.classList.remove('is-saving');
+        btn.classList.add('is-error');
+        btn.setAttribute('aria-label', 'Ошибка сохранения');
+      }
+      if (!silent) {
+        this._showSettingsSaveStatus('error', err.message || 'Не удалось сохранить промпт');
+      }
+      throw err;
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        clearTimeout(this._presetPromptSaveBtnTimer);
+        this._presetPromptSaveBtnTimer = setTimeout(() => {
+          btn.classList.remove('is-success', 'is-error', 'is-saving');
+          btn.setAttribute('aria-label', 'Сохранить промпт на сервер');
+        }, 2200);
+      }
+    }
+  }
+
+  async setDefaultPreset() {
+    const presetId = this.$.presetSelect?.value;
+    const btn = this.$.presetSetDefaultBtn;
+    if (!presetId || !btn) return;
+    btn.disabled = true;
+    try {
+      await this.savePresetPromptIfDirty({ silent: true });
+      await this.api(`/api/presets/${presetId}/set-default`, { method: 'POST' });
+      await this.loadPresets();
+      this.$.presetSelect.value = presetId;
+      this._editingPresetId = presetId;
+      this.syncPresetPromptField();
+      this.log?.info('settings', `Пресет ${presetId} — по умолчанию`);
+    } catch (err) {
+      this._showSettingsSaveStatus('error', err.message || 'Не удалось обновить пресет');
+    } finally {
+      this._updatePresetDefaultButton();
+    }
   }
 
   async loadConversations() {
@@ -454,9 +817,9 @@ class ChatApp {
     this._cancelPendingDelete();
     const empty = !this.conversations.length;
     this.$.convEmpty.classList.toggle('hidden', !empty);
-    this.$.convList.classList.toggle('hidden', empty);
 
-    this.$.convList.innerHTML = this.conversations
+    const newChatRow = this.$.convList.querySelector('.conv-new-item');
+    const convItemsHtml = this.conversations
       .map((c) => {
         const active = c.id === this.currentConvId ? ' active' : '';
         const date = new Date(c.updated_at).toLocaleString('ru-RU', {
@@ -478,6 +841,12 @@ class ChatApp {
         </li>`;
       })
       .join('');
+
+    this.$.convList.innerHTML = '';
+    if (newChatRow) {
+      this.$.convList.appendChild(newChatRow);
+    }
+    this.$.convList.insertAdjacentHTML('beforeend', convItemsHtml);
 
     this.$.convList.querySelectorAll('.conv-item').forEach((el) => {
       el.addEventListener('click', (e) => {
@@ -538,12 +907,12 @@ class ChatApp {
     this.currentConvId = null;
     this.currentConv = null;
     localStorage.removeItem('webchat_conv_id');
-    this.$.sidebarSettings.classList.add('hidden');
-    this.$.sidebarChatTitle.textContent = '—';
-    this.$.sidebarChatTitle.title = '';
+    this.showPanel('main');
+    this._setSettingsChatTitle(null);
+    this.populateConvPresetSelect();
     this.$.placeholder.classList.remove('hidden');
     this.$.chatHistory.classList.add('hidden');
-    this.$.chatFooter.classList.add('hidden');
+    this.$.chatComposer.classList.add('hidden');
     this.$.chatMessages.innerHTML = '';
     this.$.userInput.value = '';
     this.$.userInput.disabled = true;
@@ -574,7 +943,13 @@ class ChatApp {
   }
 
   async selectConversation(id) {
-    if (this.currentConvId === id && this.socket?.ws?.readyState === WebSocket.OPEN) return;
+    const rs = this.socket?.ws?.readyState;
+    if (
+      this.currentConvId === id
+      && (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
 
     this._cancelPendingDelete();
     this.disconnectSocket();
@@ -585,20 +960,16 @@ class ChatApp {
     this.$.loadingOverlay.classList.remove('hidden');
     try {
       this.currentConv = await this.api(`/api/conversations/${id}`);
-      const preset = this.presets.find((p) => p.id === this.currentConv.preset_id);
 
-    this.$.sidebarChatTitle.textContent = this.currentConv.title;
-    this.$.sidebarChatTitle.title = this.currentConv.title;
-    this.$.sidebarSettings.classList.remove('hidden');
-    this.$.presetSelect.innerHTML = this.presets
-        .map((p) => `<option value="${p.id}"${p.id === this.currentConv.preset_id ? ' selected' : ''}>${this.escape(p.name)}</option>`)
-        .join('');
+      this._setSettingsChatTitle(this.currentConv.title);
+      this.populateConvPresetSelect(this.currentConv.preset_id);
 
       this.$.placeholder.classList.add('hidden');
       this.$.chatHistory.classList.remove('hidden');
-      this.$.chatFooter.classList.remove('hidden');
+      this.$.chatComposer.classList.remove('hidden');
       this.$.userInput.disabled = false;
       this.$.sendBtn.disabled = false;
+      this.autoResizeInput();
 
     await this.loadMessages();
     this._scrollStuckToBottom = true;
@@ -628,6 +999,9 @@ class ChatApp {
   }
 
   connectSocket() {
+    if (this.socket) {
+      this.disconnectSocket();
+    }
     this.setConnStatus('connecting');
     this.log?.info('ws', `Подключение к беседе ${this.currentConvId}`);
     this.socket = new ChatSocket(this.currentConvId, {
@@ -650,7 +1024,7 @@ class ChatApp {
       onToolStart: (name) => this.onToolStart(name),
       onToolDone: () => this.onToolDone(),
       onAck: (msg) => this.onAck(msg),
-      onDone: (msg) => this.onTurnDone(msg.assistant_message_id),
+      onDone: (msg) => this.onTurnDone(msg),
       onWsError: (message, code) => this.onWsError(message, code),
     });
     this.socket.connect();
@@ -683,7 +1057,7 @@ class ChatApp {
     this.startStreaming();
 
     try {
-      this.socket.sendUserMessage(text, ids);
+      this.socket.sendUserMessage(text, ids, this.getWsIntegrationPayload());
     } catch (err) {
       this.showError(err.message);
       this.endStreaming();
@@ -809,6 +1183,9 @@ class ChatApp {
   onToolStart(name) {
     const labels = {
       generate_image: 'Генерация изображения…',
+      img2img: 'Доработка изображения…',
+      upscale_images: 'Увеличение разрешения…',
+      get_gallery: 'Загрузка галереи…',
       extract_text: 'Извлечение текста из документа…',
     };
     this.showProgress(labels[name] || `Выполняется: ${name}…`);
@@ -827,7 +1204,9 @@ class ChatApp {
     }
   }
 
-  onTurnDone(assistantMessageId) {
+  onTurnDone(msg) {
+    const assistantMessageId = msg?.assistant_message_id;
+    const conversationTitle = msg?.conversation_title;
     this.hideProgress();
     if (this.streamRow && assistantMessageId) {
       this.streamRow.dataset.messageId = assistantMessageId;
@@ -835,6 +1214,12 @@ class ChatApp {
     }
     this._regenerating = false;
     this.endStreaming();
+    if (conversationTitle && this.currentConv) {
+      this.currentConv.title = conversationTitle;
+      const conv = this.conversations.find((c) => c.id === this.currentConvId);
+      if (conv) conv.title = conversationTitle;
+      this._setSettingsChatTitle(conversationTitle);
+    }
     this.loadConversations();
   }
 
@@ -892,6 +1277,7 @@ class ChatApp {
     const bar = document.createElement('div');
     bar.className = 'message-actions';
     for (const a of [
+      { key: 'copy', title: 'Скопировать текст', icon: MSG_ICONS.copy },
       { key: 'edit', title: 'Редактировать', icon: MSG_ICONS.edit },
       { key: 'regenerate', title: 'Перегенерировать', icon: MSG_ICONS.regen },
       { key: 'delete', title: 'Удалить', icon: MSG_ICONS.delete, danger: true },
@@ -914,7 +1300,8 @@ class ChatApp {
       const btn = e.target.closest('[data-action]');
       if (!btn || !row.dataset.messageId) return;
       const id = row.dataset.messageId;
-      if (btn.dataset.action === 'delete') this.deleteMessage(id, role);
+      if (btn.dataset.action === 'copy') this.copyMessageText(id, role, btn);
+      else if (btn.dataset.action === 'delete') this.deleteMessage(id, role);
       else if (btn.dataset.action === 'edit') this.editMessage(id, role);
       else if (btn.dataset.action === 'regenerate') this.regenerateMessage(id);
     });
@@ -974,6 +1361,67 @@ class ChatApp {
     this._bindImageClicks(el);
     this.$.chatMessages.appendChild(this._wrapMessage('assistant', el, messageId));
     this.scrollToBottom();
+  }
+
+  _extractMessagePlainText(row, role) {
+    if (!row) return '';
+    if (role === 'user') {
+      return row.querySelector('.user-text')?.textContent?.trim() || '';
+    }
+    const bubble = row.querySelector('.message-bubble');
+    if (!bubble) return '';
+    const clone = bubble.cloneNode(true);
+    clone.querySelectorAll('img').forEach((img) => img.remove());
+    return clone.innerText.trim();
+  }
+
+  _flashCopySuccess(btn) {
+    if (!btn || btn.dataset.action !== 'copy') return;
+    clearTimeout(btn._copyFlashTimer);
+    const prev = {
+      html: btn.innerHTML,
+      title: btn.title,
+      label: btn.getAttribute('aria-label'),
+    };
+    btn.classList.add('is-copied');
+    btn.innerHTML = MSG_ICONS.check;
+    btn.title = 'Скопировано!';
+    btn.setAttribute('aria-label', 'Скопировано');
+    btn._copyFlashTimer = setTimeout(() => {
+      btn.classList.remove('is-copied');
+      btn.innerHTML = prev.html;
+      btn.title = prev.title;
+      if (prev.label) btn.setAttribute('aria-label', prev.label);
+      else btn.removeAttribute('aria-label');
+      btn._copyFlashTimer = null;
+    }, 1600);
+  }
+
+  async copyMessageText(messageId, role, copyBtn) {
+    const row = this._findRow(messageId);
+    const text = this._extractMessagePlainText(row, role);
+    if (!text) {
+      this.showError('Нет текста для копирования');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+      } finally {
+        ta.remove();
+      }
+    }
+    this._flashCopySuccess(copyBtn);
+    this.log?.info('msg', `Текст сообщения скопирован (${role})`);
   }
 
   async deleteMessage(messageId, role) {
@@ -1075,7 +1523,7 @@ class ChatApp {
     this._regenerating = true;
     this.startStreaming();
     try {
-      this.socket.sendRegenerate(messageId);
+      this.socket.sendRegenerate(messageId, this.getWsIntegrationPayload());
     } catch (err) {
       this.showError(err.message);
       this.endStreaming();
@@ -1161,15 +1609,109 @@ class ChatApp {
     this.$.attachmentStrip.classList.add('hidden');
   }
 
-  async changePreset() {
-    if (!this.currentConvId) return;
-    const presetId = this.$.presetSelect.value;
-    this.currentConv = await this.api(`/api/conversations/${this.currentConvId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preset_id: presetId }),
-    });
-    void this.presets.find((p) => p.id === presetId);
+  _setSettingsChatTitle(title) {
+    const el = this.$.settingsChatTitle;
+    if (!el) return;
+    if (!this.currentConvId) {
+      el.disabled = true;
+      el.value = '';
+      el.placeholder = 'Выберите или создайте беседу';
+      return;
+    }
+    el.disabled = false;
+    el.value = title ?? this.currentConv?.title ?? '';
+    el.placeholder = 'Название беседы';
+  }
+
+  _settingsChatTitleDraft() {
+    const raw = this.$.settingsChatTitle?.value?.trim() ?? '';
+    return raw || 'Новая беседа';
+  }
+
+  async saveSettings() {
+    if (!this.$.settingsSaveBtn) return;
+    const convPresetId = this.$.convPresetSelect?.value;
+
+    const btn = this.$.settingsSaveBtn;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.classList.remove('is-success');
+    btn.classList.add('is-saving');
+    btn.setAttribute('aria-label', 'Сохранение…');
+    this._hideSettingsSaveStatus();
+
+    try {
+      if (this.currentConvId) {
+        const patch = {};
+        const nextTitle = this._settingsChatTitleDraft();
+        if (this.currentConv && this.currentConv.title !== nextTitle) {
+          patch.title = nextTitle;
+        }
+        if (convPresetId && this.currentConv?.preset_id !== convPresetId) {
+          patch.preset_id = convPresetId;
+        }
+        if (Object.keys(patch).length > 0) {
+          this.currentConv = await this.api(`/api/conversations/${this.currentConvId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch),
+          });
+          this._setSettingsChatTitle(this.currentConv.title);
+          const conv = this.conversations.find((c) => c.id === this.currentConvId);
+          if (conv) conv.title = this.currentConv.title;
+          this.renderConvList();
+        }
+      }
+
+      await this.savePresetPromptIfDirty({ silent: true });
+
+      this.applyFontSize();
+      this._saveModelOverride();
+      this._saveIntegrationUrls();
+      await this.loadLlmModelInfo();
+      if (this.$.useServerModel) {
+        localStorage.setItem(
+          'webchat_use_server_model',
+          this.$.useServerModel.checked ? 'true' : 'false',
+        );
+      }
+
+      btn.classList.remove('is-saving');
+      btn.classList.add('is-success');
+      btn.setAttribute('aria-label', 'Сохранено');
+      this.log?.info('settings', 'Настройки сохранены');
+    } catch (err) {
+      btn.classList.remove('is-saving', 'is-success');
+      btn.setAttribute('aria-label', 'Сохранить настройки');
+      this._showSettingsSaveStatus('error', err.message || 'Не удалось сохранить');
+    } finally {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.classList.remove('is-saving');
+      clearTimeout(this._settingsSaveBtnTimer);
+      this._settingsSaveBtnTimer = setTimeout(() => {
+        if (!this.$.settingsSaveBtn) return;
+        this.$.settingsSaveBtn.classList.remove('is-success');
+        this.$.settingsSaveBtn.setAttribute('aria-label', 'Сохранить настройки');
+      }, 2200);
+    }
+  }
+
+  _hideSettingsSaveStatus() {
+    if (!this.$.settingsSaveStatus) return;
+    clearTimeout(this._settingsSaveStatusTimer);
+    this.$.settingsSaveStatus.textContent = '';
+    this.$.settingsSaveStatus.className = 'settings-save-status';
+  }
+
+  _showSettingsSaveStatus(kind, message) {
+    if (!this.$.settingsSaveStatus) return;
+    clearTimeout(this._settingsSaveStatusTimer);
+    this.$.settingsSaveStatus.textContent = message;
+    this.$.settingsSaveStatus.className = `settings-save-status is-${kind} is-visible`;
+    this._settingsSaveStatusTimer = setTimeout(() => {
+      this._hideSettingsSaveStatus();
+    }, 4000);
   }
 
   showError(msg, autoHideMs = 8000) {
@@ -1332,8 +1874,17 @@ class ChatApp {
 
   autoResizeInput() {
     const ta = this.$.userInput;
+    if (!ta) return;
+    const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    const padY = 18;
+    const minH = lineHeight + padY;
+    const maxH = lineHeight * 3 + padY;
+    ta.style.overflow = 'hidden';
     ta.style.height = 'auto';
-    ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`;
+    const contentH = ta.scrollHeight;
+    const next = Math.min(Math.max(contentH, minH), maxH);
+    ta.style.height = `${Math.ceil(next)}px`;
+    ta.scrollTop = Math.max(0, ta.scrollHeight - ta.clientHeight);
   }
 
   _loadTheme() {
@@ -1342,28 +1893,166 @@ class ChatApp {
     document.body.classList.toggle('dark-theme', dark);
   }
 
+  _updateThemeToggleLabel() {
+    if (!this.$.themeToggleLabel) return;
+    const dark = document.body.classList.contains('dark-theme');
+    this.$.themeToggleLabel.textContent = dark ? 'Тёмная тема' : 'Светлая тема';
+  }
+
+  _loadModelSettings() {
+    if (!this.$.useServerModel) return;
+    const stored = localStorage.getItem('webchat_use_server_model');
+    if (stored !== null) {
+      this.$.useServerModel.checked = stored !== 'false';
+    }
+    this.$.useServerModel.addEventListener('change', () => {
+      localStorage.setItem(
+        'webchat_use_server_model',
+        this.$.useServerModel.checked ? 'true' : 'false',
+      );
+      this._syncModelInputState();
+    });
+  }
+
+  _normalizeServiceUrl(raw, { stripV1 = false } = {}) {
+    const text = (raw || '').trim();
+    if (!text) return '';
+    let url = text.replace(/\/+$/, '');
+    if (stripV1) {
+      url = url.replace(/\/v1$/i, '');
+    }
+    return url;
+  }
+
+  _loadIntegrationUrlFields() {
+    const llmDefault = this.config?.llm_base_url || '';
+    const sdDefault = this.config?.sd_webui_url || '';
+    if (this.$.llmBaseUrlInput) {
+      this.$.llmBaseUrlInput.value = localStorage.getItem('webchat_llm_base_url')
+        || llmDefault;
+    }
+    if (this.$.sdWebuiUrlInput) {
+      this.$.sdWebuiUrlInput.value = localStorage.getItem('webchat_sd_webui_url')
+        || sdDefault;
+    }
+  }
+
+  _saveIntegrationUrls() {
+    const llm = this._normalizeServiceUrl(this.$.llmBaseUrlInput?.value);
+    const sd = this._normalizeServiceUrl(this.$.sdWebuiUrlInput?.value);
+    if (llm) {
+      localStorage.setItem('webchat_llm_base_url', llm);
+    } else {
+      localStorage.removeItem('webchat_llm_base_url');
+    }
+    if (sd) {
+      localStorage.setItem('webchat_sd_webui_url', sd);
+    } else {
+      localStorage.removeItem('webchat_sd_webui_url');
+    }
+  }
+
+  getWsIntegrationPayload() {
+    const payload = {};
+    const llmUrl = this._normalizeServiceUrl(this.$.llmBaseUrlInput?.value);
+    const sdUrl = this._normalizeServiceUrl(this.$.sdWebuiUrlInput?.value);
+    if (llmUrl) payload.llm_base_url = llmUrl;
+    if (sdUrl) payload.sd_webui_url = sdUrl;
+    const model = this.getActiveLlmModel();
+    if (model) payload.model = model;
+    return payload;
+  }
+
+  async loadLlmModelInfo() {
+    try {
+      const base = this._normalizeServiceUrl(this.$.llmBaseUrlInput?.value);
+      const qs = base ? `?llm_base_url=${encodeURIComponent(base)}` : '';
+      const info = await this.api(`/api/config/llm-model${qs}`);
+      this._serverLlmModel = info.resolved || '';
+      this._serverLlmSource = info.source || 'auto';
+      this._syncModelInputState();
+    } catch {
+      if (this.$.llmModelInput) {
+        this.$.llmModelInput.placeholder = 'Недоступно';
+      }
+    }
+  }
+
+  _syncModelInputState() {
+    if (!this.$.llmModelInput || !this.$.useServerModel) return;
+    const useServer = this.$.useServerModel.checked;
+    this.$.llmModelInput.readOnly = useServer;
+    if (useServer) {
+      this.$.llmModelInput.value = this._serverLlmModel;
+      this.$.llmModelInput.title = this._serverLlmSource === 'config'
+        ? 'Из конфигурации сервера'
+        : 'Автовыбор с указанного API';
+    } else {
+      const saved = localStorage.getItem('webchat_llm_model_override') || '';
+      this.$.llmModelInput.value = saved;
+      this.$.llmModelInput.title = 'Переопределение для запросов из браузера';
+    }
+  }
+
+  _saveModelOverride() {
+    if (!this.$.llmModelInput || this.$.useServerModel?.checked) return;
+    localStorage.setItem('webchat_llm_model_override', this.$.llmModelInput.value.trim());
+  }
+
+  getActiveLlmModel() {
+    if (!this.$.useServerModel || this.$.useServerModel.checked) return undefined;
+    const v = (this.$.llmModelInput?.value || '').trim();
+    return v || undefined;
+  }
+
+  _loadFontSize() {
+    const saved = parseInt(localStorage.getItem('webchat_font_size') || '', 10);
+    if (this.$.fontSizeInput && !Number.isNaN(saved)) {
+      this.$.fontSizeInput.value = String(saved);
+    }
+    this.applyFontSize();
+  }
+
+  applyFontSize() {
+    if (!this.$.fontSizeInput) return;
+    const n = parseInt(this.$.fontSizeInput.value, 10) || 14;
+    const clamped = Math.max(8, Math.min(20, n));
+    this.$.fontSizeInput.value = String(clamped);
+    document.documentElement.style.setProperty('--font-size', `${clamped}px`);
+    localStorage.setItem('webchat_font_size', String(clamped));
+  }
+
+  changeFontSize(delta) {
+    if (!this.$.fontSizeInput) return;
+    const current = parseInt(this.$.fontSizeInput.value, 10) || 14;
+    this.$.fontSizeInput.value = String(current + delta);
+    this.applyFontSize();
+  }
+
   toggleTheme() {
     const dark = !document.body.classList.contains('dark-theme');
     document.body.classList.toggle('dark-theme', dark);
     localStorage.setItem('webchat_theme', dark ? 'dark' : 'light');
+    this._updateThemeToggleLabel();
   }
 
-  async openLogsModal() {
+  async openLogsPanel() {
     await this._fetchServerLogs();
     this._renderLogsView();
     this._stopLogsLiveUpdate();
     this._logsUnsub = this.log?.subscribe(() => {
-      if (this.$.logsModal.open) this._renderLogsView();
+      if (this._isLogsPanelOpen()) this._renderLogsView();
     }) || null;
-    this.$.logsModal.showModal();
+    this.showPanel('logs');
     requestAnimationFrame(() => {
-      this.$.logsOutput.scrollTop = this.$.logsOutput.scrollHeight;
+      if (this.$.logsOutput) {
+        this.$.logsOutput.scrollTop = this.$.logsOutput.scrollHeight;
+      }
     });
   }
 
-  closeLogsModal() {
-    this.$.logsModal.close();
-    this._stopLogsLiveUpdate();
+  closeLogsPanel() {
+    this.showPanel('main');
   }
 
   _stopLogsLiveUpdate() {
@@ -1408,7 +2097,7 @@ class ChatApp {
     try {
       await navigator.clipboard.writeText(text);
       this.log?.info('app', 'Журнал скопирован в буфер обмена');
-      if (this.$.logsModal.open) this._renderLogsView();
+      if (this._isLogsPanelOpen()) this._renderLogsView();
     } catch {
       this.$.logsOutput.focus();
       this.$.logsOutput.select();

@@ -30,6 +30,7 @@ from app.db.repositories import (
 from app.integrations.llm_client import LLMClient
 from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.services.attachment_service import AttachmentService
+from app.services.conversation_title_service import maybe_generate_conversation_title
 from app.services.message_builder import (
     build_user_content,
     finalize_assistant_text,
@@ -66,9 +67,12 @@ class AgentOrchestrator:
         self,
         llm: LLMClient | None = None,
         tool_executor: ToolExecutor | None = None,
+        *,
+        sd_webui_url: str | None = None,
     ) -> None:
         self._llm = llm or LLMClient()
         self._tools = tool_executor
+        self._sd_webui_url = sd_webui_url
 
     def _executor(
         self,
@@ -77,7 +81,11 @@ class AgentOrchestrator:
     ) -> ToolExecutor:
         if self._tools is not None:
             return self._tools
-        return ToolExecutor(session, conversation_id=conversation_id)
+        return ToolExecutor(
+            session,
+            conversation_id=conversation_id,
+            sd_webui_url=self._sd_webui_url,
+        )
 
     @staticmethod
     def _collect_tool_images(
@@ -146,8 +154,32 @@ class AgentOrchestrator:
         await conv_repo.touch(conversation)
         return message
 
+    async def _emit_turn_done(
+        self,
+        session: AsyncSession,
+        conversation_id: uuid.UUID,
+        assistant_message: Message,
+        emit: EventEmitter,
+        *,
+        llm_model: str | None = None,
+    ) -> None:
+        """Событие done + опционально автозаголовок беседы."""
+        new_title = await maybe_generate_conversation_title(
+            session,
+            conversation_id,
+            self._llm,
+            model=llm_model,
+        )
+        payload: dict[str, Any] = {
+            "assistant_message_id": str(assistant_message.id),
+        }
+        if new_title:
+            payload["conversation_title"] = new_title
+        await emit("done", payload)
+
     async def _complete_after_tool_limit(
         self,
+        session: AsyncSession,
         *,
         msg_repo: MessageRepository,
         conv_repo: ConversationRepository,
@@ -159,6 +191,7 @@ class AgentOrchestrator:
         media_url_rewrites: dict[str, str],
         tool_calls_meta: list[dict[str, Any]],
         emit: EventEmitter,
+        llm_model: str | None = None,
     ) -> AgentTurnResult | None:
         """Сохранить частичный ответ, если лимит tools исчерпан, но есть результат."""
         if not all_image_urls and not tool_calls_meta:
@@ -174,7 +207,13 @@ class AgentOrchestrator:
             tool_calls_meta=tool_calls_meta,
             overflow_note=self._tool_loop_overflow_note(),
         )
-        await emit("done", {"assistant_message_id": str(assistant_message.id)})
+        await self._emit_turn_done(
+            session,
+            conversation.id,
+            assistant_message,
+            emit,
+            llm_model=llm_model,
+        )
         return AgentTurnResult(
             assistant_text=assistant_message.content_text or "",
             image_urls=all_image_urls,
@@ -200,6 +239,8 @@ class AgentOrchestrator:
         attachment_ids: list[uuid.UUID],
         emit: EventEmitter,
         cancel_event: asyncio.Event,
+        *,
+        llm_model: str | None = None,
     ) -> AgentTurnResult:
         """
         Полный ход в беседе: сохранение user/assistant, стриминг WS-событий.
@@ -277,6 +318,7 @@ class AgentOrchestrator:
                 llm_messages,
                 on_text_delta=_on_delta,
                 cancel_event=cancel_event,
+                model=llm_model,
             )
 
             if cancel_event.is_set():
@@ -345,7 +387,13 @@ class AgentOrchestrator:
                 media_url_rewrites=media_url_rewrites,
                 tool_calls_meta=tool_calls_meta,
             )
-            await emit("done", {"assistant_message_id": str(assistant_message.id)})
+            await self._emit_turn_done(
+                session,
+                conversation_id,
+                assistant_message,
+                emit,
+                llm_model=llm_model,
+            )
             return AgentTurnResult(
                 assistant_text=assistant_message.content_text or "",
                 image_urls=all_image_urls,
@@ -354,6 +402,7 @@ class AgentOrchestrator:
             )
 
         partial = await self._complete_after_tool_limit(
+            session,
             msg_repo=msg_repo,
             conv_repo=conv_repo,
             conversation=conversation,
@@ -364,6 +413,7 @@ class AgentOrchestrator:
             media_url_rewrites=media_url_rewrites,
             tool_calls_meta=tool_calls_meta,
             emit=emit,
+            llm_model=llm_model,
         )
         if partial is not None:
             return partial
@@ -378,6 +428,8 @@ class AgentOrchestrator:
         user_message_id: uuid.UUID,
         emit: EventEmitter,
         cancel_event: asyncio.Event,
+        *,
+        llm_model: str | None = None,
     ) -> AgentTurnResult:
         """Перегенерировать ответ на существующее user-сообщение (без нового user)."""
         conv_repo = ConversationRepository(session)
@@ -449,6 +501,7 @@ class AgentOrchestrator:
                 llm_messages,
                 on_text_delta=_on_delta,
                 cancel_event=cancel_event,
+                model=llm_model,
             )
 
             if cancel_event.is_set():
@@ -511,7 +564,13 @@ class AgentOrchestrator:
                 media_url_rewrites=media_url_rewrites,
                 tool_calls_meta=tool_calls_meta,
             )
-            await emit("done", {"assistant_message_id": str(assistant_message.id)})
+            await self._emit_turn_done(
+                session,
+                conversation_id,
+                assistant_message,
+                emit,
+                llm_model=llm_model,
+            )
             return AgentTurnResult(
                 assistant_text=assistant_message.content_text or "",
                 image_urls=all_image_urls,
@@ -520,6 +579,7 @@ class AgentOrchestrator:
             )
 
         partial = await self._complete_after_tool_limit(
+            session,
             msg_repo=msg_repo,
             conv_repo=conv_repo,
             conversation=conversation,
@@ -530,6 +590,7 @@ class AgentOrchestrator:
             media_url_rewrites=media_url_rewrites,
             tool_calls_meta=tool_calls_meta,
             emit=emit,
+            llm_model=llm_model,
         )
         if partial is not None:
             return partial

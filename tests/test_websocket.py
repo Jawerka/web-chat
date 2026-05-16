@@ -29,8 +29,13 @@ def sync_client(tmp_path, monkeypatch):
     asyncio.run(_init())
 
     noop = type("T", (), {})()
+    stop = type("E", (), {"set": lambda self: None})()
     monkeypatch.setattr("app.integrations.mcp_server.start_mcp_background", lambda: noop)
     monkeypatch.setattr("app.main.start_mcp_background", lambda: noop)
+    monkeypatch.setattr(
+        "app.main.start_retention_background",
+        lambda: (noop, stop),
+    )
 
     app = create_app()
     with TestClient(app) as client:

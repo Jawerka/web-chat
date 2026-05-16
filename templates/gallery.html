@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} — web-chat</title>
+  <link rel="stylesheet" href="/static/css/chat.css">
+  <script>
+    (function () {
+      var stored = localStorage.getItem('webchat_theme');
+      var dark = stored === 'dark'
+        || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (dark) document.documentElement.classList.add('gallery-dark');
+    })();
+  </script>
+</head>
+<body class="gallery-body styled-scrollbar">
+  <script>
+    if (document.documentElement.classList.contains('gallery-dark')) {
+      document.body.classList.add('dark-theme');
+    }
+    window.addEventListener('storage', function (e) {
+      if (e.key !== 'webchat_theme') return;
+      var dark = e.newValue === 'dark';
+      document.body.classList.toggle('dark-theme', dark);
+      document.documentElement.classList.toggle('gallery-dark', dark);
+    });
+  </script>
+
+  <div class="gallery-page">
+    <header class="gallery-header">
+      <div class="gallery-header-text">
+        <h1>Галерея генераций</h1>
+        <p class="gallery-subtitle">
+          <span id="gallery-count">0</span> изображений · обновление каждые 5 с
+        </p>
+      </div>
+      <div class="gallery-header-actions">
+        <span id="gallery-status" class="gallery-status" role="status" aria-live="polite"></span>
+        <a href="/" class="btn btn-secondary btn-sm">← К чату</a>
+      </div>
+    </header>
+
+    <p id="gallery-empty" class="gallery-empty hidden">
+      Пока нет сгенерированных изображений. Создайте картинку в чате — она появится здесь.
+    </p>
+    <div id="gallery-grid" class="gallery-grid hidden"></div>
+  </div>
+
+  <div id="gallery-lightbox" class="lightbox gallery-lightbox hidden" role="dialog" aria-modal="true" aria-label="Просмотр изображения">
+    <button type="button" class="lightbox-nav lightbox-prev" id="gallery-lightbox-prev" title="Предыдущее (←)" aria-label="Предыдущее">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <button type="button" class="lightbox-nav lightbox-next" id="gallery-lightbox-next" title="Следующее (→)" aria-label="Следующее">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <button type="button" class="lightbox-close" id="gallery-lightbox-close" title="Закрыть (Esc)" aria-label="Закрыть">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <div class="gallery-lightbox-toolbar">
+      <div class="gallery-lightbox-toolbar-left">
+        <span id="gallery-lightbox-title" class="gallery-lightbox-title"></span>
+        <span id="gallery-lightbox-counter" class="gallery-lightbox-counter hidden" aria-live="polite"></span>
+      </div>
+      <div class="gallery-lightbox-actions">
+        <button type="button" class="gallery-toolbar-btn" id="gallery-lightbox-save" title="Сохранить на диск" aria-label="Сохранить">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+        <button type="button" class="gallery-toolbar-btn danger" id="gallery-lightbox-delete" title="Удалить" aria-label="Удалить">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </div>
+    <img id="gallery-lightbox-img" alt="">
+  </div>
+
+  <script src="/static/js/gallery.js"></script>
+</body>
+</html>

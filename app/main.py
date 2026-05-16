@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
+from app.api.gallery import router as gallery_router
 from app.api.media import router as media_router
 from app.api.pages import router as pages_router
 from app.api.router import api_router
@@ -23,6 +25,7 @@ from app.config import settings
 from app.db.session import init_db
 from app.logging_buffer import install_log_buffer
 from app.integrations.mcp_server import start_mcp_background
+from app.services.retention_task import start_retention_background
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,12 +43,20 @@ async def lifespan(app: FastAPI):
     install_log_buffer()
     await init_db()
     start_mcp_background()
+    retention_task, retention_stop = start_retention_background()
     logger.info(
         "web-chat запущен (PUBLIC_BASE_URL=%s, MCP :%d)",
         settings.public_base_url,
         settings.effective_mcp_port,
     )
     yield
+    retention_stop.set()
+    if isinstance(retention_task, asyncio.Task):
+        retention_task.cancel()
+        try:
+            await retention_task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -56,6 +67,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(pages_router)
+    app.include_router(gallery_router)
     app.include_router(api_router, prefix="/api")
     app.include_router(media_router)
     app.include_router(ws_router)

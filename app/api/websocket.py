@@ -15,7 +15,8 @@ from app.api.ws_manager import manager
 from app.db.models import MessageRole
 from app.db.repositories import MessageRepository
 from app.db import session as db_session
-from app.integrations.llm_client import LLMError
+from app.integrations.llm_client import LLMClient, LLMError
+from app.integrations.runtime_config import IntegrationOverrides, parse_integration_overrides
 from app.services.agent_orchestrator import (
     AgentOrchestrator,
     ToolLoopExceeded,
@@ -32,6 +33,8 @@ async def _run_turn_task(
     user_text: str,
     attachment_ids: list[uuid.UUID],
     cancel_event: asyncio.Event,
+    *,
+    integration: IntegrationOverrides | None = None,
 ) -> None:
     """Фоновая задача хода агента с отдельной сессией БД."""
 
@@ -39,7 +42,11 @@ async def _run_turn_task(
         await manager.send_json(conversation_id, {"type": event_type, **payload})
 
     async with db_session.async_session_factory() as session:
-        orchestrator = AgentOrchestrator()
+        llm = LLMClient(base_url=integration.llm_base_url if integration else None)
+        orchestrator = AgentOrchestrator(
+            llm=llm,
+            sd_webui_url=integration.sd_webui_url if integration else None,
+        )
         try:
             await orchestrator.run_conversation_turn(
                 session,
@@ -48,6 +55,7 @@ async def _run_turn_task(
                 attachment_ids,
                 emit,
                 cancel_event,
+                llm_model=integration.llm_model if integration else None,
             )
             await session.commit()
         except TurnCancelled:
@@ -78,6 +86,8 @@ async def _run_regenerate_task(
     conversation_id: uuid.UUID,
     message_id: uuid.UUID,
     cancel_event: asyncio.Event,
+    *,
+    integration: IntegrationOverrides | None = None,
 ) -> None:
     """Перегенерация ответа на user-сообщение (или на предыдущее user для assistant)."""
 
@@ -112,7 +122,11 @@ async def _run_regenerate_task(
             })
             return
 
-        orchestrator = AgentOrchestrator()
+        llm = LLMClient(base_url=integration.llm_base_url if integration else None)
+        orchestrator = AgentOrchestrator(
+            llm=llm,
+            sd_webui_url=integration.sd_webui_url if integration else None,
+        )
         try:
             await orchestrator.run_regenerate_turn(
                 session,
@@ -120,6 +134,7 @@ async def _run_regenerate_task(
                 user_message_id,
                 emit,
                 cancel_event,
+                llm_model=integration.llm_model if integration else None,
             )
             await session.commit()
         except TurnCancelled:
@@ -150,11 +165,18 @@ def _schedule_turn_task(
     conversation_id: uuid.UUID,
     user_text: str,
     attachment_ids: list[uuid.UUID],
+    integration: IntegrationOverrides | None = None,
 ):
     """Фабрика корутины хода (без замыкания на переменные цикла WS)."""
 
     async def runner(cancel_event: asyncio.Event) -> None:
-        await _run_turn_task(conversation_id, user_text, attachment_ids, cancel_event)
+        await _run_turn_task(
+            conversation_id,
+            user_text,
+            attachment_ids,
+            cancel_event,
+            integration=integration,
+        )
 
     return runner
 
@@ -162,11 +184,17 @@ def _schedule_turn_task(
 def _schedule_regenerate_task(
     conversation_id: uuid.UUID,
     message_id: uuid.UUID,
+    integration: IntegrationOverrides | None = None,
 ):
     """Фабрика корутины перегенерации."""
 
     async def runner(cancel_event: asyncio.Event) -> None:
-        await _run_regenerate_task(conversation_id, message_id, cancel_event)
+        await _run_regenerate_task(
+            conversation_id,
+            message_id,
+            cancel_event,
+            integration=integration,
+        )
 
     return runner
 
@@ -227,9 +255,15 @@ async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> No
                     except ValueError:
                         pass
 
+                integration = parse_integration_overrides(data)
                 _start_background_turn(
                     conversation_id,
-                    _schedule_turn_task(conversation_id, user_text, list(attachment_ids)),
+                    _schedule_turn_task(
+                        conversation_id,
+                        user_text,
+                        list(attachment_ids),
+                        integration,
+                    ),
                 )
                 continue
 
@@ -250,9 +284,10 @@ async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> No
                         "code": "validation",
                     })
                     continue
+                integration = parse_integration_overrides(data)
                 _start_background_turn(
                     conversation_id,
-                    _schedule_regenerate_task(conversation_id, regen_id),
+                    _schedule_regenerate_task(conversation_id, regen_id, integration),
                 )
                 continue
 
@@ -263,8 +298,9 @@ async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> No
             })
 
     except WebSocketDisconnect:
-        manager.disconnect(conversation_id, websocket)
-        manager.cancel_turn(conversation_id)
+        no_clients_left = manager.disconnect(conversation_id, websocket)
+        if no_clients_left:
+            manager.cancel_turn(conversation_id)
     except Exception:
         manager.disconnect(conversation_id, websocket)
         logger.exception("WS ошибка беседы %s", conversation_id)

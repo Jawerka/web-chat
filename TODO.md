@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-15):** этапы **1–7** выполнены; этап **8** в основном готов (UI в LAN); этапы **9–10** частично; этап **11** не начат. Автотесты: `pytest` (40 тестов). Детали — [журнал прогресса](#журнал-прогресса).
+> **Статус реализации (2026-05-16):** этапы **1–11** выполнены. Автотесты: `pytest` (63 теста). Детали — [журнал прогресса](#журнал-прогресса).
 
 ---
 
@@ -909,14 +909,14 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 
 ---
 
-### Этап 9. Пресеты, настройки, полировка UX — частично
+### Этап 9. Пресеты, настройки, полировка UX ✅
 
 **Задачи:**
 
 - [x] Default preset для новых бесед из API.
 - [x] Панель настроек (`sidebar-settings`): пресет, connection pill, кнопки; тема light/dark (`localStorage`).
-- [ ] Модель в UI (readonly из server / override) — не реализовано.
-- [ ] Размер шрифта в настройках — не реализовано.
+- [x] Модель в UI: readonly с сервера (`GET /api/config/llm-model`) или override → WS `model`.
+- [x] Размер шрифта в настройках (`--font-size`, `localStorage`).
 - [x] Progress при `tool_start` + `generate_image` — в `.message-status` внутри пузыря ассистента.
 - [x] Error banner (порт из prompt-extension).
 - [x] Прокрутка вниз (sticky zone ~100px), thinking до первого `text_delta`.
@@ -925,14 +925,14 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 
 ---
 
-### Этап 10. Надёжность, логи, деплой — частично
+### Этап 10. Надёжность, логи, деплой ✅
 
 **Задачи:**
 
 - [x] Расширенный `/health` — llm, sd (`degraded` при сбое).
 - [x] Таймауты и коды `error.code` (раздел 13).
-- [ ] Cleanup по `UPLOAD_RETENTION_DAYS` / `GENERATED_RETENTION_DAYS` — только в конфиге, cron/timer не подключён.
-- [x] pytest: unit + integration (40 тестов, раздел 14).
+- [x] Cleanup по `UPLOAD_RETENTION_DAYS` / `GENERATED_RETENTION_DAYS`: фоновая задача при старте + `deploy/web-chat-cleanup.timer`.
+- [x] pytest: unit + integration (45 тестов, раздел 14).
 - [x] systemd, README deploy (LAN); WireGuard — в разделе 15.
 - [x] SQLite WAL + retry записи (`app/db/sqlite.py`, `run_write`).
 
@@ -944,9 +944,9 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 
 **Задачи:**
 
-- [ ] Порт `img2img`, `upscale_images`, `get_gallery` из image-gen.
-- [ ] Инструкции для LLM по `denoising_strength` (см. image-gen TODO).
-- [ ] Страница `/gallery` — упрощённый порт `web_server.py`.
+- [x] Порт `img2img`, `upscale_images`, `get_gallery` из image-gen.
+- [x] Инструкции для LLM по `denoising_strength` (см. image-gen TODO).
+- [x] Страница `/gallery` — упрощённый порт `web_server.py`.
 
 ---
 
@@ -1549,7 +1549,7 @@ WantedBy=multi-user.target
 - [ ] Экспорт беседы в Markdown
 - [ ] PostgreSQL вместо SQLite
 - [ ] Basic auth за reverse proxy
-- [ ] `img2img` + инструкции denoising (см. image-gen TODO)
+- [x] `img2img` + инструкции denoising (см. image-gen TODO)
 - [ ] Вкладка «Галерея»
 - [ ] RAG / embeddings
 - [ ] Поддержка нескольких пользователей
@@ -1629,9 +1629,9 @@ MVP считается готовым после завершения **этап
 | 6 | [x] | 2026-05 | extract_text, PDF/DOCX |
 | 7 | [x] | 2026-05 | WS, history, regenerate, message actions |
 | 8 | [x] | 2026-05 | UI: chat, lightbox, sidebar-settings |
-| 9 | [~] | | Тема, error banner, status; нет font/model UI |
-| 10 | [~] | | pytest 40, health, WAL; нет retention cron |
-| 11 | [ ] | | img2img, gallery — не начато |
+| 9 | [x] | 2026-05-15 | Модель LLM в UI, размер шрифта |
+| 10 | [x] | 2026-05-15 | retention cleanup + timer, pytest |
+| 11 | [x] | 2026-05-16 | img2img, upscale, get_gallery, /gallery |
 
 ---
 

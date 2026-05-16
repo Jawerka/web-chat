@@ -13,59 +13,41 @@
 
   <div class="app-shell" id="app">
     <aside class="conv-sidebar" id="conv-sidebar" aria-label="Боковое меню">
-      <header class="conv-sidebar-header">
-        <div class="brand">
-          <span class="brand-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
-          </span>
-          <h1 class="app-title">web-chat</h1>
-        </div>
-        <button type="button" class="icon-btn icon-btn-ghost" id="sidebar-close" title="Закрыть" aria-label="Закрыть">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      <div class="conv-sidebar-sheet">
+        <ul class="conv-list" id="conv-list" role="list">
+          <li class="conv-new-item" role="presentation">
+            <button type="button" class="conv-new-chat-btn" id="btn-new-chat" title="Новая беседа" aria-label="Новая беседа">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+          </li>
+        </ul>
+        <p class="conv-empty hidden" id="conv-empty">Пока нет бесед — создайте первую</p>
+      </div>
+      <div class="floating-settings" id="floating-settings" role="toolbar" aria-label="Настройки и журнал">
+        <button type="button" id="settings-btn" class="icon-btn small floating" title="Настройки" aria-label="Настройки">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
         </button>
-      </header>
-
-      <button type="button" class="btn-new-chat" id="btn-new-chat">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-        Новая беседа
-      </button>
-
-      <ul class="conv-list" id="conv-list" role="list"></ul>
-      <p class="conv-empty hidden" id="conv-empty">Пока нет бесед — создайте первую</p>
-
-      <div class="sidebar-settings hidden" id="sidebar-settings">
-        <div class="sidebar-settings-card">
-        <div class="sidebar-settings-section">
-          <span class="sidebar-settings-label">Текущая беседа</span>
-          <p class="sidebar-chat-title" id="sidebar-chat-title" title="">—</p>
-        </div>
-        <div class="sidebar-settings-section">
-          <label class="sidebar-settings-label" for="preset-select">Пресет</label>
-          <div class="preset-select-wrap">
-            <select class="preset-select" id="preset-select" aria-label="Пресет беседы"></select>
-            <span class="preset-select-chevron" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-            </span>
-          </div>
-        </div>
-        <div class="sidebar-settings-footer">
-          <div class="conn-status-pill">
-            <span class="conn-status" id="conn-status" title="Статус"></span>
-            <span class="conn-status-label" id="conn-status-label">Офлайн</span>
-          </div>
-          <div class="sidebar-settings-actions" role="toolbar" aria-label="Действия">
-          <button type="button" class="icon-btn icon-btn-ghost sidebar-action-btn" id="btn-open-logs" title="Журнал" aria-label="Журнал">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-          </button>
-          <button type="button" class="icon-btn icon-btn-ghost sidebar-action-btn" id="theme-toggle" title="Тема" aria-label="Тема">
-            <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-            <svg class="icon-moon hidden" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          </button>
-          </div>
-        </div>
-        </div>
+        <a href="/gallery" class="icon-btn small floating" title="Галерея" aria-label="Галерея">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+            <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+            <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+            <rect x="14" y="14" width="7" height="7" rx="1"></rect>
+          </svg>
+        </a>
+        <button type="button" id="logs-btn" class="icon-btn small floating" title="Журнал" aria-label="Журнал">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            <line x1="8" y1="7" x2="16" y2="7"></line>
+            <line x1="8" y1="11" x2="14" y2="11"></line>
+          </svg>
+        </button>
       </div>
     </aside>
 
@@ -105,7 +87,7 @@
           <button type="button" class="btn btn-primary btn-cta" id="placeholder-new-chat">Создать беседу</button>
         </div>
 
-        <div class="chat-history hidden" id="chat-history">
+        <div class="chat-history styled-scrollbar hidden" id="chat-history">
           <div class="chat-messages-wrap">
             <div class="chat-messages" id="chat-messages"></div>
           </div>
@@ -114,59 +96,245 @@
           </button>
         </div>
 
+        <div class="chat-composer hidden" id="chat-composer">
+          <div class="chat-composer-edge-fade" aria-hidden="true"></div>
+          <div class="chat-composer-card">
+            <div class="attachment-strip hidden" id="attachment-strip"></div>
+            <div class="chat-input-container" id="drop-zone">
+              <label class="attach-btn" title="Файлы">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                <input type="file" id="file-input" multiple hidden>
+              </label>
+              <textarea id="user-input" class="chat-input" rows="1" placeholder="Сообщение…" disabled autocomplete="off"></textarea>
+              <button type="button" class="btn-cancel hidden" id="cancel-btn" title="Стоп" aria-label="Стоп">
+                <svg class="btn-cancel-icon" viewBox="0 0 24 24" width="32" height="32" fill="currentColor" aria-hidden="true">
+                  <rect x="7" y="7" width="10" height="10" rx="2"/>
+                </svg>
+              </button>
+              <button type="button" class="btn-send" id="send-btn" title="Отправить" disabled>
+                <svg class="btn-send-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="loading-overlay hidden" id="loading-overlay" aria-live="polite">
           <div class="status-indicator status-indicator--lg"><span class="status-bar"></span><span class="status-bar"></span><span class="status-bar"></span><span class="status-bar"></span></div>
         </div>
       </div>
 
-      <footer class="chat-footer hidden" id="chat-footer">
-        <div class="attachment-strip hidden" id="attachment-strip"></div>
-        <div class="chat-input-container" id="drop-zone">
-          <div class="chat-input-wrapper">
-            <label class="attach-btn" title="Файлы">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-              <input type="file" id="file-input" multiple hidden>
-            </label>
-            <textarea id="user-input" class="chat-input" rows="1" placeholder="Сообщение…" disabled autocomplete="off"></textarea>
-            <button type="button" class="btn-cancel hidden" id="cancel-btn" title="Стоп">■</button>
-            <button type="button" class="btn-send" id="send-btn" title="Отправить" disabled>
-              <svg class="btn-send-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-            </button>
+      <aside class="overlay-panel settings-panel hidden" id="settings-panel" aria-label="Настройки">
+        <header class="panel-header settings-panel-header">
+          <div class="settings-panel-heading">
+            <h2>Настройки</h2>
+            <p class="settings-panel-subtitle">Беседа, модель и интерфейс</p>
           </div>
+          <button type="button" id="settings-close" class="icon-btn panel-close-btn" title="Закрыть" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </header>
+        <div class="settings-content styled-scrollbar">
+          <section class="settings-section">
+            <h3 class="settings-section-title">Беседа</h3>
+            <label class="settings-field-label" for="settings-chat-title">Название</label>
+            <input
+              type="text"
+              class="form-input settings-field-input settings-chat-title-input"
+              id="settings-chat-title"
+              maxlength="200"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Выберите или создайте беседу"
+              disabled
+              aria-label="Название беседы"
+            >
+            <label class="settings-field-label" for="conv-preset-select">Пресет беседы</label>
+            <div class="preset-select-wrap">
+              <select class="preset-select form-input" id="conv-preset-select" aria-label="Пресет текущей беседы" disabled></select>
+              <span class="preset-select-chevron" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
+            </div>
+            <p class="form-hint">Отображается в списке слева. Пресет и название сохраняются кнопкой внизу.</p>
+          </section>
+
+          <section class="settings-section">
+            <h3 class="settings-section-title">Модель LLM</h3>
+            <div class="settings-service-meta">
+              <span class="conn-status disconnected" id="conn-status" title="Офлайн"></span>
+              <span class="conn-status-label" id="conn-status-label">Офлайн</span>
+              <span class="settings-service-meta-hint">чат · WebSocket</span>
+            </div>
+            <label class="settings-field-label" for="llm-base-url-input">Адрес API</label>
+            <input
+              type="url"
+              class="form-input settings-field-input"
+              id="llm-base-url-input"
+              inputmode="url"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="http://host:8989/v1"
+              aria-label="Адрес LLM API"
+            >
+            <p class="form-hint">OpenAI-compatible endpoint (обычно с суффиксом <code>/v1</code>).</p>
+            <label class="settings-field-label" for="llm-model-input">Имя модели</label>
+            <input type="text" class="form-input settings-field-input" id="llm-model-input" readonly placeholder="Загрузка…" autocomplete="off">
+            <label class="settings-toggle-row">
+              <span class="settings-toggle-text">
+                <span class="settings-toggle-title">Автовыбор модели</span>
+                <span class="settings-toggle-desc">Запросить список с указанного API</span>
+              </span>
+              <input type="checkbox" id="use-server-model" class="settings-toggle-input" checked>
+              <span class="settings-toggle-track" aria-hidden="true"></span>
+            </label>
+          </section>
+
+          <section class="settings-section">
+            <h3 class="settings-section-title">Stable Diffusion</h3>
+            <label class="settings-field-label" for="sd-webui-url-input">Адрес WebUI</label>
+            <input
+              type="url"
+              class="form-input settings-field-input"
+              id="sd-webui-url-input"
+              inputmode="url"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="http://host:7860"
+              aria-label="Адрес Stable Diffusion WebUI"
+            >
+            <p class="form-hint">Automatic1111 / Forge — для инструмента генерации изображений.</p>
+          </section>
+
+          <section class="settings-section">
+            <h3 class="settings-section-title">Интерфейс</h3>
+            <label class="settings-field-label" for="font-size">Размер шрифта</label>
+            <div class="font-size-control settings-font-control">
+              <button type="button" class="font-size-btn" id="font-size-decrease" title="Уменьшить" aria-label="Уменьшить">−</button>
+              <input type="number" id="font-size" class="form-input font-size-input" value="14" min="8" max="20" step="1" aria-label="Размер шрифта">
+              <span class="font-size-unit">px</span>
+              <button type="button" class="font-size-btn" id="font-size-increase" title="Увеличить" aria-label="Увеличить">+</button>
+            </div>
+            <button type="button" class="settings-row-btn theme-toggle-btn" id="theme-toggle" title="Сменить тему">
+              <span class="settings-row-btn-icon" aria-hidden="true">
+                <svg class="icon-sun" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                <svg class="icon-moon hidden" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+              </span>
+              <span class="settings-row-btn-text">
+                <span class="settings-row-btn-title" id="theme-toggle-label">Светлая тема</span>
+                <span class="settings-row-btn-desc">Нажмите, чтобы переключить</span>
+              </span>
+              <svg class="settings-row-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </section>
+
+          <section class="settings-section settings-section--preset">
+            <h3 class="settings-section-title">Пресеты</h3>
+            <p class="form-hint settings-section-lead">Глобальные инструкции на сервере — для всех бесед с этим пресетом.</p>
+            <label class="settings-field-label" for="preset-select">Редактируемый пресет</label>
+            <div class="preset-select-wrap">
+              <select class="preset-select form-input" id="preset-select" aria-label="Глобальный пресет" disabled></select>
+              <span class="preset-select-chevron" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
+            </div>
+            <label class="settings-field-label" for="preset-system-prompt">Системный промпт</label>
+            <div class="preset-prompt-editor">
+              <textarea id="preset-system-prompt" class="form-input preset-system-prompt styled-scrollbar" rows="6" spellcheck="false" placeholder="Инструкции для модели…" aria-label="Системный промпт пресета"></textarea>
+              <button type="button" class="preset-prompt-save-btn" id="preset-prompt-save-btn" title="Сохранить на сервер" aria-label="Сохранить промпт на сервер">
+                <svg class="preset-save-icon preset-save-icon--disk" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                </svg>
+                <svg class="preset-save-icon preset-save-icon--check" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              </button>
+            </div>
+            <button type="button" class="settings-inline-btn" id="preset-set-default-btn" disabled>
+              Сделать пресетом по умолчанию
+            </button>
+            <p class="form-hint">Черновик дублируется в браузере. При смене пресета несохранённый текст сохраняется на сервер.</p>
+          </section>
         </div>
-      </footer>
+        <div class="settings-fab-wrap">
+          <p class="settings-save-status" id="settings-save-status" role="status" aria-live="polite"></p>
+          <button
+            type="button"
+            class="settings-save-fab"
+            id="settings-save-btn"
+            title="Сохранить настройки"
+            aria-label="Сохранить настройки"
+          >
+            <svg class="settings-save-icon settings-save-icon--disk" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            <svg class="settings-save-icon settings-save-icon--check" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </button>
+        </div>
+      </aside>
+
+      <aside class="overlay-panel logs-panel hidden" id="logs-panel" aria-label="Журнал">
+        <header class="panel-header">
+          <h2>Журнал</h2>
+          <button type="button" id="logs-close" class="icon-btn panel-close-btn" title="Закрыть" aria-label="Закрыть">✕</button>
+        </header>
+        <div class="logs-toolbar">
+          <button type="button" class="btn btn-secondary btn-sm" id="logs-copy-all">Скопировать всё</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="logs-clear-all">Очистить всё</button>
+          <span class="logs-count" id="logs-count">0 строк</span>
+        </div>
+        <textarea class="logs-output" id="logs-output" readonly spellcheck="false" aria-label="Журнал событий"></textarea>
+      </aside>
+
     </main>
   </div>
 
-  <dialog class="modal" id="new-conv-modal">
+  <dialog class="modal new-conv-modal" id="new-conv-modal" aria-labelledby="new-conv-modal-title">
     <form method="dialog" class="modal-form" id="new-conv-form">
-      <h3 class="modal-title">Новая беседа</h3>
-      <label class="form-label" for="new-conv-title">Название</label>
-      <input type="text" id="new-conv-title" class="form-input" placeholder="Новая беседа" maxlength="200" autocomplete="off">
-      <label class="form-label" for="new-conv-preset">Пресет</label>
-      <select id="new-conv-preset" class="form-input"></select>
-      <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="new-conv-cancel">Отмена</button>
-        <button type="submit" class="btn btn-primary">Создать</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog class="modal logs-modal" id="logs-modal">
-    <div class="logs-modal-inner">
-      <header class="logs-modal-header">
-        <h3 class="modal-title">Журнал</h3>
-        <button type="button" class="icon-btn icon-btn-ghost" id="logs-modal-close" title="Закрыть" aria-label="Закрыть">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      <header class="modal-header">
+        <div class="modal-header-text">
+          <h2 class="modal-title" id="new-conv-modal-title">Новая беседа</h2>
+          <p class="modal-subtitle">Название и режим работы ассистента</p>
+        </div>
+        <button type="button" class="icon-btn modal-close-btn" id="new-conv-close" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       </header>
-      <div class="logs-toolbar">
-        <button type="button" class="btn btn-secondary btn-sm" id="logs-copy-all">Скопировать всё</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="logs-clear-all">Очистить всё</button>
-        <span class="logs-count" id="logs-count">0 строк</span>
+      <div class="modal-body">
+        <section class="modal-section">
+          <label class="settings-field-label" for="new-conv-title">Название</label>
+          <input
+            type="text"
+            id="new-conv-title"
+            class="form-input settings-field-input"
+            placeholder="Новая беседа"
+            maxlength="200"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <p class="form-hint">Если оставить пустым — «Новая беседа»</p>
+        </section>
+        <section class="modal-section">
+          <label class="settings-field-label" for="new-conv-preset">Пресет</label>
+          <div class="preset-select-wrap">
+            <select id="new-conv-preset" class="preset-select form-input" aria-label="Пресет беседы"></select>
+            <span class="preset-select-chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+          </div>
+          <p class="form-hint">Системный промпт и поведение модели</p>
+        </section>
       </div>
-      <textarea class="logs-output" id="logs-output" readonly spellcheck="false" aria-label="Журнал событий"></textarea>
-    </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="new-conv-cancel">Отмена</button>
+        <button type="submit" class="btn btn-primary modal-submit-btn">Создать беседу</button>
+      </footer>
+    </form>
   </dialog>
 
   <div class="lightbox hidden" id="lightbox" role="dialog" aria-modal="true" aria-label="Просмотр изображения">

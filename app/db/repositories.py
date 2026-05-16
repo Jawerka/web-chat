@@ -51,6 +51,19 @@ class PresetRepository:
         await self._session.flush()
         return preset
 
+    async def update_system_prompt(
+        self,
+        preset_id: uuid.UUID,
+        system_prompt: str,
+    ) -> Preset | None:
+        """Обновить системный промпт пресета."""
+        preset = await self.get_by_id(preset_id)
+        if preset is None:
+            return None
+        preset.system_prompt = system_prompt
+        await self._session.flush()
+        return preset
+
 
 class ConversationRepository:
     """CRUD бесед."""
@@ -123,6 +136,22 @@ class MediaAssetRepository:
 
     async def get_by_id(self, asset_id: uuid.UUID) -> MediaAsset | None:
         return await self._session.get(MediaAsset, asset_id)
+
+    async def delete(self, asset: MediaAsset) -> None:
+        """Удалить MediaAsset."""
+        await self._session.delete(asset)
+        await self._session.flush()
+
+    async def list_images_recent(self, limit: int = 200) -> list[MediaAsset]:
+        """Изображения из БД, новые первыми."""
+        stmt = (
+            select(MediaAsset)
+            .where(MediaAsset.mime_type.like("image/%"))
+            .order_by(MediaAsset.created_at.desc())
+            .limit(max(1, min(500, int(limit))))
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
 
     async def create(
         self,
@@ -272,6 +301,24 @@ class MessageRepository:
         messages = list(result.scalars().all())
         messages.reverse()
         return messages
+
+    async def list_earliest_for_title(
+        self,
+        conversation_id: uuid.UUID,
+        *,
+        limit: int = 6,
+    ) -> list[Message]:
+        """Первые сообщения user/assistant для генерации заголовка."""
+        result = await self._session.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.role.in_([MessageRole.USER, MessageRole.ASSISTANT]),
+            )
+            .order_by(Message.created_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def list_for_llm(
         self,

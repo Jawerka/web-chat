@@ -1,0 +1,59 @@
+"""Переопределения адресов LLM/SD из WebSocket (настройки браузера)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from app.config import settings
+
+_MAX_URL_LEN = 512
+
+
+@dataclass(frozen=True)
+class IntegrationOverrides:
+    """Опциональные URL и модель с клиента."""
+
+    llm_model: str | None = None
+    llm_base_url: str | None = None
+    sd_webui_url: str | None = None
+
+
+def resolve_llm_base_url(override: str | None = None) -> str:
+    """Базовый URL LLM API: override или .env."""
+    if override and override.strip():
+        return override.strip().rstrip("/")
+    return settings.llm_base_url.rstrip("/")
+
+
+def resolve_sd_webui_url(override: str | None = None) -> str:
+    """URL Stable Diffusion WebUI: override или .env."""
+    if override and override.strip():
+        return override.strip().rstrip("/")
+    return settings.sd_webui_url.rstrip("/")
+
+
+def parse_optional_url(raw: Any) -> str | None:
+    """Нормализовать URL из WS; пустое/некорректное → None."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or len(text) > _MAX_URL_LEN:
+        return None
+    if not text.startswith(("http://", "https://")):
+        return None
+    return text.rstrip("/")
+
+
+def parse_integration_overrides(data: dict[str, Any]) -> IntegrationOverrides:
+    """Собрать переопределения из тела WS-сообщения."""
+    raw_model = data.get("model")
+    llm_model = None
+    if raw_model is not None:
+        text = str(raw_model).strip()
+        llm_model = text or None
+    return IntegrationOverrides(
+        llm_model=llm_model,
+        llm_base_url=parse_optional_url(data.get("llm_base_url")),
+        sd_webui_url=parse_optional_url(data.get("sd_webui_url")),
+    )

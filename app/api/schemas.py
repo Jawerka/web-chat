@@ -51,6 +51,12 @@ class PresetOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PresetUpdate(BaseModel):
+    """PATCH тела пресета."""
+
+    system_prompt: str = Field(..., max_length=200_000)
+
+
 class AttachmentOut(BaseModel):
     """Вложение в ответе upload API."""
 

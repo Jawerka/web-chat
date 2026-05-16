@@ -205,3 +205,50 @@ def upload_media_url(attachment_id: uuid.UUID, filename: str) -> str:
 def is_image_mime(mime_type: str) -> bool:
     """Проверить, что MIME относится к изображению."""
     return mime_type.startswith("image/")
+
+
+def resolve_trusted_generated_source(url_or_path: str) -> Path:
+    """
+    Безопасно разрешить путь к файлу в data/generated/.
+
+    Допустимо:
+    - имя файла (sd_….png);
+    - /media/generated/{filename};
+    - {PUBLIC_BASE_URL}/media/generated/{filename}.
+
+    Raises:
+        ValueError: Внешний или недопустимый источник.
+        FileNotFoundError: Файл не найден.
+    """
+    raw = url_or_path.strip()
+    if not raw:
+        raise ValueError("Пустой URL или путь к изображению")
+
+    base_url = settings.public_base_url.rstrip("/")
+
+    if raw.startswith(base_url):
+        suffix = raw[len(base_url) :]
+        return _resolve_generated_media_suffix(suffix)
+
+    if raw.startswith("/media/"):
+        return _resolve_generated_media_suffix(raw)
+
+    stripped = raw.strip("/")
+    if "/" not in stripped and not stripped.startswith(("http://", "https://")):
+        return resolve_generated_file(stripped, thumbs=False)
+
+    raise ValueError(
+        f"Недопустимый источник: {url_or_path}. "
+        f"Разрешены только файлы из {base_url}/media/generated/… или имя файла."
+    )
+
+
+def _resolve_generated_media_suffix(suffix: str) -> Path:
+    """Разобрать суффикс /media/generated/… или полный путь."""
+    if suffix.startswith("/media/generated/thumbs/"):
+        raise ValueError("Укажите полное изображение, не миниатюру")
+    prefix = "/media/generated/"
+    if not suffix.startswith(prefix):
+        raise ValueError(f"Путь не из галереи generated: {suffix}")
+    filename = Path(suffix[len(prefix) :]).name
+    return resolve_generated_file(filename, thumbs=False)

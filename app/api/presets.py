@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import PresetOut
+from app.api.schemas import PresetOut, PresetUpdate
 from app.db.repositories import PresetRepository
 from app.db.session import get_db
 
@@ -24,6 +24,23 @@ async def list_presets(
     repo = PresetRepository(db)
     presets = await repo.list_all()
     return [PresetOut.model_validate(p) for p in presets]
+
+
+@router.patch("/{preset_id}", response_model=PresetOut)
+async def update_preset(
+    preset_id: uuid.UUID,
+    body: PresetUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> PresetOut:
+    """Обновить системный промпт пресета."""
+    repo = PresetRepository(db)
+    preset = await repo.update_system_prompt(preset_id, body.system_prompt)
+    if preset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пресет не найден",
+        )
+    return PresetOut.model_validate(preset)
 
 
 @router.post("/{preset_id}/set-default", response_model=PresetOut)

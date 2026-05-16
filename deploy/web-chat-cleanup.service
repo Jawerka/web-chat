@@ -1,0 +1,10 @@
+[Unit]
+Description=web-chat retention cleanup (one-shot)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/web-chat
+EnvironmentFile=/root/web-chat/.env
+ExecStart=/root/web-chat/.venv/bin/python -m app.scripts.run_cleanup

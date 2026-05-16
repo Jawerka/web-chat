@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily web-chat file retention cleanup
+Requires=web-chat-cleanup.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

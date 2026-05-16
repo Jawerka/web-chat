@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -15,10 +15,17 @@ from app.main import create_app
 
 @pytest.fixture(autouse=True)
 def _disable_mcp_background(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Не поднимать MCP-порт в unit-тестах."""
+    """Не поднимать MCP-порт и retention loop в unit-тестах."""
     noop = MagicMock()
+    stop = MagicMock()
     monkeypatch.setattr("app.integrations.mcp_server.start_mcp_background", lambda: noop)
     monkeypatch.setattr("app.main.start_mcp_background", lambda: noop)
+    retention_task = AsyncMock()
+    retention_task.cancel = MagicMock()
+    monkeypatch.setattr(
+        "app.main.start_retention_background",
+        lambda: (retention_task, stop),
+    )
 
 
 @pytest.fixture
