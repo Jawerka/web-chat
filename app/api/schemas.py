@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
+from app.datetime_utils import datetime_to_utc_iso
 from app.db.models import PromptMacroCategory
 
 
@@ -35,8 +36,14 @@ class ConversationOut(BaseModel):
     preset_id: UUID
     created_at: datetime
     updated_at: datetime
+    in_progress: bool = False
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", "updated_at")
+    @classmethod
+    def _serialize_utc(cls, dt: datetime) -> str:
+        return datetime_to_utc_iso(dt)
 
 
 class PresetOut(BaseModel):
@@ -51,6 +58,11 @@ class PresetOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at")
+    @classmethod
+    def _serialize_utc(cls, dt: datetime) -> str:
+        return datetime_to_utc_iso(dt)
 
 
 class PresetUpdate(BaseModel):
@@ -90,6 +102,11 @@ class PromptMacroOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_serializer("created_at", "updated_at")
+    @classmethod
+    def _serialize_utc(cls, dt: datetime) -> str:
+        return datetime_to_utc_iso(dt)
+
 
 class PromptMacroCreate(BaseModel):
     category: PromptMacroCategory = PromptMacroCategory.CHARACTER
@@ -118,6 +135,11 @@ class MessageSearchHit(BaseModel):
     created_at: datetime
     match_kind: str = "message"
 
+    @field_serializer("created_at")
+    @classmethod
+    def _serialize_utc(cls, dt: datetime) -> str:
+        return datetime_to_utc_iso(dt)
+
 
 class MessageOut(BaseModel):
     """Сообщение в истории чата."""
@@ -128,6 +150,11 @@ class MessageOut(BaseModel):
     content_text: str | None = None
     content_json: dict | None = None
     created_at: datetime
+
+    @field_serializer("created_at")
+    @classmethod
+    def _serialize_utc(cls, dt: datetime) -> str:
+        return datetime_to_utc_iso(dt)
 
 
 class MessageUpdate(BaseModel):

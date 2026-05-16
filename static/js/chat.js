@@ -258,8 +258,12 @@ class ChatApp {
     this._lightboxIndex = 0;
     this._lightboxTouchStart = null;
     this._generationSyncTimer = null;
+    this._globalSyncTimer = null;
     this._generationResumeActive = false;
     this._generationWatchRunning = false;
+    this._conversationsFingerprint = '';
+    this._messagesFingerprint = '';
+    this._globalSyncIntervalMs = 3500;
     this._serverLlmModel = '';
     this._serverLlmSource = 'auto';
     this._settingsSaveStatusTimer = null;
@@ -283,6 +287,7 @@ class ChatApp {
       convList: document.getElementById('conv-list'),
       convEmpty: document.getElementById('conv-empty'),
       convSidebar: document.getElementById('conv-sidebar'),
+      floatingSettings: document.getElementById('floating-settings'),
       settingsPanel: document.getElementById('settings-panel'),
       logsPanel: document.getElementById('logs-panel'),
       macroInsertBtn: document.getElementById('macro-insert-btn'),
@@ -350,6 +355,7 @@ class ChatApp {
     try {
       const cfg = await this.api('/api/config');
       this.config = { ...this.config, ...cfg };
+      WebChatDateTime.applyServerDefault(cfg.display_timezone);
       this._loadIntegrationUrlFields();
     } catch { /* optional */ }
     this.loadLlmModelInfo().catch(() => {});
@@ -360,6 +366,7 @@ class ChatApp {
     if (saved && this.conversations.some((c) => c.id === saved)) {
       await this.selectConversation(saved);
     }
+    this._startGlobalSync();
   }
 
   _bindEvents() {
@@ -556,6 +563,13 @@ class ChatApp {
       this._cancelPendingDelete();
     };
     document.addEventListener('click', this._onDocumentClickCancelDelete);
+
+    window.addEventListener('resize', () => this._syncFloatingSettingsVisibility());
+    this._syncFloatingSettingsVisibility();
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) void this._tickGlobalSync();
+    });
   }
 
   /**
@@ -582,6 +596,18 @@ class ChatApp {
     return this.$.logsPanel && !this.$.logsPanel.classList.contains('hidden');
   }
 
+  _syncFloatingSettingsVisibility() {
+    const bar = this.$.floatingSettings;
+    if (!bar) return;
+    const mobile = window.matchMedia('(max-width: 768px)').matches;
+    const sidebarOpen = this.$.convSidebar.classList.contains('open');
+    const visible = !mobile || sidebarOpen;
+    bar.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    if (!visible && bar.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+  }
+
   openSidebar() {
     this.$.convSidebar.classList.add('open');
     this.$.backdrop.classList.remove('hidden');
@@ -590,6 +616,7 @@ class ChatApp {
       this._updateConvTitleTooltips();
     });
     document.body.style.overflow = 'hidden';
+    this._syncFloatingSettingsVisibility();
   }
 
   closeSidebar() {
@@ -597,6 +624,7 @@ class ChatApp {
     this.$.backdrop.classList.remove('visible');
     setTimeout(() => this.$.backdrop.classList.add('hidden'), 300);
     document.body.style.overflow = '';
+    this._syncFloatingSettingsVisibility();
   }
 
   setConnStatus(state) {
@@ -613,11 +641,17 @@ class ChatApp {
 
   onAck(msg) {
     if (this._regenerating) return;
+    const userMessageId = msg?.user_message_id;
+    if (!userMessageId) return;
     const rows = this.$.chatMessages.querySelectorAll('.message-row.user:not([data-message-id])');
     const last = rows[rows.length - 1];
-    if (last && msg.user_message_id) {
-      last.dataset.messageId = msg.user_message_id;
+    if (last) {
+      last.dataset.messageId = userMessageId;
       this._attachActions(last, 'user');
+      return;
+    }
+    if (!this.streaming) {
+      void this.loadMessages();
     }
   }
 
@@ -973,7 +1007,117 @@ class ChatApp {
 
   async loadConversations() {
     this.conversations = await this.api('/api/conversations');
+    this._conversationsFingerprint = this._conversationsFingerprintFrom(this.conversations);
     this.renderConvList();
+  }
+
+  _conversationsFingerprintFrom(conversations) {
+    return (conversations || [])
+      .map((c) => `${c.id}|${c.updated_at}|${c.in_progress ? 1 : 0}|${c.title}`)
+      .join(';');
+  }
+
+  _startGlobalSync() {
+    this._stopGlobalSync();
+    const tick = () => {
+      void this._tickGlobalSync().finally(() => {
+        if (this._globalSyncTimer !== null) {
+          this._globalSyncTimer = setTimeout(tick, this._globalSyncIntervalMs);
+        }
+      });
+    };
+    this._globalSyncTimer = setTimeout(tick, this._globalSyncIntervalMs);
+  }
+
+  _stopGlobalSync() {
+    if (this._globalSyncTimer) {
+      clearTimeout(this._globalSyncTimer);
+      this._globalSyncTimer = null;
+    }
+  }
+
+  async _tickGlobalSync() {
+    if (document.hidden) return;
+    await this._syncConversationsFromServer();
+    await this._syncActiveConversationFromServer();
+  }
+
+  async _syncConversationsFromServer() {
+    try {
+      const list = await this.api('/api/conversations');
+      const fp = this._conversationsFingerprintFrom(list);
+      if (fp === this._conversationsFingerprint) return;
+      this._conversationsFingerprint = fp;
+      const prevId = this.currentConvId;
+      this.conversations = list;
+      if (prevId) {
+        const updated = list.find((c) => c.id === prevId);
+        if (updated) {
+          this.currentConv = { ...this.currentConv, ...updated };
+          this._setSettingsChatTitle(updated.title);
+        }
+      }
+      this.renderConvList();
+    } catch (err) {
+      this.log?.warn('sync', err.message);
+    }
+  }
+
+  _messagesFingerprintFromList(messages) {
+    if (!messages?.length) return '0';
+    const last = messages[messages.length - 1];
+    const streaming = messages.some(
+      (m) => m.role === 'assistant' && m.content_json?.streaming,
+    );
+    return `${messages.length}:${last.id}:${last.role}:${streaming ? 1 : 0}:${(last.content_text || '').length}`;
+  }
+
+  async _messagesFingerprintFromServer() {
+    if (!this.currentConvId) return '';
+    const messages = await this.api(
+      `/api/conversations/${this.currentConvId}/messages?limit=30`,
+    );
+    return this._messagesFingerprintFromList(messages);
+  }
+
+  async _syncActiveConversationFromServer() {
+    if (!this.currentConvId) return;
+    try {
+      const status = await this.api(
+        `/api/conversations/${this.currentConvId}/generation-status`,
+      );
+      const msgFp = await this._messagesFingerprintFromServer();
+      const messagesChanged = msgFp !== this._messagesFingerprint;
+
+      if (status.in_progress) {
+        if (!this.streaming && !this._generationResumeActive) {
+          await this._resumeOngoingGeneration(status);
+        } else {
+          await this._refreshStreamingBubbleFromServer();
+          this._syncResumeProgress(status);
+          if (!this._generationWatchRunning) this._watchGenerationUntilDone();
+        }
+        this._messagesFingerprint = msgFp;
+        return;
+      }
+
+      if (this._generationResumeActive || this.streaming) {
+        this._generationResumeActive = false;
+        await this.loadMessages();
+        this._messagesFingerprint = await this._messagesFingerprintFromServer();
+        this.endStreaming();
+        return;
+      }
+
+      if (messagesChanged) {
+        const wasAtBottom = this._scrollStuckToBottom;
+        await this.loadMessages();
+        this._messagesFingerprint = msgFp;
+        if (wasAtBottom) this.scrollToBottom(true);
+      }
+    } catch (err) {
+      this.log?.warn('sync', err.message);
+    }
   }
 
   renderConvList() {
@@ -985,13 +1129,9 @@ class ChatApp {
     const convItemsHtml = this.conversations
       .map((c) => {
         const active = c.id === this.currentConvId ? ' active' : '';
-        const date = new Date(c.updated_at).toLocaleString('ru-RU', {
-          day: '2-digit',
-          month: 'short',
-          hour: '2-digit',
-          minute: '2-digit',
-        });
-        return `<li class="conv-item${active}" data-id="${c.id}" role="listitem">
+        const generating = c.in_progress ? ' is-generating' : '';
+        const date = WebChatDateTime.formatDateTime(c.updated_at);
+        return `<li class="conv-item${active}${generating}" data-id="${c.id}" role="listitem">
           <div class="conv-item-row">
             <div class="conv-item-main">
               <div class="conv-item-title" data-id="${c.id}" aria-label="${this.escapeAttr(c.title)}">
@@ -1395,6 +1535,7 @@ class ChatApp {
     for (const m of messages) {
       this.appendMessageFromDb(m);
     }
+    this._messagesFingerprint = this._messagesFingerprintFromList(messages);
     this.scrollToBottom(true);
   }
 
@@ -1826,7 +1967,10 @@ class ChatApp {
 
   _ensureStreamTarget() {
     if (this.streamEl) return true;
-    if (!this._generationResumeActive) return false;
+    if (!this._generationResumeActive) {
+      this._generationResumeActive = true;
+      if (!this._generationWatchRunning) this._watchGenerationUntilDone();
+    }
     this._beginResumePlaceholder();
     return Boolean(this.streamEl);
   }
@@ -1906,6 +2050,8 @@ class ChatApp {
           this._generationResumeActive = false;
           this._generationWatchRunning = false;
           await this.loadMessages();
+          this._conversationsFingerprint = '';
+          await this._syncConversationsFromServer();
           this.endStreaming();
           return;
         }
@@ -1939,7 +2085,8 @@ class ChatApp {
       if (conv) conv.title = conversationTitle;
       this._setSettingsChatTitle(conversationTitle);
     }
-    this.loadConversations();
+    this._conversationsFingerprint = '';
+    void this.loadConversations();
   }
 
   onWsError(message, code) {

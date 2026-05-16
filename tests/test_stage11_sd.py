@@ -125,7 +125,11 @@ def test_img2img_auto_dimensions_from_init(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(mod, "resolve_sd_webui_url", lambda u=None: "http://test")
     monkeypatch.setattr(mod, "save_image_from_base64", lambda b: "out.png")
     monkeypatch.setattr(mod, "make_thumbnail", lambda f: None)
-    monkeypatch.setattr(mod, "generated_media_url", lambda f: f"/media/generated/{f}")
+    monkeypatch.setattr(
+        mod,
+        "generated_media_url",
+        lambda f, absolute=False, for_llm=False: f"/media/generated/{f}",
+    )
 
     raw = _make_png_for_test(768, 768)
     result = mod.img2img(

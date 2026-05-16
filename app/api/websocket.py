@@ -18,6 +18,7 @@ from app.db.models import MessageRole
 from app.db.repositories import MessageRepository
 from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import IntegrationOverrides, parse_integration_overrides
+from app.public_url import bind_request_public_base_url, reset_request_public_base_url
 from app.services.agent_orchestrator import (
     AgentOrchestrator,
     ToolLoopExceeded,
@@ -229,6 +230,19 @@ def _start_background_turn(conversation_id: uuid.UUID, coro) -> None:
 @router.websocket("/ws/{conversation_id}")
 async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
     """Интерактивный чат по WebSocket."""
+    base_token = bind_request_public_base_url(
+        host=websocket.headers.get("host"),
+        client_host=websocket.client.host if websocket.client else None,
+        forwarded_host=websocket.headers.get("x-forwarded-host"),
+        forwarded_proto=websocket.headers.get("x-forwarded-proto"),
+    )
+    try:
+        await _websocket_chat_loop(websocket, conversation_id)
+    finally:
+        reset_request_public_base_url(base_token)
+
+
+async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
     await manager.connect(conversation_id, websocket)
     async with db_session.async_session_factory() as session:
         gen_state = await get_generation_state(session, conversation_id)

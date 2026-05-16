@@ -21,6 +21,9 @@
   --danger: #ea4335;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-composer: 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent),
+    0 0 24px rgba(0, 0, 0, 0.1),
+    0 0 48px rgba(0, 0, 0, 0.06);
   --font-size: 14px;
   --sidebar-width: 280px;
   --header-h: 52px;
@@ -45,6 +48,9 @@ body.dark-theme {
   --primary-hover: #5a82b0;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --shadow-composer: 0 0 0 1px color-mix(in srgb, var(--border) 55%, transparent),
+    0 0 28px rgba(0, 0, 0, 0.45),
+    0 0 56px rgba(0, 0, 0, 0.28);
   --scrollbar-track: #15202b;
   --scrollbar-thumb: #38444d;
   --scrollbar-thumb-hover: #4a5c6b;
@@ -1504,6 +1510,31 @@ body.dark-theme .conv-item.active {
   }
 }
 
+.conv-item.is-generating .conv-item-meta::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 50%, transparent);
+  animation: conv-generating-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes conv-generating-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .conv-item-meta {
   font-size: 11px;
   color: var(--text-secondary);
@@ -2308,7 +2339,7 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--border);
   border-radius: 22px;
-  box-shadow: var(--shadow-float);
+  box-shadow: var(--shadow-composer);
 }
 
 .chat-composer-card .attachment-strip {
@@ -3024,19 +3055,28 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
     transform: translateX(0);
   }
 
+  /* Панель настроек — только при открытом сайдбаре (не торчит слева поверх чата) */
   .floating-settings {
     position: absolute;
     left: calc(min(100%, var(--sidebar-width)) / 2);
     bottom: max(14px, env(safe-area-inset-bottom, 0px));
     margin: 0;
-    opacity: 1;
-    pointer-events: auto;
     z-index: 55;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(-50%) scale(0.96);
+  }
+
+  .conv-sidebar.open .floating-settings {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
     transform: translateX(-50%);
   }
 
-  .floating-settings:hover,
-  .floating-settings:focus-within {
+  .conv-sidebar.open .floating-settings:hover,
+  .conv-sidebar.open .floating-settings:focus-within {
     transform: translateX(-50%) scale(1.02);
   }
 

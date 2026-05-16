@@ -25,6 +25,8 @@ from app.config import settings
 from app.db.session import init_db
 from app.integrations.mcp_server import start_mcp_background
 from app.logging_buffer import install_log_buffer
+from app.middleware.public_base_url import PublicBaseUrlMiddleware
+from app.public_url import public_base_url_lan, public_base_url_vpn
 from app.services.retention_task import start_retention_background
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -44,9 +46,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     start_mcp_background()
     retention_task, retention_stop = start_retention_background()
+    vpn = public_base_url_vpn()
     logger.info(
-        "web-chat запущен (PUBLIC_BASE_URL=%s, MCP :%d)",
-        settings.public_base_url,
+        "web-chat запущен (PUBLIC_BASE_URL=%s%s, MCP :%d)",
+        public_base_url_lan(),
+        f", VPN={vpn}" if vpn else "",
         settings.effective_mcp_port,
     )
     yield
@@ -66,6 +70,7 @@ def create_app() -> FastAPI:
         description="LAN-чат с AI-агентом, MCP и Stable Diffusion",
         lifespan=lifespan,
     )
+    app.add_middleware(PublicBaseUrlMiddleware)
     app.include_router(pages_router)
     app.include_router(gallery_router)
     app.include_router(api_router, prefix="/api")

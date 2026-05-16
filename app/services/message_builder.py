@@ -28,7 +28,7 @@ def _public_url_from_image_part(part: dict[str, Any]) -> str | None:
     raw_asset = part.get("asset_id")
     if raw_asset:
         try:
-            return asset_media_url(uuid.UUID(str(raw_asset)), absolute=True)
+            return asset_media_url(uuid.UUID(str(raw_asset)), absolute=True, for_llm=True)
         except ValueError:
             pass
     url = (part.get("image_url") or {}).get("url") or ""
@@ -36,9 +36,11 @@ def _public_url_from_image_part(part: dict[str, Any]) -> str | None:
         return None
     asset_id = parse_asset_id_from_url(url)
     if asset_id is not None:
-        return asset_media_url(asset_id, absolute=True)
+        return asset_media_url(asset_id, absolute=True, for_llm=True)
     if url.startswith("/media/"):
-        return absolute_media_url(url.split("/llm")[0].rstrip("/"))
+        return absolute_media_url(url.split("/llm")[0].rstrip("/"), for_llm=True)
+    if url.startswith("http://") or url.startswith("https://"):
+        return absolute_media_url(url.split("/llm")[0].rstrip("/"), for_llm=True)
     return url
 
 
@@ -59,7 +61,7 @@ def collect_img2img_init_lines(
             continue
         url = AttachmentService.public_url(att)
         if url.startswith("/media/"):
-            url = absolute_media_url(url)
+            url = absolute_media_url(url, for_llm=True)
         seen_urls.add(url)
         lines.append(f"attachment_id={att.id}")
         lines.append(f"init_image_url={url}")

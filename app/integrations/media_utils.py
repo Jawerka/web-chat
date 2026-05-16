@@ -16,6 +16,12 @@ from pathlib import Path
 from PIL import Image
 
 from app.config import settings
+from app.public_url import (
+    absolute_media_path,
+    all_public_base_urls,
+    is_trusted_media_url,
+    strip_public_base,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,23 +144,27 @@ def resolve_generated_file(filename: str, *, thumbs: bool = False) -> Path:
     return path
 
 
-def absolute_media_url(url: str) -> str:
-    """Относительный /media/… → полный URL с PUBLIC_BASE_URL."""
+def absolute_media_url(url: str, *, for_llm: bool = False) -> str:
+    """Относительный /media/… → полный URL (LAN/VPN по контексту или for_llm)."""
     if url.startswith("/media/"):
-        return f"{settings.public_base_url.rstrip('/')}{url}"
+        return absolute_media_path(url, for_llm=for_llm)
+    if for_llm and is_trusted_media_url(url):
+        path = strip_public_base(url)
+        if path.startswith("/media/"):
+            return absolute_media_path(path, for_llm=True)
     return url
 
 
-def asset_media_url(asset_id: uuid.UUID, *, absolute: bool = False) -> str:
+def asset_media_url(asset_id: uuid.UUID, *, absolute: bool = False, for_llm: bool = False) -> str:
     """
     URL изображения из БД.
 
     По умолчанию относительный (/media/asset/…) — стабилен при перезагрузке UI.
-    absolute=True — полный URL для LLM vision (PUBLIC_BASE_URL).
+    absolute=True — полный URL (LAN или VPN по контексту; for_llm — всегда LAN).
     """
     path = f"/media/asset/{asset_id}"
     if absolute:
-        return f"{settings.public_base_url.rstrip('/')}{path}"
+        return absolute_media_path(path, for_llm=for_llm)
     return path
 
 
@@ -162,7 +172,7 @@ def asset_llm_media_url(asset_id: uuid.UUID, *, absolute: bool = False) -> str:
     """URL сжатой копии для vision API (GET /media/asset/{id}/llm)."""
     path = f"/media/asset/{asset_id}/llm"
     if absolute:
-        return f"{settings.public_base_url.rstrip('/')}{path}"
+        return absolute_media_path(path, for_llm=True)
     return path
 
 
@@ -203,7 +213,11 @@ def rewrite_image_url_for_llm(url: str) -> str:
     if url.startswith("http://") or url.startswith("https://"):
         return url
     if url.startswith("/media/"):
-        return absolute_media_url(url)
+        return absolute_media_url(url, for_llm=True)
+    if is_trusted_media_url(url):
+        path = strip_public_base(url)
+        if path.startswith("/media/"):
+            return absolute_media_url(path, for_llm=True)
     return url
 
 
@@ -279,18 +293,22 @@ def _fit_image_max_side(img: Image.Image, max_side: int) -> Image.Image:
     return resized
 
 
-def generated_media_url(filename: str) -> str:
-    """Публичный URL сгенерированного изображения (legacy, до ingest в БД)."""
+def generated_media_url(filename: str, *, absolute: bool = False, for_llm: bool = False) -> str:
+    """URL сгенерированного изображения (legacy, до ingest в БД)."""
     safe = safe_filename(filename)
-    base = settings.public_base_url.rstrip("/")
-    return f"{base}/media/generated/{safe}"
+    path = f"/media/generated/{safe}"
+    if absolute:
+        return absolute_media_path(path, for_llm=for_llm)
+    return path
 
 
-def generated_thumb_url(thumb_filename: str) -> str:
-    """Публичный URL миниатюры."""
+def generated_thumb_url(thumb_filename: str, *, absolute: bool = False) -> str:
+    """URL миниатюры generated."""
     safe = safe_filename(thumb_filename)
-    base = settings.public_base_url.rstrip("/")
-    return f"{base}/media/generated/thumbs/{safe}"
+    path = f"/media/generated/thumbs/{safe}"
+    if absolute:
+        return absolute_media_path(path, for_llm=False)
+    return path
 
 
 def attachment_dir(attachment_id: uuid.UUID) -> Path:
@@ -325,11 +343,19 @@ def resolve_upload_file(
     return path
 
 
-def upload_media_url(attachment_id: uuid.UUID, filename: str) -> str:
-    """Публичный URL файла для браузера и LLM vision."""
+def upload_media_url(
+    attachment_id: uuid.UUID,
+    filename: str,
+    *,
+    absolute: bool = False,
+    for_llm: bool = False,
+) -> str:
+    """URL файла вложения; absolute + for_llm — для LLM vision (LAN)."""
     safe = safe_filename(filename)
-    base = settings.public_base_url.rstrip("/")
-    return f"{base}/media/uploads/{attachment_id}/{safe}"
+    path = f"/media/uploads/{attachment_id}/{safe}"
+    if absolute:
+        return absolute_media_path(path, for_llm=for_llm)
+    return path
 
 
 def is_image_mime(mime_type: str) -> bool:
@@ -354,11 +380,9 @@ def resolve_trusted_generated_source(url_or_path: str) -> Path:
     if not raw:
         raise ValueError("Пустой URL или путь к изображению")
 
-    base_url = settings.public_base_url.rstrip("/")
-
-    if raw.startswith(base_url):
-        suffix = raw[len(base_url) :]
-        return _resolve_generated_media_suffix(suffix)
+    for base_url in all_public_base_urls():
+        if raw.startswith(base_url):
+            return _resolve_generated_media_suffix(raw[len(base_url) :])
 
     if raw.startswith("/media/"):
         return _resolve_generated_media_suffix(raw)
@@ -367,9 +391,10 @@ def resolve_trusted_generated_source(url_or_path: str) -> Path:
     if "/" not in stripped and not stripped.startswith(("http://", "https://")):
         return resolve_generated_file(stripped, thumbs=False)
 
+    bases = ", ".join(all_public_base_urls())
     raise ValueError(
         f"Недопустимый источник: {url_or_path}. "
-        f"Разрешены только файлы из {base_url}/media/generated/… или имя файла."
+        f"Разрешены только файлы из {bases}/media/generated/… или имя файла."
     )
 
 

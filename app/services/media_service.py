@@ -61,8 +61,7 @@ class MediaService:
 
     @staticmethod
     def thumb_url(asset_id: uuid.UUID) -> str:
-        base = settings.public_base_url.rstrip("/")
-        return f"{base}/media/asset/{asset_id}/thumb"
+        return f"/media/asset/{asset_id}/thumb"
 
     async def create_from_bytes(
         self,
@@ -200,8 +199,7 @@ class MediaService:
 
         try:
             if url.startswith("/media/"):
-                base = settings.public_base_url.rstrip("/")
-                fetch_url = f"{base}{url}"
+                fetch_url = f"http://127.0.0.1:{settings.web_port}{url}"
             elif url.startswith("http://") or url.startswith("https://"):
                 fetch_url = url
             else:
@@ -534,17 +532,15 @@ def _safe_uuid(value: str) -> uuid.UUID | None:
 
 def _generated_url_variants(filename: str) -> list[str]:
     """Все варианты URL для одного generated-файла (для замены в тексте)."""
+    from app.public_url import all_public_base_urls
+
     safe = safe_filename(filename)
     path = f"/media/generated/{safe}"
-    base = settings.public_base_url.rstrip("/")
-    return list(
-        {
-            path,
-            f"{base}{path}",
-            f"URL: {base}{path}",
-            f"URL: {path}",
-        }
-    )
+    variants: set[str] = {path, f"URL: {path}"}
+    for base in all_public_base_urls():
+        variants.add(f"{base}{path}")
+        variants.add(f"URL: {base}{path}")
+    return list(variants)
 
 
 # parse_asset_id_from_url — в app.integrations.media_utils

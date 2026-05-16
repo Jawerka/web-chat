@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     web_port: int = 8090
     mcp_port: int = 0  # 0 = web_port + 1
     public_base_url: str = "http://localhost:8090"
+    # Опционально: URL при доступе через WireGuard (10.99.99.0/24)
+    public_base_url_vpn: str = ""
+    # Часовой пояс отображения в UI: Europe/Moscow или пусто = авто (браузер пользователя)
+    display_timezone: str = ""
 
     llm_base_url: str = "http://192.168.88.41:8989/v1"
     llm_api_key: str = ""
@@ -61,11 +65,11 @@ class Settings(BaseSettings):
     upload_retention_days: int = 7
     generated_retention_days: int = 30
 
-    @field_validator("public_base_url")
+    @field_validator("public_base_url", "public_base_url_vpn")
     @classmethod
     def strip_trailing_slash(cls, value: str) -> str:
         """Убрать завершающий слэш — URL картинок собираются явно."""
-        return value.rstrip("/")
+        return value.rstrip("/") if value else value
 
     @property
     def effective_mcp_port(self) -> int:

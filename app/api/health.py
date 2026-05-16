@@ -7,6 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.config import settings
+from app.public_url import public_base_url_lan, public_base_url_vpn, resolve_public_base_url
 from app.integrations.llm_health import check_llm_available
 from app.integrations.sd_health import check_sd_available
 
@@ -28,6 +29,8 @@ async def health() -> dict[str, str | bool]:
         "status": overall,
         "llm": llm_status,
         "sd": sd_status,
-        "public_base_url": settings.public_base_url,
+        "public_base_url": resolve_public_base_url(),
+        "public_base_url_lan": public_base_url_lan(),
+        "public_base_url_vpn": public_base_url_vpn(),
         "timeouts_ok": timeouts_ok,
     }

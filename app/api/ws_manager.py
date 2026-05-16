@@ -104,5 +104,13 @@ class ConnectionManager:
         task = self._active_tasks.get(conversation_id)
         return task is not None and not task.done()
 
+    def busy_conversation_ids(self) -> set[uuid.UUID]:
+        """Беседы с активной фоновой генерацией (для синхронизации UI)."""
+        return {
+            cid
+            for cid, task in self._active_tasks.items()
+            if task is not None and not task.done()
+        }
+
 
 manager = ConnectionManager()

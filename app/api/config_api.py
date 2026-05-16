@@ -6,6 +6,11 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from app.config import settings
+from app.public_url import (
+    public_base_url_lan,
+    public_base_url_vpn,
+    resolve_public_base_url,
+)
 from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import parse_optional_url
 
@@ -20,6 +25,9 @@ class PublicConfigOut(BaseModel):
     max_files_per_message: int
 
     public_base_url: str
+    public_base_url_lan: str
+    public_base_url_vpn: str | None = None
+    display_timezone: str
 
     llm_model: str
     llm_base_url: str
@@ -43,7 +51,10 @@ async def get_public_config() -> PublicConfigOut:
     return PublicConfigOut(
         max_upload_mb=settings.max_upload_mb,
         max_files_per_message=settings.max_files_per_message,
-        public_base_url=settings.public_base_url,
+        public_base_url=resolve_public_base_url(),
+        public_base_url_lan=public_base_url_lan(),
+        public_base_url_vpn=public_base_url_vpn(),
+        display_timezone=(settings.display_timezone.strip() or "auto"),
         llm_model=settings.llm_model,
         llm_base_url=settings.llm_base_url.rstrip("/"),
         sd_webui_url=settings.sd_webui_url.rstrip("/"),

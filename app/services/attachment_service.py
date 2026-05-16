@@ -183,7 +183,7 @@ class AttachmentService:
         if attachment.media_asset_id is not None:
             return asset_llm_media_url(attachment.media_asset_id, absolute=True)
         filename = Path(attachment.storage_path).name
-        return upload_media_url(attachment.id, filename)
+        return upload_media_url(attachment.id, filename, absolute=True, for_llm=True)
 
     @staticmethod
     def preview_url(attachment: Attachment) -> str | None:

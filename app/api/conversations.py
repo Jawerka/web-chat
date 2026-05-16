@@ -11,6 +11,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ConversationCreate, ConversationOut, ConversationUpdate
+from app.api.ws_manager import manager
 from app.services.generation_state import get_generation_state
 from app.constants import DEFAULT_CONVERSATION_TITLE
 from app.db.repositories import ConversationRepository, PresetRepository
@@ -27,7 +28,13 @@ async def list_conversations(
     """Список бесед, сортировка updated_at DESC."""
     repo = ConversationRepository(db)
     conversations = await repo.list_all()
-    return [ConversationOut.model_validate(c) for c in conversations]
+    busy = manager.busy_conversation_ids()
+    result: list[ConversationOut] = []
+    for c in conversations:
+        item = ConversationOut.model_validate(c)
+        item.in_progress = c.id in busy
+        result.append(item)
+    return result
 
 
 @router.post("", response_model=ConversationOut, status_code=status.HTTP_201_CREATED)

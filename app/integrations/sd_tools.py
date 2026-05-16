@@ -192,7 +192,7 @@ def generate_image(
         results.append(
             {
                 "filename": filename,
-                "url": generated_media_url(filename),
+                "url": generated_media_url(filename, absolute=True, for_llm=True),
                 "seed": current_seed,
             }
         )
@@ -370,7 +370,7 @@ def img2img(
 
         item: dict[str, str | int] = {
             "filename": filename,
-            "url": generated_media_url(filename),
+            "url": generated_media_url(filename, absolute=True, for_llm=True),
             "seed": current_seed,
         }
         if thumb_name:
@@ -482,7 +482,7 @@ def upscale_images(
         thumb_name = make_thumbnail(filename)
         entry: dict[str, str] = {
             "filename": filename,
-            "url": generated_media_url(filename),
+            "url": generated_media_url(filename, absolute=True, for_llm=True),
         }
         if thumb_name:
             entry["thumb_url"] = generated_thumb_url(thumb_name)

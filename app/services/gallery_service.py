@@ -10,7 +10,6 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db.models import MediaAsset
 from app.db.repositories import MediaAssetRepository
 from app.integrations.media_utils import (
@@ -54,12 +53,8 @@ class GalleryItem:
 def _item_from_asset(asset: MediaAsset) -> GalleryItem:
     """Элемент галереи из записи MediaAsset."""
     name = asset.original_name or f"{asset.id}.png"
-    url = asset_media_url(asset.id, absolute=True)
-    thumb = (
-        f"{settings.public_base_url.rstrip('/')}/media/asset/{asset.id}/thumb"
-        if asset.thumb_data
-        else url
-    )
+    url = asset_media_url(asset.id)
+    thumb = f"/media/asset/{asset.id}/thumb" if asset.thumb_data else url
     return GalleryItem(
         id=str(asset.id),
         filename=name,
