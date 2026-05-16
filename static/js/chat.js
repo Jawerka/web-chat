@@ -264,6 +264,7 @@ class ChatApp {
     this._conversationsFingerprint = '';
     this._messagesFingerprint = '';
     this._globalSyncIntervalMs = 3500;
+    this._sidebarSwipe = null;
     this._serverLlmModel = '';
     this._serverLlmSource = 'auto';
     this._settingsSaveStatusTimer = null;
@@ -287,6 +288,8 @@ class ChatApp {
       convList: document.getElementById('conv-list'),
       convEmpty: document.getElementById('conv-empty'),
       convSidebar: document.getElementById('conv-sidebar'),
+      convSidebarSheet: document.querySelector('.conv-sidebar-sheet'),
+      chatPanel: document.querySelector('.chat-panel'),
       floatingSettings: document.getElementById('floating-settings'),
       settingsPanel: document.getElementById('settings-panel'),
       logsPanel: document.getElementById('logs-panel'),
@@ -382,6 +385,7 @@ class ChatApp {
 
     document.getElementById('menu-btn').addEventListener('click', () => this.openSidebar());
     this.$.backdrop.addEventListener('click', () => this.closeSidebar());
+    this._bindSidebarSwipeGestures();
 
     this.$.settingsBtn?.addEventListener('click', () => this.showPanel('settings'));
     this.$.logsBtn?.addEventListener('click', () => this.openLogsPanel());
@@ -608,7 +612,157 @@ class ChatApp {
     }
   }
 
+  _isMobileLayout() {
+    return window.matchMedia('(max-width: 768px)').matches;
+  }
+
+  _sidebarSwipeBlocked() {
+    if (!this._isMobileLayout()) return true;
+    if (!this.$.settingsPanel?.classList.contains('hidden')) return true;
+    if (!this.$.logsPanel?.classList.contains('hidden')) return true;
+    if (!this.$.lightbox?.classList.contains('hidden')) return true;
+    if (this.$.newConvModal?.open) return true;
+    return false;
+  }
+
+  _sidebarIsOpen() {
+    return this.$.convSidebar?.classList.contains('open') ?? false;
+  }
+
+  _getSidebarSheetWidth() {
+    const sheet = this.$.convSidebarSheet;
+    if (!sheet) return 280;
+    return sheet.getBoundingClientRect().width || 280;
+  }
+
+  _resetSidebarDragStyles() {
+    const sheet = this.$.convSidebarSheet;
+    if (sheet) {
+      sheet.style.removeProperty('transform');
+      sheet.style.removeProperty('transition');
+    }
+    this.$.backdrop?.style.removeProperty('opacity');
+    this.$.backdrop?.style.removeProperty('transition');
+    this.$.backdrop?.classList.remove('is-dragging');
+    this.$.convSidebar?.classList.remove('is-dragging');
+    this._sidebarSwipe = null;
+  }
+
+  _setSidebarDragOffset(px) {
+    const sheet = this.$.convSidebarSheet;
+    if (!sheet) return;
+    const width = this._getSidebarSheetWidth();
+    const clamped = Math.max(-width, Math.min(0, px));
+    sheet.style.transform = `translateX(${clamped}px)`;
+    const progress = (width + clamped) / width;
+    if (this.$.backdrop) {
+      this.$.backdrop.classList.remove('hidden');
+      this.$.backdrop.style.opacity = String(progress * 0.45);
+    }
+  }
+
+  _snapSidebarDrag(open) {
+    const sheet = this.$.convSidebarSheet;
+    if (!sheet) return;
+    sheet.style.transition = 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)';
+    sheet.style.transform = open ? 'translateX(0)' : `translateX(-${this._getSidebarSheetWidth()}px)`;
+    if (this.$.backdrop) {
+      this.$.backdrop.style.transition = 'opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1)';
+      this.$.backdrop.style.opacity = open ? '0.45' : '0';
+    }
+    const onEnd = () => {
+      sheet.removeEventListener('transitionend', onEnd);
+      this._resetSidebarDragStyles();
+      if (open) this.openSidebar();
+      else this.closeSidebar();
+    };
+    sheet.addEventListener('transitionend', onEnd);
+    setTimeout(onEnd, 320);
+  }
+
+  _bindSidebarSwipeGestures() {
+    const OPEN_ZONE_RATIO = 0.42;
+    const MIN_DRAG_PX = 12;
+    const COMMIT_RATIO = 0.32;
+
+    const onTouchStart = (e) => {
+      if (this._sidebarSwipeBlocked() || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const target = e.target;
+      if (target.closest('.conv-sidebar-sheet') && this._sidebarIsOpen()) {
+        if (target.closest('input, textarea, select, button, a, .conv-item-delete')) return;
+      }
+      const open = this._sidebarIsOpen();
+      let mode = null;
+      if (!open && t.clientX <= window.innerWidth * OPEN_ZONE_RATIO) {
+        mode = 'open';
+      } else if (open) {
+        mode = 'close';
+      }
+      if (!mode) return;
+      this._sidebarSwipe = {
+        mode,
+        startX: t.clientX,
+        startY: t.clientY,
+        dragging: false,
+        width: this._getSidebarSheetWidth(),
+      };
+    };
+
+    const onTouchMove = (e) => {
+      const s = this._sidebarSwipe;
+      if (!s || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - s.startX;
+      const dy = e.touches[0].clientY - s.startY;
+      if (!s.dragging) {
+        if (Math.abs(dx) < MIN_DRAG_PX || Math.abs(dx) < Math.abs(dy) * 1.15) return;
+        if (s.mode === 'open' && dx <= 0) return;
+        if (s.mode === 'close' && dx >= 0) return;
+        s.dragging = true;
+        this.$.convSidebar?.classList.add('is-dragging');
+        this.$.backdrop?.classList.add('is-dragging');
+        if (s.mode === 'open' && !this._sidebarIsOpen()) {
+          this.$.backdrop?.classList.remove('hidden');
+        }
+      }
+      e.preventDefault();
+      const offset = s.mode === 'open'
+        ? -s.width + dx
+        : dx;
+      this._setSidebarDragOffset(offset);
+    };
+
+    const onTouchEnd = (e) => {
+      const s = this._sidebarSwipe;
+      if (!s) return;
+      if (!s.dragging) {
+        this._sidebarSwipe = null;
+        return;
+      }
+      const dx = e.changedTouches[0].clientX - s.startX;
+      const progress = s.mode === 'open'
+        ? Math.max(0, Math.min(1, dx / s.width))
+        : Math.max(0, Math.min(1, (s.width + dx) / s.width));
+      const shouldOpen = progress >= COMMIT_RATIO;
+      this._snapSidebarDrag(shouldOpen);
+    };
+
+    const onTouchCancel = () => {
+      if (!this._sidebarSwipe?.dragging) {
+        this._sidebarSwipe = null;
+        return;
+      }
+      this._snapSidebarDrag(this._sidebarIsOpen());
+    };
+
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd, { passive: true });
+    document.addEventListener('touchcancel', onTouchCancel, { passive: true });
+  }
+
   openSidebar() {
+    this._resetSidebarDragStyles();
     this.$.convSidebar.classList.add('open');
     this.$.backdrop.classList.remove('hidden');
     requestAnimationFrame(() => {
@@ -620,6 +774,7 @@ class ChatApp {
   }
 
   closeSidebar() {
+    this._resetSidebarDragStyles();
     this.$.convSidebar.classList.remove('open');
     this.$.backdrop.classList.remove('visible');
     setTimeout(() => this.$.backdrop.classList.add('hidden'), 300);

@@ -3055,6 +3055,16 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
     transform: translateX(0);
   }
 
+  .conv-sidebar.is-dragging .conv-sidebar-sheet {
+    transition: none;
+    will-change: transform;
+  }
+
+  .sidebar-backdrop.is-dragging {
+    display: block;
+    transition: none;
+  }
+
   /* Панель настроек — только при открытом сайдбаре (не торчит слева поверх чата) */
   .floating-settings {
     position: absolute;
