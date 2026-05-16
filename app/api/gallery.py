@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.services.gallery_service import (
+    GALLERY_MAX_LIMIT,
     delete_gallery_asset,
     delete_gallery_disk_file,
     list_gallery_images,
@@ -25,7 +26,7 @@ router = APIRouter(tags=["gallery"])
 
 @router.get("/api/gallery")
 async def api_gallery(
-    limit: int = 200,
+    limit: int = GALLERY_MAX_LIMIT,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """JSON-список изображений галереи (БД + локальные файлы)."""

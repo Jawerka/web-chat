@@ -5,7 +5,10 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Production: `deploy/install.sh` + systemd из шаблонов. Автотесты: **105** (`pytest -q`). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки). Журнал — [ниже](#журнал-прогресса).
+> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Production: `deploy/install.sh` + systemd из шаблонов. Автотесты: **118** (`pytest -q`). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки). Журнал — [ниже](#журнал-прогресса).
+
+> **Системные промпты:** эталонные тексты пресетов (txt2img, img2img, default, document_analysis) — в [`Sys-prompt.md`](Sys-prompt.md).  
+> При любых правках промптов, инструментов или поведения агента **сначала** сверяйся с `Sys-prompt.md`, затем переноси изменения в `app/db/seed.py` и при необходимости в `app/db/migrate.py` (обновление существующей БД).
 
 ---
 
@@ -308,7 +311,7 @@ MediaAsset
 ├── restart.sh
 ├── data/           runtime: db/, uploads/, generated/ (не в git)
 ├── logs/           uvicorn.log в dev (не в git)
-├── .env.example, TODO.md, README.md
+├── .env.example, TODO.md, Sys-prompt.md, README.md
 └── requirements.txt, requirements-dev.txt, pyproject.toml
 ```
 
@@ -979,7 +982,20 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 
 ## 6. Системные промпты (seed)
 
-Краткие версии; полные тексты — в [разделе 16](#16-seed-данные-пресетов-полные-тексты).
+### 6.1. Источник истины — `Sys-prompt.md`
+
+**[`Sys-prompt.md`](Sys-prompt.md)** — канонический список базовых системных промптов по пресетам (`txt2img`, `img2img`, `default`, `document_analysis` и др.). Тексты на английском, согласованы с набором tools.
+
+**Порядок при изменениях:**
+
+1. Редактировать **`Sys-prompt.md`** (согласовать формулировки, denoising, запреты, список tools).
+2. Перенести актуальный текст в **`app/db/seed.py`** (`*_PROMPT` константы).
+3. Для уже развёрнутых БД — **`app/db/migrate.py`** обновит `presets.system_prompt` при старте (см. `migrate_preset_prompts`).
+4. При необходимости синхронизировать краткие выдержки в этом файле ([§16](#16-seed-данные-пресетов-полные-тексты)) — они **не** заменяют `Sys-prompt.md`.
+
+Не менять промпты только в seed/migrate, минуя `Sys-prompt.md` — иначе документация и код разъедутся.
+
+### 6.2. Пресеты в БД
 
 | slug | name | is_default |
 |------|------|------------|
@@ -1248,9 +1264,9 @@ sequenceDiagram
 |-----|----------------|------------|
 | **A. Приём сообщения** | Upload → `Attachment` (+ опционально `media_asset_id`). При отправке: `prepare_for_llm`, `build_user_content` (text + `image_url`), для пресета `img2img` — `append_img2img_init_hints` (явные `attachment_id` и `init_image_url` в тексте). Сохранение `content_json.parts` в `Message`. | `run_conversation_turn`, `message_builder.py`, `attachment_service.py` |
 | **B. Vision для LLM** | URL картинки переписывается на абсолютный `/media/asset/{id}/llm` (JPEG ≤ лимита для llama-server). В контекст **не** кладётся base64. | `_llm_user_parts`, `rewrite_image_url_for_llm` |
-| **C. Цикл агента** | До `max_tool_rounds` раундов: `complete_with_stream` → при `tool_calls` — выполнение tools → `role=tool` в историю → снова LLM. Tools пресета: только `img2img`, `upscale_images`, `get_gallery` (`tools_for_preset_slug`). | `agent_orchestrator.py` |
+| **C. Цикл агента** | До `max_tool_rounds` раундов: `complete_with_stream` → при `tool_calls` — выполнение tools → `role=tool` в историю → снова LLM. Tools пресета img2img: `img2img`, `upscale_images` (без `get_gallery`). | `agent_orchestrator.py` |
 | **D. Вызов img2img** | LLM передаёт `prompt`, `denoising_strength`, `width`/`height` (0 = как у исходника), `init_image_url` или `attachment_id`. | `tool_definitions.py` |
-| **E. Загрузка исходника** | `ToolExecutor._load_init_image`: `/media/asset/…`, `/media/uploads/…`, `/media/generated/…`, или `attachment_id`. Если URL от модели неверный — **fallback**: первое image-вложение текущего user-сообщения (`source_user_message_id`). | `tool_executor.py` |
+| **E. Загрузка исходника** | **Приоритет сервера:** если задан `source_user_message_id`, `_resolve_user_message_init()` вызывается **до** аргументов LLM и перезаписывает битый `init_image_url`. Источники: `attachments` + `content_json.parts`. Затем — URL/attachment от модели; повторный fallback при ошибке. Логи: `img2img args: …`, `init взят из user-сообщения`. | `tool_executor.py` |
 | **F. Подготовка к SD** | `prepare_init_image` (RGB, уменьшение длинной стороны ≤ 2048), `sanitize_llm_dimension` / `resolve_output_dimensions`, `validate_img2img_request`, payload → WebUI. | `img2img_service.py`, `sd_tools.img2img` |
 | **G. SD и сохранение** | Ответ WebUI → `data/generated/{file}.png` → `ingest_sd_output_files` → `MediaAsset`, публичный URL `{PUBLIC_BASE_URL}/media/asset/{uuid}`. | `sd_tools.py`, `media_service.py` |
 | **H. Ответ tool в LLM** | В `llm_messages` добавляется `{"role": "tool", "content": "… URL: …"}`. **Без** `image_url` в tool message — только текст. | `agent_orchestrator.py` |
@@ -1267,7 +1283,7 @@ sequenceDiagram
 | LLM «видит» результат img2img глазами перед финальным ответом | **Нет** — после tool модель получает только **текст** (`role=tool`) с URL и параметрами. Картинка в чате есть у пользователя сразу (WS + `content_json`). |
 | Жёсткий pipeline «vision → SD → vision → ответ» | **Нет** — один **agent loop**; модель сама решает, когда вызвать tool; возможны лишние tools (`get_gallery`) или повторный `img2img` при ошибке init. |
 | Отдельный MCP-клиент для tools | **Нет** в рантайме оркестратора — `ToolExecutor` in-process (MCP thread на :8091 для внешних клиентов, дублирует те же функции). |
-| Init всегда из вложения | **Почти** — при ошибке URL срабатывает fallback на вложение user-сообщения; без вложения и без валидного URL — ошибка tool и просьба приложить файл. |
+| Init всегда из вложения | **Да** при regenerate/новом сообщении с картинкой — серверный init имеет приоритет над LLM. Legacy-сообщения без `parts` — скрипт `python -m app.scripts.migrate_missing_parts`. |
 
 **Возможное улучшение (v2):** после успешного ingest подставлять в контекст LLM multimodal block с `image_url` результата для финальной оценки качества.
 
@@ -1290,7 +1306,7 @@ sequenceDiagram
 |----------|------------|
 | 0.20–0.36 | Мелкие правки, цвет, детали |
 | 0.37–0.48 | Лёгкая косметика, стиль |
-| 0.49–0.62 | Средние изменения (**по умолчанию 0.52**) |
+| 0.49–0.62 | Средние изменения (**по умолчанию 0.54**) |
 | 0.63–0.74 | Сильные: поза, анатомия |
 | 0.75–0.92 | Почти новая картинка при сохранении композиции |
 
@@ -1674,7 +1690,7 @@ Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 
 ### 16.2. image_gen
 
-Совпадает с `app/db/seed.py` (`IMAGE_GEN_PROMPT`); при обновлении seed — `migrate.py` обновляет существующую БД.
+Эталон — `Sys-prompt.md` (блок `txt2img:`). В коде: `app/db/seed.py` (`IMAGE_GEN_PROMPT`); `migrate.py` обновляет существующую БД.
 
 ```text
 Ты помощник с доступом к генерации изображений через Stable Diffusion (инструмент generate_image).
@@ -1845,7 +1861,44 @@ MVP считается готовым после завершения **этап
 - [ ] `@@macro` в поле ввода → один `@` в спойлере.
 - [ ] Lightbox: download и attach в composer.
 - [ ] `sudo ./deploy/install.sh` → reboot → `systemctl status web-chat` active.
-- [ ] `pytest -q` → 105 passed.
+- [ ] `pytest -q` → 118 passed.
+
+### 20.7. img2img: fallback init, UI и метаданные PNG (2026-05-16)
+
+#### Backend (img2img)
+
+| Тема | Поведение | Файлы |
+|------|-----------|-------|
+| **Принудительный init** | При `source_user_message_id` сервер сначала грузит картинку из user-сообщения (attachments + `content_json.parts`), **перезаписывая** неверный `init_image_url` от LLM. Не использовать `/tmp` + путь как URL. | `tool_executor.py` |
+| **Логирование** | `img2img args: init_image_url=… attachment_id=… source_user=…`; при успехе — `init взят из user-сообщения`. | `tool_executor.py` |
+| **Пресет img2img** | Убран `get_gallery` из tools (модель не «ищет» картинку в галерее). Промпт: не просить переприкрепить файл, если изображение уже в сообщении. | `tool_definitions.py`, `seed.py` |
+| **denoising по умолчанию** | **0.54** в tool schema, `img2img_service`, `sd_tools`, seed. | см. выше |
+| **PNG parameters** | После img2img — запрос `/sdapi/v1/png-info` (как у txt2img), чтобы в PNG попадала строка `parameters` для A1111, а не сырой JSON. | `sd_tools.py` |
+| **Миграция legacy** | `python -m app.scripts.migrate_missing_parts` — восстановить `content_json.parts` из image-attachments. `--dry-run` для просмотра. | `app/scripts/migrate_missing_parts.py` |
+
+**После деплоя:** `sudo systemctl restart web-chat`; в логах при regenerate искать `init взят из user-сообщения` или `img2img SD завершён`.
+
+#### UI (чат)
+
+| Тема | Поведение |
+|------|-----------|
+| **Превью в пузырях** | Фиксированная высота `--message-image-h` (200px), `object-fit: contain` — без «прыжков» при стриминге текста. |
+| **Градиент над историей** | `#chat-history` — оболочка (без scroll); прокрутка в `.chat-history-scroll`. `.chat-composer-edge-fade` — `position: absolute; bottom: 0` у оболочки (низ видимой области истории, не `fixed` к странице). |
+| **Поле ввода** | До 7 строк: `--chat-input-max-rows`, синхронизация `max-height` в CSS и `autoResizeInput()`; `--composer-scroll-pad` обновляется через `ResizeObserver` композера. |
+| **Звук по завершении** | Короткий beep (Web Audio) при `done`, если в ходе были `generate_image` / `img2img` / `upscale_images` или событие `image`. |
+
+#### Тесты
+
+- `tests/test_img2img_init_hints.py` — приоритет server init над LLM URL.
+- `tests/test_preset_tools.py` — `get_gallery` не в пресете img2img.
+- `tests/test_migrate_missing_parts.py` — логика parts из attachments.
+
+#### Диагностика (если снова «не найдено исходное изображение»)
+
+1. SQL для проблемного user-сообщения: `SELECT id, content_json FROM messages WHERE id = '…'`; `SELECT * FROM attachments WHERE message_id = '…'` — должны быть image-вложения или `parts` с `image_url`.
+2. Лог: есть ли `img2img args` и `init взят из user-сообщения`.
+3. Прод: актуальный код после `git pull` + restart.
+4. Legacy: `migrate_missing_parts --dry-run`.
 
 ---
 
@@ -1868,6 +1921,7 @@ MVP считается готовым после завершения **этап
 | post-MVP | [x] | 2026-05-16 | prompt macros, generation resume, lightbox attach/download, vision /llm |
 | deploy | [x] | 2026-05-16 | install.sh, systemd templates, DEPLOY.md |
 | img2img doc | [x] | 2026-05-16 | §9.5 пайплайн, пресеты txt2img/img2img, init hints, fallback, 105 pytest |
+| img2img fix | [x] | 2026-05-16 | server-first init, no get_gallery, denoise 0.54, png-info, UI, §20.7, 118 pytest |
 
 ---
 

@@ -81,7 +81,7 @@ TOOL_DEFINITIONS: list[dict] = [
                 "Не использовать для картинки с нуля — для этого другой пресет и generate_image. "
                 "width/height: 0 = размер исходника. "
                 "denoising_strength: 0.20–0.36 мелкие правки; 0.37–0.48 косметика; "
-                "0.49–0.62 средние; 0.63–0.74 сильные; 0.75–0.92 почти новая картинка (по умолчанию 0.52)."
+                "0.49–0.62 средние; 0.63–0.74 сильные; 0.75–0.92 почти новая картинка (по умолчанию 0.54)."
             ),
             "parameters": {
                 "type": "object",
@@ -116,7 +116,7 @@ TOOL_DEFINITIONS: list[dict] = [
                     "seed": {"type": "integer", "default": -1},
                     "denoising_strength": {
                         "type": "number",
-                        "default": 0.52,
+                        "default": 0.54,
                         "minimum": 0.2,
                         "maximum": 0.92,
                     },
@@ -186,7 +186,7 @@ TOOL_DEFINITIONS: list[dict] = [
 # Какие tools отдавать LLM в зависимости от slug пресета беседы.
 PRESET_TOOL_NAMES: dict[str, tuple[str, ...]] = {
     "image_gen": ("generate_image", "upscale_images", "get_gallery"),
-    "img2img": ("img2img", "upscale_images", "get_gallery"),
+    "img2img": ("img2img", "upscale_images"),
     "document_analysis": ("extract_text",),
 }
 

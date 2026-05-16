@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.db.models import Attachment
-from app.integrations.tool_executor import ToolExecutor
+from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.db.models import Message, MessageRole
 from app.services.message_builder import (
     append_img2img_init_hints,
@@ -144,3 +144,29 @@ async def test_init_from_user_message_attachments() -> None:
 
     assert loaded == (b"pngbytes", "user.png")
     executor._load_init_image.assert_awaited_once_with(attachment_id=att_id)
+
+
+@pytest.mark.asyncio
+async def test_img2img_prefers_server_init_over_llm_url() -> None:
+    """При source_user_message_id серверный init имеет приоритет над URL от LLM."""
+    msg_id = uuid.uuid4()
+    session = AsyncMock()
+
+    executor = ToolExecutor(session, source_user_message_id=msg_id)
+    executor._resolve_user_message_init = AsyncMock(return_value=(b"from-server", "srv.png"))
+    executor._load_init_image = AsyncMock(return_value=(b"from-llm", "llm.png"))
+    executor._run_sd_image_tool = AsyncMock(
+        return_value=ToolResult(content="ok", image_urls=[]),
+    )
+
+    await executor._img2img(
+        {
+            "prompt": "test",
+            "init_image_url": "http://bad.example/media/asset/00000000-0000-0000-0000-000000000099",
+        },
+    )
+
+    executor._load_init_image.assert_not_awaited()
+    call_args = executor._run_sd_image_tool.call_args
+    assert call_args[0][1]["init_image_bytes"] == b"from-server"
+    assert call_args[0][1]["init_source_name"] == "srv.png"

@@ -105,14 +105,18 @@ def test_img2img_auto_dimensions_from_init(monkeypatch: pytest.MonkeyPatch) -> N
 
     captured: dict = {}
 
-    def fake_post(*_args, **kwargs) -> object:
-        captured["payload"] = kwargs["json"]
+    def fake_post(*args, **kwargs) -> object:
+        url = args[-1] if args else ""
+        if "/img2img" in str(url):
+            captured["payload"] = kwargs["json"]
 
         class Resp:
             def raise_for_status(self) -> None:
                 pass
 
             def json(self) -> dict:
+                if "/png-info" in url:
+                    return {"info": "prompt test"}
                 return {
                     "images": [base64.b64encode(MINIMAL_PNG).decode()],
                     "parameters": {},

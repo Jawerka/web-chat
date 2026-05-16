@@ -14,7 +14,7 @@
   <div class="app-shell" id="app">
     <aside class="conv-sidebar" id="conv-sidebar" aria-label="Боковое меню">
       <div class="conv-sidebar-sheet">
-        <ul class="conv-list" id="conv-list" role="list">
+        <ul class="conv-list styled-scrollbar" id="conv-list" role="list">
           <li class="conv-new-item" role="presentation">
             <div class="conv-new-row">
               <button type="button" class="conv-new-chat-btn" id="btn-new-chat" title="Новая беседа" aria-label="Новая беседа">
@@ -58,7 +58,7 @@
               </button>
             </div>
           </div>
-          <ul class="conv-search-results hidden" id="conv-search-results" role="list" aria-label="Результаты поиска"></ul>
+          <ul class="conv-search-results styled-scrollbar hidden" id="conv-search-results" role="list" aria-label="Результаты поиска"></ul>
         </div>
         <p class="conv-empty hidden" id="conv-empty">Пока нет бесед — создайте первую</p>
       </div>
@@ -139,17 +139,19 @@
           <button type="button" class="btn btn-primary btn-cta" id="placeholder-new-chat">Создать беседу</button>
         </div>
 
-        <div class="chat-history styled-scrollbar hidden" id="chat-history">
-          <div class="chat-messages-wrap">
-            <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-history hidden" id="chat-history">
+          <div class="chat-history-scroll styled-scrollbar">
+            <div class="chat-messages-wrap">
+              <div class="chat-messages" id="chat-messages"></div>
+            </div>
           </div>
+          <div class="chat-composer-edge-fade" aria-hidden="true"></div>
           <button type="button" class="scroll-to-bottom-btn" id="scroll-to-bottom-btn" title="Вниз" aria-label="Вниз">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
 
         <div class="chat-composer hidden" id="chat-composer">
-          <div class="chat-composer-edge-fade" aria-hidden="true"></div>
           <div class="chat-composer-card">
             <div class="attachment-strip hidden" id="attachment-strip"></div>
             <div class="chat-input-container" id="drop-zone">

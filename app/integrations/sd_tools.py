@@ -243,7 +243,7 @@ def img2img(
     sampler_name: str = "Euler a",
     scheduler: str = "",
     seed: int = -1,
-    denoising_strength: float = 0.52,
+    denoising_strength: float = 0.54,
     restore_faces: bool = False,
     tiling: bool = False,
     resize_mode: int = 0,
@@ -347,6 +347,20 @@ def img2img(
         return "Ошибка: WebUI не вернул изображений."
 
     png_params, info_text = format_generation_meta(data)
+    png_info_text = ""
+    if info_text and not info_text.startswith("{"):
+        png_info_text = info_text
+    if not png_info_text and images_b64:
+        try:
+            info_resp = session.post(
+                f"{sd_base}/sdapi/v1/png-info",
+                json={"image": f"data:image/png;base64,{images_b64[0]}"},
+                timeout=settings.request_timeout,
+            )
+            info_resp.raise_for_status()
+            png_info_text = info_resp.json().get("info", "") or ""
+        except requests.RequestException as exc:
+            logger.warning("img2img png-info недоступен: %s", exc)
 
     results: list[dict[str, str | int]] = []
     for img_b64 in images_b64:
@@ -357,9 +371,10 @@ def img2img(
             img_path = GENERATED_ROOT / filename
             with PILImage.open(img_path) as img:
                 meta = PngImagePlugin.PngInfo()
-                if png_params:
-                    meta.add_text("parameters", png_params)
-                if info_text:
+                parameters_text = png_info_text or png_params
+                if parameters_text:
+                    meta.add_text("parameters", parameters_text)
+                if info_text and info_text != parameters_text:
                     meta.add_text("info", info_text)
                 if description:
                     meta.add_text("Description", description)
@@ -585,7 +600,7 @@ def register_sd_tools(mcp: FastMCP) -> None:
         sampler_name: str = "Euler a",
         scheduler: str = "",
         seed: int = -1,
-        denoising_strength: float = 0.52,
+        denoising_strength: float = 0.54,
         restore_faces: bool = False,
         tiling: bool = False,
         resize_mode: int = 0,

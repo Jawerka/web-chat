@@ -8,6 +8,7 @@
 |----------|------------|
 | **[deploy/DEPLOY.md](deploy/DEPLOY.md)** | Требования, `install.sh`, systemd, backup, WireGuard |
 | **[TODO.md](TODO.md)** | Архитектура, этапы 1–11, доработки §20, API, риски |
+| **[Sys-prompt.md](Sys-prompt.md)** | Эталонные системные промпты пресетов (txt2img, img2img, …) |
 | **[deploy/wireguard/proxmox-lxc.md](deploy/wireguard/proxmox-lxc.md)** | VPN для LXC на Proxmox |
 
 ---
@@ -164,4 +165,4 @@ pytest -q
 
 ## Лицензия и вклад
 
-Внутренний проект для домашней/LAN инфраструктуры. При изменении архитектуры обновляйте **TODO.md** в том же коммите, что и код.
+Внутренний проект для домашней/LAN инфраструктуры. При изменении архитектуры обновляйте **TODO.md** в том же коммите, что и код. При изменении системных промптов — сначала **Sys-prompt.md**, затем `app/db/seed.py` (см. TODO.md §6).

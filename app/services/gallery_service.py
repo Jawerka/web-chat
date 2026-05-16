@@ -25,6 +25,9 @@ from app.integrations.media_utils import (
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
+# Максимум карточек в UI галереи (/api/gallery, /gallery).
+GALLERY_MAX_LIMIT = 1000
+
 
 @dataclass(frozen=True, slots=True)
 class GalleryItem:
@@ -102,7 +105,7 @@ def _list_local_generated_images(limit: int) -> list[GalleryItem]:
 
 async def list_gallery_images(
     session: AsyncSession,
-    limit: int = 80,
+    limit: int = GALLERY_MAX_LIMIT,
 ) -> list[GalleryItem]:
     """
     Объединённая галерея: MediaAsset в SQLite + оставшиеся файлы на диске.
@@ -110,7 +113,7 @@ async def list_gallery_images(
     Дедупликация: если в БД есть asset с original_name как у локального файла,
     показываем только запись из БД.
     """
-    limit = max(1, min(500, int(limit)))
+    limit = max(1, min(GALLERY_MAX_LIMIT, int(limit)))
     repo = MediaAssetRepository(session)
     db_assets = await repo.list_images_recent(limit=limit * 2)
 

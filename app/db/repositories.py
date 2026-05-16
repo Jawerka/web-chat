@@ -178,13 +178,13 @@ class MediaAssetRepository:
         await self._session.delete(asset)
         await self._session.flush()
 
-    async def list_images_recent(self, limit: int = 200) -> list[MediaAsset]:
+    async def list_images_recent(self, limit: int = 1000) -> list[MediaAsset]:
         """Изображения из БД, новые первыми."""
         stmt = (
             select(MediaAsset)
             .where(MediaAsset.mime_type.like("image/%"))
             .order_by(MediaAsset.created_at.desc())
-            .limit(max(1, min(500, int(limit))))
+            .limit(max(1, int(limit)))
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

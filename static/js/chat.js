@@ -261,6 +261,7 @@ class ChatApp {
     this._globalSyncTimer = null;
     this._generationResumeActive = false;
     this._generationWatchRunning = false;
+    this._generationHadImages = false;
     this._conversationsFingerprint = '';
     this._messagesFingerprint = '';
     this._globalSyncIntervalMs = 3500;
@@ -428,7 +429,15 @@ class ChatApp {
       }
     });
     this.$.userInput.addEventListener('input', () => this.autoResizeInput());
-    requestAnimationFrame(() => this.autoResizeInput());
+    this.$.userInput.addEventListener('paste', () => {
+      requestAnimationFrame(() => this.autoResizeInput());
+    });
+    window.addEventListener('resize', () => this.autoResizeInput());
+    requestAnimationFrame(() => {
+      this.autoResizeInput();
+      this._syncComposerScrollPad();
+    });
+    this._initComposerScrollPadObserver();
     this.$.fileInput.addEventListener('change', (e) => this.uploadFiles(e.target.files));
     this.$.presetSelect?.addEventListener('change', () => this.onPresetSelectChange());
     this.$.chatPresetSelect?.addEventListener('change', () => this.onChatPresetChange());
@@ -477,7 +486,7 @@ class ChatApp {
         this.saveSettings();
       }
     });
-    this.$.chatHistory.addEventListener('scroll', () => this._onChatScroll());
+    this._chatHistoryScrollEl()?.addEventListener('scroll', () => this._onChatScroll());
     this.$.scrollBtn.addEventListener('click', () => this.scrollToBottom(true));
 
     let convTooltipResizeTimer;
@@ -1706,25 +1715,21 @@ class ChatApp {
   }
 
   _ensureAssistantStreamShell(el) {
-    if (!el.querySelector('.message-status')) {
-      el.insertAdjacentHTML('afterbegin', MESSAGE_STATUS_HTML);
-    }
     let bubble = el.querySelector('.message-bubble');
     if (!bubble) {
       bubble = document.createElement('div');
       bubble.className = 'message-bubble';
-      const images = el.querySelector('.message-images');
-      if (images) {
-        el.insertBefore(bubble, images);
-      } else {
-        el.appendChild(bubble);
-      }
     }
-    if (!el.querySelector('.message-images')) {
-      const grid = document.createElement('div');
-      grid.className = 'message-images';
-      el.appendChild(grid);
+    let images = el.querySelector('.message-images');
+    if (!images) {
+      images = document.createElement('div');
+      images.className = 'message-images';
     }
+    if (!el.querySelector('.message-status')) {
+      el.insertAdjacentHTML('beforeend', MESSAGE_STATUS_HTML);
+    }
+    const status = el.querySelector('.message-status');
+    el.append(bubble, images, status);
     return el;
   }
 
@@ -1807,6 +1812,7 @@ class ChatApp {
     const text = this.$.userInput.value.trim();
     if (!text || this.streaming) return;
     if (!this.socket) return;
+    this._generationHadImages = false;
 
     if (this.editingMessageId) {
       await this._submitEdit(text);
@@ -1888,9 +1894,9 @@ class ChatApp {
     const el = document.createElement('div');
     el.className = 'chat-message assistant streaming waiting';
     el.innerHTML = `
-      ${MESSAGE_STATUS_HTML}
       <div class="message-bubble"></div>
       <div class="message-images"></div>
+      ${MESSAGE_STATUS_HTML}
     `;
     const content = document.createElement('div');
     content.className = 'message-content';
@@ -1935,6 +1941,7 @@ class ChatApp {
     if (!this._ensureStreamTarget() || !this.streamImagesEl) return;
     const added = this._appendImagesToGrid(this.streamImagesEl, urls);
     if (added > 0) {
+      this._generationHadImages = true;
       this.hideProgress();
       this.streamEl?.classList.add('has-images');
     }
@@ -1942,6 +1949,9 @@ class ChatApp {
   }
 
   onToolStart(name) {
+    if (name === 'generate_image' || name === 'img2img' || name === 'upscale_images') {
+      this._generationHadImages = true;
+    }
     this._ensureStreamTarget();
     this.showProgress(TOOL_PROGRESS_LABELS[name] || `Выполняется: ${name}`);
     this.scrollToBottom();
@@ -2228,6 +2238,10 @@ class ChatApp {
     this._clearGenerationSyncTimer();
     this._generationResumeActive = false;
     this.hideProgress();
+    if (this._generationHadImages) {
+      this._playGenerationDoneSound();
+    }
+    this._generationHadImages = false;
     if (this.streamRow && assistantMessageId) {
       this.streamRow.dataset.messageId = assistantMessageId;
       this._attachActions(this.streamRow, 'assistant');
@@ -2603,6 +2617,8 @@ class ChatApp {
 
   _createImage(url) {
     const resolved = resolveMediaUrl(url);
+    const frame = document.createElement('div');
+    frame.className = 'message-image-frame';
     const img = document.createElement('img');
     img.src = resolved;
     img.dataset.url = resolved;
@@ -2610,7 +2626,8 @@ class ChatApp {
     img.loading = 'lazy';
     img.addEventListener('click', () => this.openLightbox(resolved));
     img.addEventListener('load', () => this.scrollToBottom(), { once: true });
-    return img;
+    frame.appendChild(img);
+    return frame;
   }
 
   _bindImageClicks(container) {
@@ -2853,7 +2870,12 @@ class ChatApp {
     }
   }
 
-  _distanceFromBottom(el = this.$.chatHistory) {
+  _chatHistoryScrollEl() {
+    return this.$.chatHistory?.querySelector('.chat-history-scroll') ?? this.$.chatHistory;
+  }
+
+  _distanceFromBottom(el = this._chatHistoryScrollEl()) {
+    if (!el) return 0;
     return el.scrollHeight - el.scrollTop - el.clientHeight;
   }
 
@@ -2868,7 +2890,8 @@ class ChatApp {
   }
 
   scrollToBottom(force = false) {
-    const el = this.$.chatHistory;
+    const el = this._chatHistoryScrollEl();
+    if (!el) return;
     if (force) {
       this._scrollStuckToBottom = true;
     }
@@ -2879,7 +2902,7 @@ class ChatApp {
   }
 
   _updateScrollBtn() {
-    const el = this.$.chatHistory;
+    const el = this._chatHistoryScrollEl();
     const dist = this._distanceFromBottom(el);
     const show = dist > SCROLL_STICKY_PX;
     this.$.scrollBtn.classList.toggle('visible', show);
@@ -3060,29 +3083,88 @@ class ChatApp {
     }
   }
 
+  _initComposerScrollPadObserver() {
+    const composer = this.$.chatComposer;
+    if (!composer || typeof ResizeObserver === 'undefined') return;
+    this._composerResizeObserver = new ResizeObserver(() => this._syncComposerScrollPad());
+    this._composerResizeObserver.observe(composer);
+  }
+
+  _syncComposerScrollPad() {
+    const composer = this.$.chatComposer;
+    if (!composer) return;
+    const fadeEl = this.$.chatHistory?.querySelector(':scope > .chat-composer-edge-fade');
+    const fadeH = fadeEl?.offsetHeight || 100;
+    const pad = Math.max(120, composer.offsetHeight + fadeH + 20);
+    document.documentElement.style.setProperty('--composer-scroll-pad', `${pad}px`);
+  }
+
+  _playGenerationDoneSound() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.07, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.28);
+      osc.onended = () => ctx.close();
+    } catch {
+      /* звук опционален */
+    }
+  }
+
+  _chatInputMetrics() {
+    const ta = this.$.userInput;
+    const box = ta?.closest('.chat-input-container');
+    const taStyle = ta ? getComputedStyle(ta) : null;
+    const boxStyle = box ? getComputedStyle(box) : null;
+    const lineHeight = parseFloat(taStyle?.lineHeight) || 20;
+    const padY = parseFloat(taStyle?.paddingTop || 0) + parseFloat(taStyle?.paddingBottom || 0);
+    const borderY = parseFloat(taStyle?.borderTopWidth || 0) + parseFloat(taStyle?.borderBottomWidth || 0);
+    const maxRows = parseInt(boxStyle?.getPropertyValue('--chat-input-max-rows'), 10) || 10;
+    const minH = lineHeight + padY + borderY;
+    const maxH = lineHeight * maxRows + padY + borderY;
+    return { lineHeight, padY, borderY, maxRows, minH, maxH };
+  }
+
   autoResizeInput() {
     const ta = this.$.userInput;
     if (!ta) return;
 
-    const style = getComputedStyle(ta);
-    const lineHeight = parseFloat(style.lineHeight) || 20;
-    const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-    const borderY = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-    const maxRows = 7;
-    const minH = Math.max(
-      parseFloat(style.minHeight) || 0,
-      lineHeight + padY + borderY,
-    );
-    const maxH = lineHeight * maxRows + padY + borderY;
+    const { lineHeight, padY, borderY, maxRows, minH, maxH } = this._chatInputMetrics();
+
+    if (!ta.value) {
+      ta.style.height = `${minH}px`;
+      ta.rows = 1;
+      ta.classList.remove('chat-input--scrollable');
+      this._syncComposerScrollPad();
+      return;
+    }
 
     ta.style.height = '0px';
     const contentH = ta.scrollHeight;
-    const next = Math.min(Math.max(contentH, minH), maxH);
-    ta.style.height = `${next}px`;
-    ta.classList.toggle('chat-input--scrollable', contentH > maxH + 1);
-    if (contentH > maxH) {
+    const nextH = Math.min(Math.max(contentH, minH), maxH);
+    ta.style.height = `${nextH}px`;
+
+    const rows = Math.min(
+      maxRows,
+      Math.max(1, Math.ceil((nextH - padY - borderY) / lineHeight)),
+    );
+    if (ta.rows !== rows) ta.rows = rows;
+
+    const overflow = contentH > maxH + 1;
+    ta.classList.toggle('chat-input--scrollable', overflow);
+    if (overflow) {
       ta.scrollTop = ta.scrollHeight;
     }
+    this._syncComposerScrollPad();
   }
 
   _loadTheme() {

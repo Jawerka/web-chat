@@ -3,7 +3,7 @@
  */
 
 const POLL_MS = 5000;
-const GALLERY_LIMIT = 200;
+const GALLERY_LIMIT = 1000;
 /** См. chat.js — восстановление вложений после перехода в чат */
 const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
 const DEFAULT_CONV_TITLE = 'Новая беседа';

@@ -198,28 +198,19 @@ class ToolExecutor:
     async def _img2img(self, arguments: dict[str, Any]) -> ToolResult:
         """img2img с разрешением init_image из asset, upload, generated или attachment_id.
 
-        При вызове инструмента LLM может вернуть некорректный ``init_image_url`` или вовсе его не указать.
-        Для надёжного fallback мы сначала пытаемся получить исходное изображение из сообщения,
-        которое инициировало текущий ход (``source_user_message_id``). Если удалось загрузить
-        изображение, переопределяем соответствующие аргументы и логируем предупреждение.
+        Если задан ``source_user_message_id``, исходник сначала берётся с сервера из этого
+        сообщения (вложения / parts), перезаписывая неверный init от LLM.
         """
         args = dict(arguments)
-        # Принудительный fallback: попытаться взять init из оригинального user‑сообщения
-        init_data = await self._resolve_user_message_init()
-        if init_data is not None:
-            # init_data – (bytes, filename). Мы сохраняем его во временный файл и передаём путь.
-            # Для простоты используем уже существующий механизм: сохраняем в /tmp и передаём путь.
-            import tempfile, os
-            data, filename = init_data
-            tmp_path = os.path.join(tempfile.gettempdir(), f"init_{filename}")
-            with open(tmp_path, "wb") as f:
-                f.write(data)
-            # Переопределяем аргументы, отдавая путь как init_image_url (будет обработан ниже)
-            args["init_image_url"] = tmp_path
-            logger.warning("img2img: init_image взят из user‑сообщения fallback, переопределён аргумент init_image_url")
-        # Далее обычная обработка аргументов
         init_url = args.pop("init_image_url", None)
         raw_att = args.pop("attachment_id", None)
+        logger.info(
+            "img2img args: init_image_url=%r attachment_id=%r source_user=%s",
+            init_url,
+            raw_att,
+            self._source_user_message_id,
+        )
+
         att_uuid: uuid.UUID | None = None
         if raw_att:
             try:
@@ -233,8 +224,29 @@ class ToolExecutor:
         init_bytes: bytes | None = None
         init_name = ""
         load_error: str | None = None
+        llm_had_init = bool(init_url or att_uuid is not None)
 
-        if init_url or att_uuid is not None:
+        if self._source_user_message_id is not None:
+            server_init = await self._resolve_user_message_init()
+            if server_init is not None:
+                init_bytes, init_name = server_init
+                if llm_had_init:
+                    logger.warning(
+                        "img2img: init взят из user-сообщения %s (%s), "
+                        "аргументы LLM проигнорированы (url=%r att=%r)",
+                        self._source_user_message_id,
+                        init_name,
+                        init_url,
+                        raw_att,
+                    )
+                else:
+                    logger.info(
+                        "img2img: init взят из user-сообщения %s (%s)",
+                        self._source_user_message_id,
+                        init_name,
+                    )
+
+        if init_bytes is None and llm_had_init:
             try:
                 init_bytes, init_name = await self._load_init_image(
                     str(init_url) if init_url else None,
@@ -254,9 +266,9 @@ class ToolExecutor:
                     self._source_user_message_id,
                     init_name,
                 )
-            elif not init_url and att_uuid is None:
+            elif not llm_had_init:
                 return ToolResult(
-                    content="Ошибка: укажите init_image_url (URL из чата) или attachment_id",
+                    content="Ошибка: init image not found — укажите init_image_url или прикрепите изображение",
                     image_urls=[],
                 )
             else:
