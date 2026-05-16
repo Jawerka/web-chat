@@ -36,14 +36,16 @@ async def test_run_turn_with_tool_call() -> None:
         side_effect=[
             LLMCompletion(
                 content=None,
-                tool_calls=[{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "generate_image",
-                        "arguments": '{"prompt": "cat"}',
-                    },
-                }],
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "generate_image",
+                            "arguments": '{"prompt": "cat"}',
+                        },
+                    }
+                ],
                 finish_reason="tool_calls",
             ),
             LLMCompletion(

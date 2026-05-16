@@ -17,6 +17,7 @@ from app.db.repositories import AttachmentRepository, ConversationRepository
 from app.integrations.document_extractor import extract_text_from_file, truncate_text
 from app.integrations.media_utils import (
     UPLOAD_ROOT,
+    asset_llm_media_url,
     asset_media_url,
     is_image_mime,
     safe_filename,
@@ -24,16 +25,18 @@ from app.integrations.media_utils import (
 )
 from app.services.media_service import MediaService
 
-ALLOWED_MIMES = frozenset({
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "image/gif",
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "text/plain",
-    "text/csv",
-})
+ALLOWED_MIMES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+        "text/csv",
+    }
+)
 
 # Расширения для уточнения MIME, если браузер прислал application/octet-stream
 _MIME_BY_EXT: dict[str, str] = {
@@ -178,7 +181,7 @@ class AttachmentService:
     def llm_image_url(attachment: Attachment) -> str:
         """Полный URL для LLM vision API."""
         if attachment.media_asset_id is not None:
-            return asset_media_url(attachment.media_asset_id, absolute=True)
+            return asset_llm_media_url(attachment.media_asset_id, absolute=True)
         filename = Path(attachment.storage_path).name
         return upload_media_url(attachment.id, filename)
 

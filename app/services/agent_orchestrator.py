@@ -11,23 +11,23 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from copy import deepcopy
-
 from app.config import settings
-from app.integrations.media_utils import absolute_media_url
 from app.db.models import Conversation, Message, MessageRole
 from app.db.repositories import (
     AttachmentRepository,
     ConversationRepository,
     MessageRepository,
     PresetRepository,
+    PromptMacroRepository,
 )
 from app.integrations.llm_client import LLMClient
+from app.integrations.media_utils import rewrite_image_url_for_llm
 from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.services.attachment_service import AttachmentService
 from app.services.conversation_title_service import maybe_generate_conversation_title
@@ -36,6 +36,9 @@ from app.services.message_builder import (
     finalize_assistant_text,
     history_to_llm_messages,
 )
+from app.services.prompt_macro_service import alias_map_from_macros, expand_parts_for_llm
+from app.api.ws_manager import manager
+from app.services.streaming_draft import AssistantStreamDraft
 
 logger = logging.getLogger(__name__)
 
@@ -135,23 +138,35 @@ class AgentOrchestrator:
         media_url_rewrites: dict[str, str],
         tool_calls_meta: list[dict[str, Any]],
         overflow_note: str | None = None,
+        existing_message: Message | None = None,
     ) -> Message:
         body = content_from_llm or ""
         if overflow_note:
             body = f"{overflow_note}\n\n{body}".strip() if body else overflow_note
         text = self._finalize_assistant_text(body, media_url_rewrites)
+        content_json = {
+            "images": all_image_urls,
+            "image_asset_ids": all_image_asset_ids,
+            "tool_calls": tool_calls_meta,
+            "reasoning": None,
+        }
+        if existing_message is not None:
+            await msg_repo.update_content(
+                existing_message,
+                content_text=text,
+                content_json=content_json,
+            )
+            await conv_repo.touch(conversation)
+            manager.clear_streaming_message(conversation.id)
+            return existing_message
         message = await msg_repo.create(
             conversation_id=conversation.id,
             role=MessageRole.ASSISTANT,
             content_text=text,
-            content_json={
-                "images": all_image_urls,
-                "image_asset_ids": all_image_asset_ids,
-                "tool_calls": tool_calls_meta,
-                "reasoning": None,
-            },
+            content_json=content_json,
         )
         await conv_repo.touch(conversation)
+        manager.clear_streaming_message(conversation.id)
         return message
 
     async def _emit_turn_done(
@@ -223,12 +238,14 @@ class AgentOrchestrator:
 
     @staticmethod
     def _llm_user_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Копия parts с абсолютными URL для vision API."""
+        """Копия parts с URL для vision API (/media/asset/{id}/llm при необходимости)."""
         llm_parts = deepcopy(parts)
         for part in llm_parts:
             if part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
                 part["image_url"] = dict(part["image_url"])
-                part["image_url"]["url"] = absolute_media_url(part["image_url"]["url"])
+                part["image_url"]["url"] = rewrite_image_url_for_llm(
+                    part["image_url"]["url"],
+                )
         return llm_parts
 
     async def run_conversation_turn(
@@ -287,6 +304,9 @@ class AgentOrchestrator:
             user_message.id,
         )
 
+        macro_repo = PromptMacroRepository(session)
+        alias_to_body = alias_map_from_macros(await macro_repo.list_all())
+
         history = await msg_repo.list_for_llm(
             conversation_id,
             settings.max_history_messages,
@@ -296,23 +316,34 @@ class AgentOrchestrator:
         llm_messages: list[dict[str, Any]] = []
         if system_prompt:
             llm_messages.append({"role": "system", "content": system_prompt})
-        llm_messages.extend(history_to_llm_messages(history))
-        llm_messages.append({
-            "role": "user",
-            "content": self._llm_user_parts(user_parts),
-        })
+        llm_messages.extend(history_to_llm_messages(history, alias_to_body=alias_to_body))
+        llm_messages.append(
+            {
+                "role": "user",
+                "content": self._llm_user_parts(
+                    expand_parts_for_llm(user_parts, alias_to_body),
+                ),
+            }
+        )
 
         all_image_urls: list[str] = []
         all_image_asset_ids: list[str] = []
         media_url_rewrites: dict[str, str] = {}
         tool_calls_meta: list[dict[str, Any]] = []
+        stream_draft = AssistantStreamDraft(
+            session,
+            msg_repo,
+            conv_repo,
+            conversation,
+            emit,
+        )
 
         for round_idx in range(settings.max_tool_rounds):
             if cancel_event.is_set():
                 raise TurnCancelled("Генерация отменена")
 
             async def _on_delta(chunk: str) -> None:
-                await emit("text_delta", {"content": chunk})
+                await stream_draft.on_delta(chunk)
 
             completion = await self._llm.complete_with_stream(
                 llm_messages,
@@ -325,11 +356,15 @@ class AgentOrchestrator:
                 raise TurnCancelled("Генерация отменена")
 
             if completion.tool_calls:
-                llm_messages.append({
-                    "role": "assistant",
-                    "content": completion.content,
-                    "tool_calls": completion.tool_calls,
-                })
+                first_tool = completion.tool_calls[0]["function"]["name"]
+                await stream_draft.enter_tool_round(active_tool=first_tool)
+                llm_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": completion.content,
+                        "tool_calls": completion.tool_calls,
+                    }
+                )
                 tool_calls_meta.extend(completion.tool_calls)
 
                 for tc in completion.tool_calls:
@@ -337,6 +372,7 @@ class AgentOrchestrator:
                     name = fn["name"]
                     args = self._llm.parse_tool_arguments(fn["arguments"])
 
+                    await stream_draft.set_active_tool(name)
                     await emit("tool_start", {"name": name, "arguments": args})
                     logger.info("tool_start: %s", name)
 
@@ -360,6 +396,10 @@ class AgentOrchestrator:
                         all_image_asset_ids,
                         media_url_rewrites,
                     )
+                    await stream_draft.add_images(
+                        result.image_urls,
+                        result.image_asset_ids,
+                    )
                     for url in result.image_urls:
                         await emit("image", {"urls": [url]})
 
@@ -368,15 +408,18 @@ class AgentOrchestrator:
                         {"name": name, "summary": result_content[:200]},
                     )
 
-                    llm_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result_content,
-                    })
+                    llm_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result_content,
+                        }
+                    )
 
                 logger.info("Раунд tools %d/%d", round_idx + 1, settings.max_tool_rounds)
                 continue
 
+            await stream_draft.flush()
             assistant_message = await self._persist_assistant_message(
                 msg_repo=msg_repo,
                 conv_repo=conv_repo,
@@ -386,6 +429,7 @@ class AgentOrchestrator:
                 all_image_asset_ids=all_image_asset_ids,
                 media_url_rewrites=media_url_rewrites,
                 tool_calls_meta=tool_calls_meta,
+                existing_message=stream_draft.message,
             )
             await self._emit_turn_done(
                 session,
@@ -417,9 +461,7 @@ class AgentOrchestrator:
         )
         if partial is not None:
             return partial
-        raise ToolLoopExceeded(
-            f"Превышен лимит вызовов инструментов ({settings.max_tool_rounds})"
-        )
+        raise ToolLoopExceeded(f"Превышен лимит вызовов инструментов ({settings.max_tool_rounds})")
 
     async def run_regenerate_turn(
         self,
@@ -467,6 +509,9 @@ class AgentOrchestrator:
             user_message.id,
         )
 
+        macro_repo = PromptMacroRepository(session)
+        alias_to_body = alias_map_from_macros(await macro_repo.list_all())
+
         history = await msg_repo.list_for_llm(
             conversation_id,
             settings.max_history_messages,
@@ -476,26 +521,44 @@ class AgentOrchestrator:
         llm_messages: list[dict[str, Any]] = []
         if system_prompt:
             llm_messages.append({"role": "system", "content": system_prompt})
-        llm_messages.extend(history_to_llm_messages(history))
+        llm_messages.extend(history_to_llm_messages(history, alias_to_body=alias_to_body))
         if isinstance(user_parts, list):
-            llm_messages.append({
-                "role": "user",
-                "content": self._llm_user_parts(user_parts),
-            })
+            llm_messages.append(
+                {
+                    "role": "user",
+                    "content": self._llm_user_parts(
+                        expand_parts_for_llm(user_parts, alias_to_body),
+                    ),
+                }
+            )
         else:
-            llm_messages.append({"role": "user", "content": user_parts})
+            from app.services.prompt_macro_service import expand_macro_text
+
+            llm_messages.append(
+                {
+                    "role": "user",
+                    "content": expand_macro_text(str(user_parts), alias_to_body),
+                }
+            )
 
         all_image_urls: list[str] = []
         all_image_asset_ids: list[str] = []
         media_url_rewrites: dict[str, str] = {}
         tool_calls_meta: list[dict[str, Any]] = []
+        stream_draft = AssistantStreamDraft(
+            session,
+            msg_repo,
+            conv_repo,
+            conversation,
+            emit,
+        )
 
         for round_idx in range(settings.max_tool_rounds):
             if cancel_event.is_set():
                 raise TurnCancelled("Генерация отменена")
 
             async def _on_delta(chunk: str) -> None:
-                await emit("text_delta", {"content": chunk})
+                await stream_draft.on_delta(chunk)
 
             completion = await self._llm.complete_with_stream(
                 llm_messages,
@@ -508,17 +571,22 @@ class AgentOrchestrator:
                 raise TurnCancelled("Генерация отменена")
 
             if completion.tool_calls:
-                llm_messages.append({
-                    "role": "assistant",
-                    "content": completion.content,
-                    "tool_calls": completion.tool_calls,
-                })
+                first_tool = completion.tool_calls[0]["function"]["name"]
+                await stream_draft.enter_tool_round(active_tool=first_tool)
+                llm_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": completion.content,
+                        "tool_calls": completion.tool_calls,
+                    }
+                )
                 tool_calls_meta.extend(completion.tool_calls)
 
                 for tc in completion.tool_calls:
                     fn = tc["function"]
                     name = fn["name"]
                     args = self._llm.parse_tool_arguments(fn["arguments"])
+                    await stream_draft.set_active_tool(name)
                     await emit("tool_start", {"name": name, "arguments": args})
                     logger.info("tool_start: %s", name)
                     try:
@@ -540,20 +608,27 @@ class AgentOrchestrator:
                         all_image_asset_ids,
                         media_url_rewrites,
                     )
+                    await stream_draft.add_images(
+                        result.image_urls,
+                        result.image_asset_ids,
+                    )
                     for url in result.image_urls:
                         await emit("image", {"urls": [url]})
                     await emit(
                         "tool_done",
                         {"name": name, "summary": result_content[:200]},
                     )
-                    llm_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result_content,
-                    })
+                    llm_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result_content,
+                        }
+                    )
                 logger.info("Раунд tools %d/%d", round_idx + 1, settings.max_tool_rounds)
                 continue
 
+            await stream_draft.flush()
             assistant_message = await self._persist_assistant_message(
                 msg_repo=msg_repo,
                 conv_repo=conv_repo,
@@ -563,6 +638,7 @@ class AgentOrchestrator:
                 all_image_asset_ids=all_image_asset_ids,
                 media_url_rewrites=media_url_rewrites,
                 tool_calls_meta=tool_calls_meta,
+                existing_message=stream_draft.message,
             )
             await self._emit_turn_done(
                 session,
@@ -594,9 +670,7 @@ class AgentOrchestrator:
         )
         if partial is not None:
             return partial
-        raise ToolLoopExceeded(
-            f"Превышен лимит вызовов инструментов ({settings.max_tool_rounds})"
-        )
+        raise ToolLoopExceeded(f"Превышен лимит вызовов инструментов ({settings.max_tool_rounds})")
 
     async def run_turn(
         self,
@@ -621,11 +695,13 @@ class AgentOrchestrator:
             completion = await self._llm.complete(messages)
 
             if completion.tool_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": completion.content,
-                    "tool_calls": completion.tool_calls,
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": completion.content,
+                        "tool_calls": completion.tool_calls,
+                    }
+                )
                 for tc in completion.tool_calls:
                     fn = tc["function"]
                     name = fn["name"]
@@ -646,11 +722,13 @@ class AgentOrchestrator:
                             await emit("image", {"urls": [url]})
                     if emit:
                         await emit("tool_done", {"name": name, "summary": result_content[:200]})
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result_content,
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result_content,
+                        }
+                    )
                 continue
 
             text = finalize_assistant_text(completion.content)
@@ -666,6 +744,4 @@ class AgentOrchestrator:
                 await emit("text_delta", {"content": text})
                 await emit("done", {})
             return AgentTurnResult(assistant_text=text, image_urls=all_image_urls)
-        raise ToolLoopExceeded(
-            f"Превышен лимит вызовов инструментов ({settings.max_tool_rounds})"
-        )
+        raise ToolLoopExceeded(f"Превышен лимит вызовов инструментов ({settings.max_tool_rounds})")

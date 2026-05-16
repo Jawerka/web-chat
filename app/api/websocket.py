@@ -12,9 +12,10 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.api.ws_manager import manager
+from app.db import session as db_session
+from app.services.generation_state import get_generation_state
 from app.db.models import MessageRole
 from app.db.repositories import MessageRepository
-from app.db import session as db_session
 from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import IntegrationOverrides, parse_integration_overrides
 from app.services.agent_orchestrator import (
@@ -60,10 +61,13 @@ async def _run_turn_task(
             await session.commit()
         except TurnCancelled:
             await session.rollback()
-            await emit("error", {
-                "message": "Генерация отменена",
-                "code": "cancelled",
-            })
+            await emit(
+                "error",
+                {
+                    "message": "Генерация отменена",
+                    "code": "cancelled",
+                },
+            )
         except ToolLoopExceeded as exc:
             await session.rollback()
             await emit("error", {"message": str(exc), "code": "tool_loop"})
@@ -76,10 +80,13 @@ async def _run_turn_task(
         except Exception:
             await session.rollback()
             logger.exception("Ошибка turn беседы %s", conversation_id)
-            await emit("error", {
-                "message": "Внутренняя ошибка сервера",
-                "code": "internal",
-            })
+            await emit(
+                "error",
+                {
+                    "message": "Внутренняя ошибка сервера",
+                    "code": "internal",
+                },
+            )
 
 
 async def _run_regenerate_task(
@@ -107,19 +114,25 @@ async def _run_regenerate_task(
                 message.created_at,
             )
             if user_message is None:
-                await emit("error", {
-                    "message": "Нет сообщения пользователя для перегенерации",
-                    "code": "validation",
-                })
+                await emit(
+                    "error",
+                    {
+                        "message": "Нет сообщения пользователя для перегенерации",
+                        "code": "validation",
+                    },
+                )
                 return
             user_message_id = user_message.id
         elif message.role == MessageRole.USER:
             user_message_id = message.id
         else:
-            await emit("error", {
-                "message": "Нельзя перегенерировать это сообщение",
-                "code": "validation",
-            })
+            await emit(
+                "error",
+                {
+                    "message": "Нельзя перегенерировать это сообщение",
+                    "code": "validation",
+                },
+            )
             return
 
         llm = LLMClient(base_url=integration.llm_base_url if integration else None)
@@ -139,10 +152,13 @@ async def _run_regenerate_task(
             await session.commit()
         except TurnCancelled:
             await session.rollback()
-            await emit("error", {
-                "message": "Генерация отменена",
-                "code": "cancelled",
-            })
+            await emit(
+                "error",
+                {
+                    "message": "Генерация отменена",
+                    "code": "cancelled",
+                },
+            )
         except ToolLoopExceeded as exc:
             await session.rollback()
             await emit("error", {"message": str(exc), "code": "tool_loop"})
@@ -155,10 +171,13 @@ async def _run_regenerate_task(
         except Exception:
             await session.rollback()
             logger.exception("Ошибка regenerate беседы %s", conversation_id)
-            await emit("error", {
-                "message": "Внутренняя ошибка сервера",
-                "code": "internal",
-            })
+            await emit(
+                "error",
+                {
+                    "message": "Внутренняя ошибка сервера",
+                    "code": "internal",
+                },
+            )
 
 
 def _schedule_turn_task(
@@ -211,10 +230,15 @@ def _start_background_turn(conversation_id: uuid.UUID, coro) -> None:
 async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
     """Интерактивный чат по WebSocket."""
     await manager.connect(conversation_id, websocket)
-    await websocket.send_json({
-        "type": "connected",
-        "conversation_id": str(conversation_id),
-    })
+    async with db_session.async_session_factory() as session:
+        gen_state = await get_generation_state(session, conversation_id)
+    await websocket.send_json(
+        {
+            "type": "connected",
+            "conversation_id": str(conversation_id),
+            **gen_state,
+        }
+    )
 
     try:
         while True:
@@ -231,20 +255,24 @@ async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> No
 
             if msg_type == "user_message":
                 if manager.is_busy(conversation_id):
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Уже выполняется генерация",
-                        "code": "busy",
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Уже выполняется генерация",
+                            "code": "busy",
+                        }
+                    )
                     continue
 
                 user_text = (data.get("text") or "").strip()
                 if not user_text:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Пустое сообщение",
-                        "code": "validation",
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Пустое сообщение",
+                            "code": "validation",
+                        }
+                    )
                     continue
 
                 raw_ids = data.get("attachment_ids") or []
@@ -269,20 +297,24 @@ async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> No
 
             if msg_type == "regenerate":
                 if manager.is_busy(conversation_id):
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Уже выполняется генерация",
-                        "code": "busy",
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Уже выполняется генерация",
+                            "code": "busy",
+                        }
+                    )
                     continue
                 try:
                     regen_id = uuid.UUID(str(data.get("message_id", "")))
                 except ValueError:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Некорректный message_id",
-                        "code": "validation",
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Некорректный message_id",
+                            "code": "validation",
+                        }
+                    )
                     continue
                 integration = parse_integration_overrides(data)
                 _start_background_turn(
@@ -291,16 +323,16 @@ async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> No
                 )
                 continue
 
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Неизвестный тип сообщения: {msg_type}",
-                "code": "unknown_type",
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": f"Неизвестный тип сообщения: {msg_type}",
+                    "code": "unknown_type",
+                }
+            )
 
     except WebSocketDisconnect:
-        no_clients_left = manager.disconnect(conversation_id, websocket)
-        if no_clients_left:
-            manager.cancel_turn(conversation_id)
+        manager.disconnect(conversation_id, websocket)
     except Exception:
         manager.disconnect(conversation_id, websocket)
         logger.exception("WS ошибка беседы %s", conversation_id)

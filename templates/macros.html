@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} — web-chat</title>
+  <link rel="stylesheet" href="/static/css/chat.css">
+  <script>
+    (function () {
+      var stored = localStorage.getItem('webchat_theme');
+      var dark = stored === 'dark'
+        || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (dark) document.documentElement.classList.add('gallery-dark');
+    })();
+  </script>
+</head>
+<body class="macros-body styled-scrollbar">
+  <script>
+    if (document.documentElement.classList.contains('gallery-dark')) {
+      document.body.classList.add('dark-theme');
+    }
+    window.addEventListener('storage', function (e) {
+      if (e.key !== 'webchat_theme') return;
+      var dark = e.newValue === 'dark';
+      document.body.classList.toggle('dark-theme', dark);
+      document.documentElement.classList.toggle('gallery-dark', dark);
+    });
+  </script>
+
+  <div class="macros-page">
+    <header class="macros-page-header">
+      <div class="macros-page-header-text">
+        <h1>Быстрые промпты</h1>
+        <p class="macros-page-subtitle">
+          <span id="macros-total-count">0</span> записей · в чате <code>@alias</code> разворачивается в полный текст для модели
+        </p>
+      </div>
+      <div class="macros-page-header-actions">
+        <span id="macros-page-status" class="macros-page-status" role="status" aria-live="polite"></span>
+        <button type="button" class="btn btn-primary btn-sm" id="macros-add-row">+ Новая строка</button>
+        <a href="/" class="btn btn-secondary btn-sm">← К чату</a>
+      </div>
+    </header>
+
+    <div class="macros-table-wrap styled-scrollbar">
+      <table class="macros-table" id="macros-table">
+        <thead>
+          <tr>
+            <th class="col-alias">@ Alias</th>
+            <th class="col-label">Название</th>
+            <th class="col-body">Промпт (полный текст)</th>
+            <th class="col-order">№</th>
+            <th class="col-actions" aria-label="Действия"></th>
+          </tr>
+        </thead>
+        <tbody id="macros-table-body"></tbody>
+      </table>
+      <p id="macros-sheet-empty" class="macros-sheet-empty hidden">На этом листе пока нет записей — нажмите «Новая строка»</p>
+    </div>
+
+    <nav class="macros-sheet-bar" aria-label="Категории (листы)">
+      <button type="button" class="macros-sheet-tab active" data-category="character">Персонажи</button>
+      <button type="button" class="macros-sheet-tab" data-category="environment">Окружение</button>
+      <button type="button" class="macros-sheet-tab" data-category="situation">Ситуации</button>
+      <button type="button" class="macros-sheet-tab" data-category="other">Прочее</button>
+    </nav>
+  </div>
+
+  <script src="/static/js/macros-page.js"></script>
+</body>
+</html>

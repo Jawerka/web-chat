@@ -24,6 +24,7 @@ async def test_llm_model_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GET /api/config/llm-model — resolved модель."""
+
     async def _resolve(self, override: str | None = None) -> str:
         return "test-model-v1"
 

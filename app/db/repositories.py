@@ -7,10 +7,19 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Attachment, Conversation, MediaAsset, Message, MessageRole, Preset
+from app.db.models import (
+    Attachment,
+    Conversation,
+    MediaAsset,
+    Message,
+    MessageRole,
+    Preset,
+    PromptMacro,
+    PromptMacroCategory,
+)
 
 
 class PresetRepository:
@@ -100,6 +109,24 @@ class ConversationRepository:
         await self._session.flush()
         await self._session.refresh(conversation)
         return conversation
+
+    async def search_by_title_words(
+        self,
+        words: list[str],
+        *,
+        limit: int = 20,
+    ) -> list[Conversation]:
+        """Беседы, в названии которых есть хотя бы одно из слов."""
+        if not words:
+            return []
+        filters = [func.lower(Conversation.title).contains(w.lower()) for w in words]
+        result = await self._session.execute(
+            select(Conversation)
+            .where(or_(*filters))
+            .order_by(Conversation.updated_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def update(
         self,
@@ -283,6 +310,67 @@ class MessageRepository:
         await self._session.refresh(message)
         return message
 
+    async def list_all_for_conversation(
+        self,
+        conversation_id: uuid.UUID,
+    ) -> list[Message]:
+        """Все сообщения беседы в хронологическом порядке."""
+        result = await self._session.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def search_in_content(
+        self,
+        words: list[str],
+        *,
+        conversation_id: uuid.UUID | None = None,
+        limit: int = 50,
+    ) -> list[tuple[Message, Conversation]]:
+        """Поиск по content_text: хотя бы одно слово совпало (user/assistant)."""
+        if not words:
+            return []
+
+        word_filters = [
+            func.lower(Message.content_text).contains(w.lower()) for w in words
+        ]
+        stmt = (
+            select(Message, Conversation)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.role.in_([MessageRole.USER, MessageRole.ASSISTANT]),
+                Message.content_text.is_not(None),
+                or_(*word_filters),
+            )
+        )
+        if conversation_id is not None:
+            stmt = stmt.where(Message.conversation_id == conversation_id)
+        stmt = stmt.order_by(Message.created_at.desc()).limit(limit)
+        result = await self._session.execute(stmt)
+        return list(result.all())
+
+    async def get_streaming_assistant_message(
+        self,
+        conversation_id: uuid.UUID,
+    ) -> Message | None:
+        """Последний черновик assistant с флагом streaming в content_json."""
+        result = await self._session.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.role == MessageRole.ASSISTANT,
+            )
+            .order_by(Message.created_at.desc())
+            .limit(15)
+        )
+        for message in result.scalars():
+            payload = message.content_json if isinstance(message.content_json, dict) else {}
+            if payload.get("streaming"):
+                return message
+        return None
+
     async def list_for_conversation(
         self,
         conversation_id: uuid.UUID,
@@ -403,3 +491,85 @@ class MessageRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+
+class PromptMacroRepository:
+    """CRUD быстрых промптов (@alias)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_all(
+        self,
+        *,
+        category: PromptMacroCategory | None = None,
+    ) -> list[PromptMacro]:
+        stmt = select(PromptMacro)
+        if category is not None:
+            stmt = stmt.where(PromptMacro.category == category)
+        stmt = stmt.order_by(
+            PromptMacro.category,
+            PromptMacro.sort_order,
+            PromptMacro.alias,
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_by_id(self, macro_id: uuid.UUID) -> PromptMacro | None:
+        return await self._session.get(PromptMacro, macro_id)
+
+    async def get_by_alias(self, alias: str) -> PromptMacro | None:
+        normalized = alias.strip().lstrip("@").lower()
+        result = await self._session.execute(
+            select(PromptMacro).where(PromptMacro.alias == normalized).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def create(
+        self,
+        *,
+        category: PromptMacroCategory,
+        alias: str,
+        body: str,
+        label: str | None = None,
+        sort_order: int = 0,
+    ) -> PromptMacro:
+        macro = PromptMacro(
+            category=category,
+            alias=alias,
+            body=body,
+            label=label,
+            sort_order=sort_order,
+        )
+        self._session.add(macro)
+        await self._session.flush()
+        await self._session.refresh(macro)
+        return macro
+
+    async def update(
+        self,
+        macro: PromptMacro,
+        *,
+        category: PromptMacroCategory | None = None,
+        alias: str | None = None,
+        body: str | None = None,
+        label: str | None = None,
+        sort_order: int | None = None,
+    ) -> PromptMacro:
+        if category is not None:
+            macro.category = category
+        if alias is not None:
+            macro.alias = alias
+        if body is not None:
+            macro.body = body
+        if label is not None:
+            macro.label = label
+        if sort_order is not None:
+            macro.sort_order = sort_order
+        await self._session.flush()
+        await self._session.refresh(macro)
+        return macro
+
+    async def delete(self, macro: PromptMacro) -> None:
+        await self._session.delete(macro)
+        await self._session.flush()

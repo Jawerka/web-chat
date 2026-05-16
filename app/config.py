@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     max_history_messages: int = 60
     max_extract_chars: int = 50000
 
+    # Vision: llama-server скачивает image_url по HTTP (лимит ~10 MB на стороне LLM)
+    llm_vision_max_bytes: int = 6 * 1024 * 1024
+    llm_vision_jpeg_quality: int = 88
+    llm_vision_max_side_px: int = 4096
+
     upload_retention_days: int = 7
     generated_retention_days: int = 30
 

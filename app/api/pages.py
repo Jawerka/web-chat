@@ -22,3 +22,13 @@ async def chat_page(request: Request) -> HTMLResponse:
         "chat.html",
         {"title": "web-chat"},
     )
+
+
+@router.get("/macros", response_class=HTMLResponse, include_in_schema=False)
+async def macros_page(request: Request) -> HTMLResponse:
+    """Страница быстрых промптов (@alias)."""
+    return templates.TemplateResponse(
+        request,
+        "macros.html",
+        {"title": "Быстрые промпты"},
+    )

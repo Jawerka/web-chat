@@ -7,12 +7,15 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ConversationCreate, ConversationOut, ConversationUpdate
+from app.services.generation_state import get_generation_state
 from app.constants import DEFAULT_CONVERSATION_TITLE
 from app.db.repositories import ConversationRepository, PresetRepository
 from app.db.session import get_db
+from app.services.conversation_export_service import build_conversation_markdown
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -53,6 +56,15 @@ async def create_conversation(
     conv_repo = ConversationRepository(db)
     conversation = await conv_repo.create(title=title, preset_id=preset.id)
     return ConversationOut.model_validate(conversation)
+
+
+@router.get("/{conversation_id}/generation-status")
+async def generation_status(
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Состояние фоновой генерации (для возобновления UI после перезагрузки)."""
+    return await get_generation_state(db, conversation_id)
 
 
 @router.get("/{conversation_id}", response_model=ConversationOut)
@@ -102,6 +114,31 @@ async def update_conversation(
         preset_id=body.preset_id,
     )
     return ConversationOut.model_validate(conversation)
+
+
+@router.get("/{conversation_id}/export")
+async def export_conversation(
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> PlainTextResponse:
+    """Скачать беседу как Markdown."""
+    markdown = await build_conversation_markdown(db, conversation_id)
+    if markdown is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Беседа не найдена",
+        )
+    conv_repo = ConversationRepository(db)
+    conversation = await conv_repo.get_by_id(conversation_id)
+    assert conversation is not None
+    filename = f"conversation-{conversation_id}.md"
+    return PlainTextResponse(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

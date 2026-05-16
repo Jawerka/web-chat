@@ -75,14 +75,16 @@ class LLMClient:
         tool_calls: list[dict[str, Any]] = []
         if message.tool_calls:
             for tc in message.tool_calls:
-                tool_calls.append({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                )
         return LLMCompletion(
             content=message.content,
             tool_calls=tool_calls,
@@ -135,7 +137,7 @@ class LLMClient:
                 choice.finish_reason,
             )
             for line in reversed(reasoning.strip().splitlines()):
-                line = line.strip().strip('"\'«»“”')
+                line = line.strip().strip("\"'«»“”")
                 if line and len(line) <= 200:
                     return line
         return ""

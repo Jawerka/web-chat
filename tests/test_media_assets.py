@@ -69,7 +69,6 @@ async def test_list_messages_imports_legacy_generated_to_db(
     client: AsyncClient,
 ) -> None:
     """GET /messages импортирует legacy /media/generated в БД и сохраняет asset URL."""
-    from pathlib import Path
 
     from app.db.models import MessageRole
     from app.db.repositories import ConversationRepository, MessageRepository

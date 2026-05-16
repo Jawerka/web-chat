@@ -24,10 +24,10 @@ async def upload_files(
     db: AsyncSession = Depends(get_db),
 ) -> UploadResponse:
     """
-  Загрузить файлы на сервер.
+    Загрузить файлы на сервер.
 
-  Поле формы: files (несколько файлов с тем же именем).
-  """
+    Поле формы: files (несколько файлов с тем же именем).
+    """
     if not files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

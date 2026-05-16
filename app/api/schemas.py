@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.db.models import PromptMacroCategory
+
 
 class ConversationCreate(BaseModel):
     """Тело запроса на создание беседы."""
@@ -71,6 +73,50 @@ class UploadResponse(BaseModel):
     """Ответ POST /api/upload."""
 
     attachments: list[AttachmentOut]
+
+
+class PromptMacroOut(BaseModel):
+    """Быстрый промпт (@alias)."""
+
+    id: UUID
+    category: str
+    category_label: str
+    alias: str
+    label: str | None
+    body: str
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PromptMacroCreate(BaseModel):
+    category: PromptMacroCategory = PromptMacroCategory.CHARACTER
+    alias: str = Field(..., min_length=1, max_length=64)
+    label: str | None = Field(None, max_length=120)
+    body: str = Field(..., min_length=1, max_length=50_000)
+    sort_order: int = 0
+
+
+class PromptMacroUpdate(BaseModel):
+    category: PromptMacroCategory | None = None
+    alias: str | None = Field(None, min_length=1, max_length=64)
+    label: str | None = Field(None, max_length=120)
+    body: str | None = Field(None, min_length=1, max_length=50_000)
+    sort_order: int | None = None
+
+
+class MessageSearchHit(BaseModel):
+    """Одно совпадение в поиске по истории."""
+
+    message_id: UUID | None = None
+    conversation_id: UUID
+    conversation_title: str
+    role: str
+    snippet: str
+    created_at: datetime
+    match_kind: str = "message"
 
 
 class MessageOut(BaseModel):

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.integrations.media_utils import resolve_trusted_generated_source
-from app.integrations.sd_tools import get_gallery, img2img
+from app.integrations.sd_tools import img2img
 from app.services.gallery_service import list_generated_images
 
 MINIMAL_PNG = base64.b64decode(

@@ -33,9 +33,7 @@ def install_log_buffer() -> None:
         return
     handler = RingBufferHandler()
     handler.setLevel(logging.INFO)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
-    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
     logging.getLogger().addHandler(handler)
     _HANDLER = handler
 

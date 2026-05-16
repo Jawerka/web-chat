@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-16):** этапы **1–11** выполнены. Автотесты: `pytest` (63 теста). Детали — [журнал прогресса](#журнал-прогресса).
+> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; часть v2 (export, search, inline title, production-скрипты). Автотесты: `pytest` (72 теста). Детали — [журнал прогресса](#журнал-прогресса).
 
 ---
 
@@ -983,15 +983,15 @@ Seed выполнять в `init_db()` только если таблица `pre
 
 ## 7. Чеклист перед production
 
-- [ ] С хоста web-chat пингуются LLM (.41), SD (.52).
-- [ ] `PUBLIC_BASE_URL` совпадает с URL в браузере пользователя.
-- [ ] `MCP_TIMEOUT > REQUEST_TIMEOUT`.
+- [ ] С хоста web-chat пингуются LLM (.41), SD (.52) — ручная проверка на стенде.
+- [ ] `PUBLIC_BASE_URL` совпадает с URL в браузере пользователя — см. `public_base_url` в `/api/health`.
+- [x] `MCP_TIMEOUT > REQUEST_TIMEOUT` — валидация при старте + `timeouts_ok` в `/api/health`.
 - [ ] SD запущен с `--api`.
 - [ ] (Опционально) WireGuard: туннель для удалённого доступа, не обязателен для первого релиза в LAN.
 - [ ] `.env` не в git; права на `data/` ограничены.
-- [ ] Резервное копирование `data/db/` (и при необходимости `data/generated/`).
-- [ ] systemd `Restart=on-failure` включён.
-- [ ] Логи ротируются (journald или logrotate).
+- [x] Резервное копирование — скрипт `deploy/backup-data.sh`.
+- [x] systemd `Restart=on-failure` — в `deploy/web-chat.service`.
+- [x] Логи ротируются — пример `deploy/logrotate-web-chat.conf` (или journald).
 
 ---
 
@@ -1544,13 +1544,13 @@ WantedBy=multi-user.target
 
 Не блокирует MVP:
 
-- [ ] Inline-редактирование заголовка беседы
-- [ ] Поиск по истории
-- [ ] Экспорт беседы в Markdown
+- [x] Inline-редактирование заголовка беседы (двойной клик в списке слева)
+- [x] Поиск по истории (`GET /api/search`, поле в сайдбаре)
+- [x] Экспорт беседы в Markdown (`GET /api/conversations/{id}/export`, кнопка в настройках)
 - [ ] PostgreSQL вместо SQLite
 - [ ] Basic auth за reverse proxy
 - [x] `img2img` + инструкции denoising (см. image-gen TODO)
-- [ ] Вкладка «Галерея»
+- [x] Вкладка «Галерея» (`/gallery`, ссылка в сайдбаре)
 - [ ] RAG / embeddings
 - [ ] Поддержка нескольких пользователей
 
@@ -1632,6 +1632,7 @@ MVP считается готовым после завершения **этап
 | 9 | [x] | 2026-05-15 | Модель LLM в UI, размер шрифта |
 | 10 | [x] | 2026-05-15 | retention cleanup + timer, pytest |
 | 11 | [x] | 2026-05-16 | img2img, upscale, get_gallery, /gallery |
+| v2 (часть) | [x] | 2026-05-16 | export MD, search, inline title, health config, backup/logrotate |
 
 ---
 

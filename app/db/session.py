@@ -16,10 +16,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
-from app.db.sqlite import configure_sqlite_engine
 from app.db.migrate import run_sqlite_migrations
 from app.db.models import Base, Preset
 from app.db.seed import PRESET_SEEDS
+from app.db.sqlite import configure_sqlite_engine
 from app.integrations.media_utils import ensure_media_directories
 
 logger = logging.getLogger(__name__)

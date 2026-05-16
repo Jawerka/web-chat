@@ -20,7 +20,6 @@ from PIL import Image as PILImage
 from PIL import PngImagePlugin
 
 from app.config import settings
-from app.integrations.runtime_config import resolve_sd_webui_url
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     generate_filename,
@@ -30,6 +29,7 @@ from app.integrations.media_utils import (
     resolve_trusted_generated_source,
     save_image_from_base64,
 )
+from app.integrations.runtime_config import resolve_sd_webui_url
 
 if TYPE_CHECKING:
     pass
@@ -177,11 +177,13 @@ def generate_image(
             except OSError as exc:
                 logger.warning("Метаданные PNG для %s: %s", filename, exc)
 
-        results.append({
-            "filename": filename,
-            "url": generated_media_url(filename),
-            "seed": current_seed,
-        })
+        results.append(
+            {
+                "filename": filename,
+                "url": generated_media_url(filename),
+                "seed": current_seed,
+            }
+        )
 
     lines = [
         f"Генерация завершена ({len(results)} изображений).",

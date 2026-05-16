@@ -60,7 +60,7 @@ def _normalize_title(raw: str) -> str:
     if ":" in text and len(text.split(":", 1)[-1].strip()) >= 3:
         text = text.split(":", 1)[-1].strip()
 
-    text = text.strip().strip('"\'«»“”')
+    text = text.strip().strip("\"'«»“”")
     text = re.sub(r"\s+", " ", text).strip(" .,-—–")
 
     words = [w for w in text.split() if w]

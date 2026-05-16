@@ -44,6 +44,15 @@ class MessageRole(enum.StrEnum):
     TOOL = "tool"
 
 
+class PromptMacroCategory(enum.StrEnum):
+    """Категория быстрого промпта (@alias)."""
+
+    CHARACTER = "character"
+    ENVIRONMENT = "environment"
+    SITUATION = "situation"
+    OTHER = "other"
+
+
 class Preset(Base):
     """Системный промпт и метаданные пресета."""
 
@@ -143,6 +152,36 @@ class MediaAsset(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utc_now,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class PromptMacro(Base):
+    """Быстрый промпт: @alias в чате → полный текст для LLM."""
+
+    __tablename__ = "prompt_macros"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    category: Mapped[PromptMacroCategory] = mapped_column(
+        Enum(PromptMacroCategory),
+        nullable=False,
+        index=True,
+    )
+    alias: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        onupdate=_utc_now,
         server_default=func.now(),
         nullable=False,
     )

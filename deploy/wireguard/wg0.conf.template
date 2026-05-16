@@ -1,0 +1,15 @@
+# Шаблон для /etc/wireguard/wg0.conf в LXC web-chat
+# Сгенерировать ключи: deploy/wireguard/setup-container.sh
+
+[Interface]
+Address = 10.88.0.44/24
+ListenPort = 51820
+PrivateKey = <CONTAINER_PRIVATE_KEY>
+PostUp = ip route add 192.168.88.0/24 dev eth0 metric 50 2>/dev/null || true
+PostDown = ip route del 192.168.88.0/24 dev eth0 metric 50 2>/dev/null || true
+
+[Peer]
+PublicKey = <HOST_WG0_PUBLIC_KEY>
+Endpoint = <HOST_LAN_IP>:51820
+AllowedIPs = 10.88.0.0/24
+PersistentKeepalive = 25

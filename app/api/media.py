@@ -36,6 +36,24 @@ async def serve_asset(
     )
 
 
+@router.get("/asset/{asset_id}/llm")
+async def serve_asset_llm(
+    asset_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Изображение для LLM vision (JPEG ≤ llm_vision_max_bytes при необходимости)."""
+    service = MediaService(db)
+    result = await service.get_llm_bytes(asset_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Изображение не найдено")
+    data, mime = result
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.get("/asset/{asset_id}/thumb")
 async def serve_asset_thumb(
     asset_id: uuid.UUID,

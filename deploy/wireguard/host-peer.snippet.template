@@ -1,0 +1,8 @@
+# Блок для /etc/wireguard/wg0.conf на Proxmox-хосте
+
+[Peer]
+# web-chat LXC
+PublicKey = <CONTAINER_PUBLIC_KEY>
+AllowedIPs = 10.88.0.44/32, 192.168.88.44/32
+Endpoint = 192.168.88.44:51820
+PersistentKeepalive = 25

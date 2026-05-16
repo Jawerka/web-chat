@@ -8,12 +8,13 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from app.db.models import Attachment, Message, MessageRole
+from app.integrations.media_utils import rewrite_image_url_for_llm
+from app.services.attachment_service import AttachmentService
+from app.services.prompt_macro_service import expand_macro_text, expand_parts_for_llm
+
 # Markdown-изображения в тексте ассистента не используем — картинки в content_json + UI.
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
-
-from app.db.models import Attachment, Message, MessageRole
-from app.integrations.media_utils import absolute_media_url
-from app.services.attachment_service import AttachmentService
 
 
 def build_user_content(
@@ -36,23 +37,37 @@ def build_user_content(
                 part["asset_id"] = str(att.media_asset_id)
             parts.append(part)
         elif att.extracted_text:
-            parts.append({
-                "type": "text",
-                "text": f"[Документ: {att.original_name}]\n{att.extracted_text}",
-            })
+            parts.append(
+                {
+                    "type": "text",
+                    "text": f"[Документ: {att.original_name}]\n{att.extracted_text}",
+                }
+            )
     return parts
 
 
-def message_to_llm_dict(message: Message) -> dict[str, Any]:
+def message_to_llm_dict(
+    message: Message,
+    *,
+    alias_to_body: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Преобразовать сохранённое сообщение в формат OpenAI API."""
+    macros = alias_to_body or {}
     if message.role == MessageRole.USER:
         if message.content_json and "parts" in message.content_json:
             parts = deepcopy(message.content_json["parts"])
+            if macros:
+                parts = expand_parts_for_llm(parts, macros)
             for part in parts:
                 if part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
-                    part["image_url"]["url"] = absolute_media_url(part["image_url"]["url"])
+                    part["image_url"]["url"] = rewrite_image_url_for_llm(
+                        part["image_url"]["url"],
+                    )
             return {"role": "user", "content": parts}
-        return {"role": "user", "content": message.content_text or ""}
+        text = message.content_text or ""
+        if macros:
+            text = expand_macro_text(text, macros)
+        return {"role": "user", "content": text}
 
     if message.role == MessageRole.ASSISTANT:
         entry: dict[str, Any] = {
@@ -66,9 +81,13 @@ def message_to_llm_dict(message: Message) -> dict[str, Any]:
     return {"role": message.role.value, "content": message.content_text or ""}
 
 
-def history_to_llm_messages(messages: list[Message]) -> list[dict[str, Any]]:
+def history_to_llm_messages(
+    messages: list[Message],
+    *,
+    alias_to_body: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """Список Message → история для LLM."""
-    return [message_to_llm_dict(m) for m in messages]
+    return [message_to_llm_dict(m, alias_to_body=alias_to_body) for m in messages]
 
 
 def rewrite_media_urls_in_text(text: str, url_map: dict[str, str]) -> str:

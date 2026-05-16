@@ -23,8 +23,8 @@ from app.api.router import api_router
 from app.api.websocket import router as ws_router
 from app.config import settings
 from app.db.session import init_db
-from app.logging_buffer import install_log_buffer
 from app.integrations.mcp_server import start_mcp_background
+from app.logging_buffer import install_log_buffer
 from app.services.retention_task import start_retention_background
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
             '<rect width="32" height="32" rx="6" fill="#1a2332"/>'
             '<path d="M8 10h16v12H8z" fill="none" stroke="#5b9fd4" stroke-width="2"/>'
-            '</svg>'
+            "</svg>"
         )
         return Response(content=svg, media_type="image/svg+xml")
 

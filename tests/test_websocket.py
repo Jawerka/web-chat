@@ -84,11 +84,13 @@ def test_websocket_user_message_mocked(sync_client: TestClient) -> None:
     ):
         with sync_client.websocket_connect(f"/ws/{conv_id}") as ws:
             ws.receive_json()  # connected
-            ws.send_json({
-                "type": "user_message",
-                "text": "Привет",
-                "attachment_ids": [],
-            })
+            ws.send_json(
+                {
+                    "type": "user_message",
+                    "text": "Привет",
+                    "attachment_ids": [],
+                }
+            )
             types = []
             for _ in range(5):
                 msg = ws.receive_json()

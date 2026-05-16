@@ -8,7 +8,6 @@ import asyncio
 import logging
 
 from sqlalchemy import event
-from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 

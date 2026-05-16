@@ -19,10 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import async_session_factory
-from app.integrations.media_utils import resolve_trusted_generated_source
+from app.integrations.media_utils import parse_asset_id_from_url, resolve_trusted_generated_source
 from app.integrations.sd_tools import generate_image, get_gallery, img2img, upscale_images
 from app.services.attachment_service import AttachmentService
-from app.services.media_service import MediaService, parse_asset_id_from_url
+from app.services.media_service import MediaService
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +120,7 @@ class ToolExecutor:
     ) -> ToolResult:
         """SD-инструмент в thread pool; затем ingest в БД."""
         sig = inspect.signature(func)
-        filtered = {
-            k: v
-            for k, v in arguments.items()
-            if k in sig.parameters and v is not None
-        }
+        filtered = {k: v for k, v in arguments.items() if k in sig.parameters and v is not None}
         if self._sd_webui_url is not None:
             filtered["sd_webui_url"] = self._sd_webui_url
         t0 = time.monotonic()

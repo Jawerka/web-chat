@@ -36,9 +36,7 @@ async def _migrate_image_gen_preset_prompt(conn) -> None:
     """Обновить system_prompt пресета генерации изображений (без ![...](url) в ответах)."""
     from app.db.seed import IMAGE_GEN_PROMPT
 
-    result = await conn.execute(
-        text("SELECT id FROM presets WHERE slug = 'image_gen' LIMIT 1")
-    )
+    result = await conn.execute(text("SELECT id FROM presets WHERE slug = 'image_gen' LIMIT 1"))
     if result.fetchone() is None:
         return
     await conn.execute(

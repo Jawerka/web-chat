@@ -12,6 +12,7 @@ async def test_health_returns_structure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GET /api/health возвращает status и sd."""
+
     async def _ok() -> str:
         return "ok"
 
@@ -23,6 +24,8 @@ async def test_health_returns_structure(
     assert data["status"] == "ok"
     assert data["llm"] == "ok"
     assert data["sd"] == "ok"
+    assert "public_base_url" in data
+    assert data["timeouts_ok"] is True
 
 
 @pytest.mark.asyncio
@@ -31,6 +34,7 @@ async def test_health_degraded_when_sd_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """status=degraded при недоступном SD."""
+
     async def _llm_ok() -> str:
         return "ok"
 

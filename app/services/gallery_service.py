@@ -77,9 +77,7 @@ def _list_local_generated_images(limit: int) -> list[GalleryItem]:
         return []
 
     paths = [
-        p
-        for p in GENERATED_ROOT.iterdir()
-        if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+        p for p in GENERATED_ROOT.iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
     ]
     paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
@@ -122,11 +120,7 @@ async def list_gallery_images(
     db_assets = await repo.list_images_recent(limit=limit * 2)
 
     db_items = [_item_from_asset(a) for a in db_assets if is_image_mime(a.mime_type)]
-    ingested_names = {
-        (a.original_name or "").lower()
-        for a in db_assets
-        if a.original_name
-    }
+    ingested_names = {(a.original_name or "").lower() for a in db_assets if a.original_name}
 
     local_items: list[GalleryItem] = []
     for item in _list_local_generated_images(limit=limit * 2):

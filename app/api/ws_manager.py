@@ -21,6 +21,7 @@ class ConnectionManager:
         self._connections: dict[uuid.UUID, set[WebSocket]] = defaultdict(set)
         self._cancel_events: dict[uuid.UUID, asyncio.Event] = {}
         self._active_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
+        self._streaming_messages: dict[uuid.UUID, uuid.UUID] = {}
 
     async def connect(self, conversation_id: uuid.UUID, websocket: WebSocket) -> None:
         """Принять WebSocket и зарегистрировать."""
@@ -67,7 +68,21 @@ class ConnectionManager:
         """Создать/сбросить событие отмены для нового turn."""
         event = asyncio.Event()
         self._cancel_events[conversation_id] = event
+        self.clear_streaming_message(conversation_id)
         return event
+
+    def set_streaming_message(
+        self,
+        conversation_id: uuid.UUID,
+        message_id: uuid.UUID,
+    ) -> None:
+        self._streaming_messages[conversation_id] = message_id
+
+    def get_streaming_message(self, conversation_id: uuid.UUID) -> uuid.UUID | None:
+        return self._streaming_messages.get(conversation_id)
+
+    def clear_streaming_message(self, conversation_id: uuid.UUID) -> None:
+        self._streaming_messages.pop(conversation_id, None)
 
     def cancel_turn(self, conversation_id: uuid.UUID) -> None:
         """Сигнал отмены текущей генерации."""

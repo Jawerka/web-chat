@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import base64
+import io
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -16,6 +18,11 @@ from PIL import Image
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+_ASSET_URL_RE = re.compile(
+    r"/media/asset/([0-9a-fA-F-]{36})(?:/(?:thumb|llm))?",
+    re.IGNORECASE,
+)
 
 UPLOAD_ROOT = Path("data/uploads")
 GENERATED_ROOT = Path("data/generated")
@@ -43,9 +50,7 @@ def safe_filename(filename: str) -> str:
     if not safe or all(c == "." for c in safe):
         return ""
 
-    allowed = set(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-."
-    )
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
     result = "".join(c for c in safe if c in allowed)
     return result if result else ""
 
@@ -147,6 +152,116 @@ def asset_media_url(asset_id: uuid.UUID, *, absolute: bool = False) -> str:
     if absolute:
         return f"{settings.public_base_url.rstrip('/')}{path}"
     return path
+
+
+def asset_llm_media_url(asset_id: uuid.UUID, *, absolute: bool = False) -> str:
+    """URL сжатой копии для vision API (GET /media/asset/{id}/llm)."""
+    path = f"/media/asset/{asset_id}/llm"
+    if absolute:
+        return f"{settings.public_base_url.rstrip('/')}{path}"
+    return path
+
+
+def parse_asset_id_from_url(url: str) -> uuid.UUID | None:
+    """Извлечь UUID media asset из URL, если есть."""
+    m = _ASSET_URL_RE.search(url)
+    if not m:
+        return None
+    try:
+        return uuid.UUID(m.group(1))
+    except ValueError:
+        return None
+
+
+def rewrite_image_url_for_llm(url: str) -> str:
+    """
+    Абсолютный URL для LLM; asset-изображения — вариант /llm (JPEG ≤ llm_vision_max_bytes).
+
+    llama-server принимает только http(s)://, file:// или data:image/…;base64,… —
+    относительный /media/… даёт «Invalid url value».
+    """
+    if not url:
+        return url
+    asset_id = parse_asset_id_from_url(url)
+    if asset_id is not None:
+        return asset_llm_media_url(asset_id, absolute=True)
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("/media/"):
+        return absolute_media_url(url)
+    return url
+
+
+def compress_image_for_llm(
+    data: bytes,
+    mime_type: str = "image/png",
+    *,
+    max_bytes: int | None = None,
+    jpeg_quality: int | None = None,
+    max_side_px: int | None = None,
+) -> tuple[bytes, str]:
+    """
+    Уменьшить изображение для скачивания llama-server по HTTP.
+
+    Если уже ≤ max_bytes — вернуть как есть. Иначе JPEG с понижением quality и стороны.
+    """
+    limit = max_bytes if max_bytes is not None else settings.llm_vision_max_bytes
+    if len(data) <= limit:
+        return data, mime_type
+
+    quality = jpeg_quality if jpeg_quality is not None else settings.llm_vision_jpeg_quality
+    max_side = max_side_px if max_side_px is not None else settings.llm_vision_max_side_px
+    initial_quality = quality
+    best = _encode_jpeg_for_llm(data, max_side=max_side, quality=quality)
+
+    while len(best) > limit:
+        if quality > 55:
+            quality -= 5
+            best = _encode_jpeg_for_llm(data, max_side=max_side, quality=quality)
+            continue
+        if max_side > 512:
+            max_side = max(512, int(max_side * 0.75))
+            quality = initial_quality
+            best = _encode_jpeg_for_llm(data, max_side=max_side, quality=quality)
+            continue
+        if quality > 45:
+            quality -= 5
+            best = _encode_jpeg_for_llm(data, max_side=max_side, quality=quality)
+            continue
+        logger.warning(
+            "LLM vision: не удалось уложиться в %d байт (получено %d)",
+            limit,
+            len(best),
+        )
+        break
+
+    logger.info(
+        "LLM vision: сжато %d → %d байт (сторона≤%d, q=%d)",
+        len(data),
+        len(best),
+        max_side,
+        quality,
+    )
+    return best, "image/jpeg"
+
+
+def _encode_jpeg_for_llm(data: bytes, *, max_side: int, quality: int) -> bytes:
+    with Image.open(io.BytesIO(data)) as img:
+        img = _fit_image_max_side(img, max_side)
+        if img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+
+
+def _fit_image_max_side(img: Image.Image, max_side: int) -> Image.Image:
+    w, h = img.size
+    if max(w, h) <= max_side:
+        return img
+    resized = img.copy()
+    resized.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    return resized
 
 
 def generated_media_url(filename: str) -> str:

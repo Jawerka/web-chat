@@ -21,9 +21,10 @@ from app.db.models import MediaAsset
 from app.db.repositories import MediaAssetRepository
 from app.integrations.media_utils import (
     GENERATED_ROOT,
-    UPLOAD_ROOT,
     asset_media_url,
+    compress_image_for_llm,
     is_image_mime,
+    parse_asset_id_from_url,
     resolve_generated_file,
     resolve_upload_file,
     safe_filename,
@@ -97,13 +98,17 @@ class MediaService:
 
         Переживает rollback основного хода WS (генерация / перегенерация).
         """
-        assets = await MediaService.commit_media_assets_batch([(
-            data,
-            mime_type,
-            conversation_id,
-            original_name,
-            thumb_data,
-        )])
+        assets = await MediaService.commit_media_assets_batch(
+            [
+                (
+                    data,
+                    mime_type,
+                    conversation_id,
+                    original_name,
+                    thumb_data,
+                )
+            ]
+        )
         return assets[0]
 
     @staticmethod
@@ -160,6 +165,19 @@ class MediaService:
         if thumb:
             return thumb, "image/jpeg"
         return asset.data, asset.mime_type
+
+    async def get_llm_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
+        """Байты изображения для vision API (сжатие при превышении llm_vision_max_bytes)."""
+        asset = await self._repo.get_by_id(asset_id)
+        if asset is None:
+            return None
+        if len(asset.data) <= settings.llm_vision_max_bytes:
+            return asset.data, asset.mime_type
+        return await asyncio.to_thread(
+            compress_image_for_llm,
+            asset.data,
+            asset.mime_type,
+        )
 
     async def normalize_image_url(
         self,
@@ -275,13 +293,15 @@ class MediaService:
             except OSError as exc:
                 logger.warning("ingest SD file %s: %s", filename, exc)
                 continue
-            pending.append((
-                data,
-                _guess_mime(filename),
-                conversation_id,
-                filename,
-                None,
-            ))
+            pending.append(
+                (
+                    data,
+                    _guess_mime(filename),
+                    conversation_id,
+                    filename,
+                    None,
+                )
+            )
             pending_meta.append((filename, path))
 
         if pending:
@@ -385,9 +405,7 @@ class MediaService:
 
         if asset_ids and not images:
             images = [
-                asset_media_url(uid)
-                for aid in asset_ids
-                if (uid := _safe_uuid(aid)) is not None
+                asset_media_url(uid) for aid in asset_ids if (uid := _safe_uuid(aid)) is not None
             ]
 
         candidates: list[str] = list(dict.fromkeys(images))
@@ -519,20 +537,14 @@ def _generated_url_variants(filename: str) -> list[str]:
     safe = safe_filename(filename)
     path = f"/media/generated/{safe}"
     base = settings.public_base_url.rstrip("/")
-    return list({
-        path,
-        f"{base}{path}",
-        f"URL: {base}{path}",
-        f"URL: {path}",
-    })
+    return list(
+        {
+            path,
+            f"{base}{path}",
+            f"URL: {base}{path}",
+            f"URL: {path}",
+        }
+    )
 
 
-def parse_asset_id_from_url(url: str) -> uuid.UUID | None:
-    """Извлечь UUID media asset из URL, если есть."""
-    m = _ASSET_URL_RE.search(url)
-    if not m:
-        return None
-    try:
-        return uuid.UUID(m.group(1))
-    except ValueError:
-        return None
+# parse_asset_id_from_url — в app.integrations.media_utils

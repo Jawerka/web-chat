@@ -6,11 +6,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 
-from app.db.session import configure_database, init_db
 from app.config import settings
 from app.db import session as db_session
+from app.db.session import configure_database, init_db
 from app.services.cleanup_service import run_full_cleanup
 
 logging.basicConfig(
