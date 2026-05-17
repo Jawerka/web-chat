@@ -65,6 +65,8 @@ class ToolExecutor:
         self._conversation_id = conversation_id
         self._sd_webui_url = sd_webui_url
         self._source_user_message_id = source_user_message_id
+        # Закреплённый init из user-сообщения на весь ход (несколько img2img подряд).
+        self._pinned_user_init: tuple[bytes, str] | None = None
 
     async def run(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         """
@@ -195,6 +197,15 @@ class ToolExecutor:
 
         return None
 
+    async def _get_pinned_user_init(self) -> tuple[bytes, str] | None:
+        """Исходник user-сообщения: один раз за ход, далее из кэша."""
+        if self._pinned_user_init is not None:
+            return self._pinned_user_init
+        resolved = await self._resolve_user_message_init()
+        if resolved is not None:
+            self._pinned_user_init = resolved
+        return resolved
+
     async def _img2img(self, arguments: dict[str, Any]) -> ToolResult:
         """img2img с разрешением init_image из asset, upload, generated или attachment_id.
 
@@ -227,23 +238,25 @@ class ToolExecutor:
         llm_had_init = bool(init_url or att_uuid is not None)
 
         if self._source_user_message_id is not None:
-            server_init = await self._resolve_user_message_init()
+            server_init = await self._get_pinned_user_init()
             if server_init is not None:
                 init_bytes, init_name = server_init
                 if llm_had_init:
                     logger.warning(
-                        "img2img: init взят из user-сообщения %s (%s), "
+                        "img2img: init закреплён из user-сообщения %s (%s, %d байт), "
                         "аргументы LLM проигнорированы (url=%r att=%r)",
                         self._source_user_message_id,
                         init_name,
+                        len(init_bytes),
                         init_url,
                         raw_att,
                     )
                 else:
                     logger.info(
-                        "img2img: init взят из user-сообщения %s (%s)",
+                        "img2img: init закреплён из user-сообщения %s (%s, %d байт)",
                         self._source_user_message_id,
                         init_name,
+                        len(init_bytes),
                     )
 
         if init_bytes is None and llm_had_init:
@@ -258,7 +271,7 @@ class ToolExecutor:
                 load_error = str(exc)
 
         if init_bytes is None:
-            fallback = await self._resolve_user_message_init()
+            fallback = await self._get_pinned_user_init()
             if fallback is not None:
                 init_bytes, init_name = fallback
                 logger.info(

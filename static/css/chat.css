@@ -1839,6 +1839,10 @@ body.dark-theme .loading-overlay {
 }
 
 /* Message row + actions */
+.message-row.is-being-edited .message-images.hidden {
+  display: none;
+}
+
 .message-row {
   display: flex;
   flex-direction: column;

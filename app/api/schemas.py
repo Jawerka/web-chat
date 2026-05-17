@@ -161,3 +161,7 @@ class MessageUpdate(BaseModel):
     """PATCH тела сообщения."""
 
     content_text: str = Field(..., min_length=1, max_length=100_000)
+    attachment_ids: list[UUID] | None = Field(
+        None,
+        description="Только для user: полный список id вложений сообщения после редактирования",
+    )

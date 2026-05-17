@@ -120,6 +120,15 @@ TOOL_DEFINITIONS: list[dict] = [
                         "minimum": 0.2,
                         "maximum": 0.92,
                     },
+                    "denoising_strengths": {
+                        "type": "array",
+                        "items": {"type": "number", "minimum": 0.2, "maximum": 0.92},
+                        "description": (
+                            "Несколько значений denoise за один вызов с тем же init "
+                            "(до 12). Предпочтительно для сравнения 0.5–0.82 вместо "
+                            "множества отдельных вызовов."
+                        ),
+                    },
                     "resize_mode": {
                         "type": "integer",
                         "default": 0,

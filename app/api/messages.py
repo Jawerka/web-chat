@@ -9,10 +9,11 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas import MessageOut, MessageUpdate
+from app.api.schemas import AttachmentOut, MessageOut, MessageUpdate
 from app.db.models import MessageRole
 from app.db.repositories import AttachmentRepository, ConversationRepository, MessageRepository
 from app.db.session import get_db
+from app.services.attachment_service import AttachmentService
 from app.services.media_service import MediaService
 from app.services.message_builder import build_user_content
 
@@ -71,6 +72,36 @@ async def list_messages(
     return out
 
 
+@router.get(
+    "/{conversation_id}/messages/{message_id}/attachments",
+    response_model=list[AttachmentOut],
+)
+async def list_message_attachments(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list[AttachmentOut]:
+    """Вложения сообщения (для редактирования user-сообщения в UI)."""
+    msg_repo = MessageRepository(db)
+    message = await msg_repo.get_by_id(message_id)
+    if message is None or message.conversation_id != conversation_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщение не найдено")
+
+    att_repo = AttachmentRepository(db)
+    service = AttachmentService(db)
+    attachments = await att_repo.list_for_message(message_id)
+    return [
+        AttachmentOut(
+            id=att.id,
+            original_name=att.original_name,
+            mime_type=att.mime_type,
+            size_bytes=att.size_bytes,
+            preview_url=service.preview_url(att),
+        )
+        for att in attachments
+    ]
+
+
 @router.patch("/{conversation_id}/messages/{message_id}", response_model=MessageOut)
 async def update_message(
     conversation_id: uuid.UUID,
@@ -91,6 +122,18 @@ async def update_message(
     content_json = message.content_json
     if message.role == MessageRole.USER:
         att_repo = AttachmentRepository(db)
+        if body.attachment_ids is not None:
+            try:
+                await att_repo.sync_message_attachments(
+                    message_id,
+                    conversation_id,
+                    body.attachment_ids,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(exc),
+                ) from exc
         attachments = await att_repo.list_for_message(message_id)
         parts = build_user_content(text, attachments)
         content_json = {"parts": parts}

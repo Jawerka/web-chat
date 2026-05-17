@@ -22,9 +22,11 @@ from PIL import PngImagePlugin
 from app.config import settings
 from app.integrations.img2img_service import (
     Img2ImgRequest,
+    PreparedInitImage,
     build_img2img_payload,
     encode_init_image_b64,
     format_generation_meta,
+    normalize_denoising_strengths,
     pick_seed,
     prepare_init_image,
     resolve_output_dimensions,
@@ -229,63 +231,71 @@ def validate_upscaler(name: str, sd_webui_url: str | None = None) -> None:
         raise ValueError(f"Upscaler '{name}' не найден. Доступны: {available}")
 
 
-def img2img(
-    prompt: str,
-    init_image_url: str = "",
+def _save_img2img_outputs(
     *,
-    init_image_bytes: bytes | None = None,
-    init_source_name: str = "",
-    negative_prompt: str = "",
-    steps: int = 22,
-    width: int = 0,
-    height: int = 0,
-    cfg_scale: float = 5.0,
-    sampler_name: str = "Euler a",
-    scheduler: str = "",
-    seed: int = -1,
-    denoising_strength: float = 0.54,
-    restore_faces: bool = False,
-    tiling: bool = False,
-    resize_mode: int = 0,
-    description: str = "",
-    sd_webui_url: str | None = None,
-) -> str:
-    """
-    img2img: доработка существующего изображения через SD WebUI.
+    images_b64: list[str],
+    prepared: PreparedInitImage,
+    current_seed: int,
+    denoising_strength: float,
+    png_params: str,
+    info_text: str,
+    png_info_text: str,
+    description: str,
+) -> list[dict[str, str | int | float]]:
+    """Сохранить результаты одного POST /img2img."""
+    results: list[dict[str, str | int | float]] = []
+    for img_b64 in images_b64:
+        filename = save_image_from_base64(img_b64)
+        thumb_name = make_thumbnail(filename)
 
-    init_image_url — URL или имя файла (если bytes не переданы из ToolExecutor).
-    width/height = 0 — размер как у исходника (после prepare_init_image).
-    """
-    if init_image_bytes is None:
-        if not init_image_url.strip():
-            raise ValueError("Укажите init_image_url или передайте init_image_bytes")
-        init_path = resolve_trusted_generated_source(init_image_url)
-        init_image_bytes = init_path.read_bytes()
-        init_source_name = init_source_name or init_path.name
+        try:
+            img_path = GENERATED_ROOT / filename
+            with PILImage.open(img_path) as img:
+                meta = PngImagePlugin.PngInfo()
+                parameters_text = png_info_text or png_params
+                if parameters_text:
+                    meta.add_text("parameters", parameters_text)
+                if info_text and info_text != parameters_text:
+                    meta.add_text("info", info_text)
+                if description:
+                    meta.add_text("Description", description)
+                meta.add_text("Init image", prepared.source_name)
+                img.save(img_path, pnginfo=meta)
+        except OSError as exc:
+            logger.warning("Метаданные PNG для %s: %s", filename, exc)
 
-    raw_w, raw_h = width, height
-    width = sanitize_llm_dimension(width)
-    height = sanitize_llm_dimension(height)
-    if (raw_w, raw_h) != (width, height):
-        logger.info(
-            "img2img: размеры LLM %sx%s → %sx%s",
-            raw_w,
-            raw_h,
-            width,
-            height,
-        )
+        item: dict[str, str | int | float] = {
+            "filename": filename,
+            "url": generated_media_url(filename, absolute=True, for_llm=True),
+            "seed": current_seed,
+            "denoising_strength": denoising_strength,
+        }
+        if thumb_name:
+            item["thumb_url"] = generated_thumb_url(thumb_name)
+        results.append(item)
+    return results
 
-    prepared = prepare_init_image(
-        init_image_bytes,
-        source_name=init_source_name,
-    )
-    out_w, out_h = resolve_output_dimensions(
-        width,
-        height,
-        prepared.width,
-        prepared.height,
-    )
 
+def _post_img2img_once(
+    *,
+    prepared: PreparedInitImage,
+    prompt: str,
+    negative_prompt: str,
+    steps: int,
+    out_w: int,
+    out_h: int,
+    cfg_scale: float,
+    sampler_name: str,
+    scheduler: str,
+    seed: int,
+    denoising_strength: float,
+    restore_faces: bool,
+    tiling: bool,
+    resize_mode: int,
+    description: str,
+    sd_webui_url: str | None,
+) -> tuple[list[dict[str, str | int | float]], str]:
+    """Один запрос к SD img2img с заданным denoising_strength."""
     req = Img2ImgRequest(
         prompt=prompt,
         init_image_bytes=prepared.png_bytes,
@@ -317,7 +327,6 @@ def img2img(
 
     sd_base = resolve_sd_webui_url(sd_webui_url)
     session = get_sd_session()
-    t0 = time.monotonic()
     url = f"{sd_base}/sdapi/v1/img2img"
     logger.info(
         "img2img: %dx%d denoise=%.2f resize_mode=%d init=%s prompt=%r",
@@ -333,18 +342,14 @@ def img2img(
         resp.raise_for_status()
     except requests.RequestException as exc:
         msg = sd_error_message(exc)
-        logger.error("SD img2img ошибка за %.1fs: %s (url=%s)", time.monotonic() - t0, msg, url)
+        logger.error("SD img2img ошибка: %s (url=%s)", msg, url)
         raise RuntimeError(f"SD img2img: {msg}") from exc
 
     data = resp.json()
     images_b64 = data.get("images", [])
     if not images_b64:
-        logger.error(
-            "SD img2img: пустой images за %.1fs, keys=%s",
-            time.monotonic() - t0,
-            list(data.keys()),
-        )
-        return "Ошибка: WebUI не вернул изображений."
+        logger.error("SD img2img: пустой images, keys=%s", list(data.keys()))
+        raise RuntimeError("WebUI не вернул изображений")
 
     png_params, info_text = format_generation_meta(data)
     png_info_text = ""
@@ -362,52 +367,132 @@ def img2img(
         except requests.RequestException as exc:
             logger.warning("img2img png-info недоступен: %s", exc)
 
-    results: list[dict[str, str | int]] = []
-    for img_b64 in images_b64:
-        filename = save_image_from_base64(img_b64)
-        thumb_name = make_thumbnail(filename)
+    items = _save_img2img_outputs(
+        images_b64=images_b64,
+        prepared=prepared,
+        current_seed=current_seed,
+        denoising_strength=denoising_strength,
+        png_params=png_params,
+        info_text=info_text,
+        png_info_text=png_info_text,
+        description=description,
+    )
+    return items, info_text or png_params
 
-        try:
-            img_path = GENERATED_ROOT / filename
-            with PILImage.open(img_path) as img:
-                meta = PngImagePlugin.PngInfo()
-                parameters_text = png_info_text or png_params
-                if parameters_text:
-                    meta.add_text("parameters", parameters_text)
-                if info_text and info_text != parameters_text:
-                    meta.add_text("info", info_text)
-                if description:
-                    meta.add_text("Description", description)
-                meta.add_text("Init image", prepared.source_name)
-                img.save(img_path, pnginfo=meta)
-        except OSError as exc:
-            logger.warning("Метаданные PNG для %s: %s", filename, exc)
 
-        item: dict[str, str | int] = {
-            "filename": filename,
-            "url": generated_media_url(filename, absolute=True, for_llm=True),
-            "seed": current_seed,
-        }
-        if thumb_name:
-            item["thumb_url"] = generated_thumb_url(thumb_name)
-        results.append(item)
+def img2img(
+    prompt: str,
+    init_image_url: str = "",
+    *,
+    init_image_bytes: bytes | None = None,
+    init_source_name: str = "",
+    negative_prompt: str = "",
+    steps: int = 22,
+    width: int = 0,
+    height: int = 0,
+    cfg_scale: float = 5.0,
+    sampler_name: str = "Euler a",
+    scheduler: str = "",
+    seed: int = -1,
+    denoising_strength: float = 0.54,
+    denoising_strengths: list[float] | None = None,
+    restore_faces: bool = False,
+    tiling: bool = False,
+    resize_mode: int = 0,
+    description: str = "",
+    sd_webui_url: str | None = None,
+) -> str:
+    """
+    img2img: доработка существующего изображения через SD WebUI.
 
+    init_image_url — URL или имя файла (если bytes не переданы из ToolExecutor).
+    width/height = 0 — размер как у исходника (после prepare_init_image).
+    denoising_strengths — несколько значений denoise с одним и тем же init (до 12).
+    """
+    if init_image_bytes is None:
+        if not init_image_url.strip():
+            raise ValueError("Укажите init_image_url или передайте init_image_bytes")
+        init_path = resolve_trusted_generated_source(init_image_url)
+        init_image_bytes = init_path.read_bytes()
+        init_source_name = init_source_name or init_path.name
+
+    strengths = normalize_denoising_strengths(denoising_strength, denoising_strengths)
+
+    raw_w, raw_h = width, height
+    width = sanitize_llm_dimension(width)
+    height = sanitize_llm_dimension(height)
+    if (raw_w, raw_h) != (width, height):
+        logger.info(
+            "img2img: размеры LLM %sx%s → %sx%s",
+            raw_w,
+            raw_h,
+            width,
+            height,
+        )
+
+    prepared = prepare_init_image(
+        init_image_bytes,
+        source_name=init_source_name,
+    )
+    out_w, out_h = resolve_output_dimensions(
+        width,
+        height,
+        prepared.width,
+        prepared.height,
+    )
+
+    t0 = time.monotonic()
+    all_results: list[dict[str, str | int | float]] = []
+    last_meta = ""
+    for ds in strengths:
+        items, last_meta = _post_img2img_once(
+            prepared=prepared,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            steps=steps,
+            out_w=out_w,
+            out_h=out_h,
+            cfg_scale=cfg_scale,
+            sampler_name=sampler_name,
+            scheduler=scheduler,
+            seed=seed,
+            denoising_strength=ds,
+            restore_faces=restore_faces,
+            tiling=tiling,
+            resize_mode=resize_mode,
+            description=description,
+            sd_webui_url=sd_webui_url,
+        )
+        all_results.extend(items)
+
+    denoise_label = (
+        ", ".join(f"{v:g}" for v in strengths)
+        if len(strengths) > 1
+        else f"{strengths[0]:g}"
+    )
     lines = [
-        f"img2img завершён ({len(results)} изображений).",
+        f"img2img завершён ({len(all_results)} изображений).",
         f"Prompt: {prompt}",
         f"Исходник: {prepared.source_name} ({prepared.width}×{prepared.height})",
-        f"Выход: {out_w}×{out_h}, denoising_strength: {denoising_strength}, resize_mode: {resize_mode}",
+        f"Выход: {out_w}×{out_h}, denoising_strength: {denoise_label}, resize_mode: {resize_mode}",
         "",
     ]
-    for i, item in enumerate(results, 1):
-        lines.append(f"Изображение {i} (seed {item['seed']}):")
+    for i, item in enumerate(all_results, 1):
+        ds = item.get("denoising_strength")
+        ds_note = f", denoise {ds:g}" if ds is not None else ""
+        lines.append(f"Изображение {i} (seed {item['seed']}{ds_note}):")
         lines.append(f"  URL: {item['url']}")
         if item.get("thumb_url"):
             lines.append(f"  Thumbnail: {item['thumb_url']}")
         lines.append("")
 
-    lines.extend(["--- Параметры генерации ---", info_text or png_params])
-    logger.info("img2img готово за %.1fs", time.monotonic() - t0)
+    lines.extend(["--- Параметры генерации ---", last_meta])
+    logger.info(
+        "img2img готово за %.1fs (%d вариант(ов), init=%s)",
+        time.monotonic() - t0,
+        len(strengths),
+        prepared.source_name,
+    )
     return "\n".join(lines)
 
 

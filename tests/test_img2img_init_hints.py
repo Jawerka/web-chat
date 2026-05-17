@@ -147,6 +147,24 @@ async def test_init_from_user_message_attachments() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pinned_user_init_cached_across_calls() -> None:
+    """Несколько img2img в одном ходе читают init из кэша."""
+    msg_id = uuid.uuid4()
+    session = AsyncMock()
+
+    executor = ToolExecutor(session, source_user_message_id=msg_id)
+    executor._resolve_user_message_init = AsyncMock(return_value=(b"pngbytes", "user.png"))
+    executor._run_sd_image_tool = AsyncMock(
+        return_value=ToolResult(content="ok", image_urls=[]),
+    )
+
+    for _ in range(3):
+        await executor._img2img({"prompt": "test", "attachment_id": str(uuid.uuid4())})
+
+    assert executor._resolve_user_message_init.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_img2img_prefers_server_init_over_llm_url() -> None:
     """При source_user_message_id серверный init имеет приоритет над URL от LLM."""
     msg_id = uuid.uuid4()

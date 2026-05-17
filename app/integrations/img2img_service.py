@@ -35,6 +35,7 @@ DIM_ALIGN = 8
 DEFAULT_DENOISING = 0.54
 LLM_DENOISING_MIN = 0.20
 LLM_DENOISING_MAX = 0.92
+MAX_IMG2IMG_VARIANTS = 12
 
 
 @dataclass(frozen=True)
@@ -202,6 +203,27 @@ def build_img2img_payload(
         "send_images": True,
         "save_images": False,
     }
+
+
+def normalize_denoising_strengths(
+    denoising_strength: float,
+    denoising_strengths: list[float] | None = None,
+) -> list[float]:
+    """Список denoise для одного или нескольких img2img с общим init."""
+    if denoising_strengths:
+        values = [float(v) for v in denoising_strengths]
+    else:
+        values = [float(denoising_strength)]
+    if not values:
+        raise ValueError("Укажите denoising_strength или denoising_strengths")
+    if len(values) > MAX_IMG2IMG_VARIANTS:
+        raise ValueError(f"Не более {MAX_IMG2IMG_VARIANTS} значений denoising_strengths")
+    for v in values:
+        if not (LLM_DENOISING_MIN <= v <= LLM_DENOISING_MAX):
+            raise ValueError(
+                f"denoising_strength должен быть от {LLM_DENOISING_MIN} до {LLM_DENOISING_MAX}"
+            )
+    return values
 
 
 def pick_seed(seed: int) -> int:

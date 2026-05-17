@@ -7,6 +7,8 @@
 const SCROLL_STICKY_PX = 100;
 
 const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
+/** Черновик поля ввода и вложений по беседе (до отправки) */
+const COMPOSER_DRAFTS_STORAGE_KEY = 'webchat_composer_drafts_v1';
 /** Вложения после перехода из галереи (скрепка → новый чат) */
 const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
 const PRESET_LAST_EDIT_STORAGE_KEY = 'webchat_preset_last_edit_id';
@@ -247,6 +249,7 @@ class ChatApp {
     this._errorTimer = null;
     this.editingMessageId = null;
     this.editingRole = null;
+    this._editComposerBackup = null;
     this._regenerating = false;
     this._inputPlaceholderDefault = 'Сообщение';
     this._serverLogLines = [];
@@ -275,6 +278,7 @@ class ChatApp {
     this._editingPresetId = null;
     this._searchDebounceTimer = null;
     this._inlineTitleConvId = null;
+    this._composerDraftDebounceTimer = null;
     this.log = window.appLog;
     this.promptMacros = new PromptMacrosUI(this);
 
@@ -428,7 +432,10 @@ class ChatApp {
         this.sendMessage();
       }
     });
-    this.$.userInput.addEventListener('input', () => this.autoResizeInput());
+    this.$.userInput.addEventListener('input', () => {
+      this.autoResizeInput();
+      this._scheduleComposerDraftSave();
+    });
     this.$.userInput.addEventListener('paste', () => {
       requestAnimationFrame(() => this.autoResizeInput());
     });
@@ -543,11 +550,7 @@ class ChatApp {
           return;
         }
         if (this.editingMessageId) {
-          this.editingMessageId = null;
-          this.editingRole = null;
-          this.$.userInput.value = '';
-          this.$.userInput.placeholder = this._inputPlaceholderDefault;
-          this.autoResizeInput();
+          this._cancelMessageEdit();
           return;
         }
         this.closeLightbox();
@@ -582,6 +585,12 @@ class ChatApp {
 
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) void this._tickGlobalSync();
+    });
+    window.addEventListener('pagehide', () => {
+      if (this.currentConvId) this._saveComposerDraft(this.currentConvId);
+    });
+    window.addEventListener('pageshow', () => {
+      if (this.currentConvId) this._restoreComposerDraft(this.currentConvId);
     });
   }
 
@@ -1599,6 +1608,7 @@ class ChatApp {
     this.log?.info('chat', `Удаление беседы ${id}`);
     try {
       await this.api(`/api/conversations/${id}`, { method: 'DELETE' });
+      this._clearComposerDraft(id);
       if (this.currentConvId === id) {
         this._clearCurrentConversation();
       }
@@ -1609,6 +1619,7 @@ class ChatApp {
   }
 
   _clearCurrentConversation() {
+    if (this.currentConvId) this._clearComposerDraft(this.currentConvId);
     this.disconnectSocket();
     this.currentConvId = null;
     this.currentConv = null;
@@ -1621,11 +1632,10 @@ class ChatApp {
     this.$.chatPresetToolbar?.classList.add('hidden');
     this.$.chatComposer.classList.add('hidden');
     this.$.chatMessages.innerHTML = '';
-    this.$.userInput.value = '';
+    this._resetComposerUi();
     this.$.userInput.disabled = true;
     this.$.sendBtn.disabled = true;
     if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = true;
-    this.clearAttachments();
     if (this.streaming) this.endStreaming();
   }
 
@@ -1659,6 +1669,10 @@ class ChatApp {
       return;
     }
 
+    if (this.currentConvId && this.currentConvId !== id) {
+      this._saveComposerDraft(this.currentConvId);
+    }
+
     this._cancelPendingDelete();
     this._closeConvSearchPanel();
     this.disconnectSocket();
@@ -1680,14 +1694,15 @@ class ChatApp {
       this.$.userInput.disabled = false;
       this.$.sendBtn.disabled = false;
       if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = false;
-      this.autoResizeInput();
 
-    await this.loadMessages();
-    await this._resumeOngoingGeneration();
-    this._restorePendingAttachmentsFromSession();
-    this._scrollStuckToBottom = true;
-    this.renderConvList();
-    this.connectSocket();
+      this._resetComposerUi();
+      await this.loadMessages();
+      await this._resumeOngoingGeneration();
+      this._restoreComposerDraft(id);
+      this._restorePendingAttachmentsFromSession();
+      this._scrollStuckToBottom = true;
+      this.renderConvList();
+      this.connectSocket();
     } finally {
       this.$.loadingOverlay.classList.add('hidden');
     }
@@ -1824,9 +1839,8 @@ class ChatApp {
       .map((a) => resolveMediaUrl(a.preview_url))
       .filter(Boolean);
     this.addUserBubble(text, null, pendingImages);
-    this.$.userInput.value = '';
-    this.autoResizeInput();
-    this.clearAttachments();
+    this._resetComposerUi();
+    this._clearComposerDraft(this.currentConvId);
     this.startStreaming();
 
     try {
@@ -1840,20 +1854,23 @@ class ChatApp {
   async _submitEdit(text) {
     const messageId = this.editingMessageId;
     const role = this.editingRole || 'user';
-    this.editingMessageId = null;
-    this.editingRole = null;
-    this.$.userInput.value = '';
-    this.$.userInput.placeholder = this._inputPlaceholderDefault;
-    this.autoResizeInput();
-
     const row = this._findRow(messageId);
+    const pendingForUser = role === 'user' ? [...this.pendingAttachments] : [];
+
     try {
       this.log?.info('msg', `Редактирование ${role} ${messageId}`);
+      const body = { content_text: text };
+      if (role === 'user') {
+        body.attachment_ids = pendingForUser.map((a) => a.id);
+      }
       await this.api(`/api/conversations/${this.currentConvId}/messages/${messageId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_text: text }),
+        body: JSON.stringify(body),
       });
+
+      this._exitMessageEditUi();
+      this._resetComposerUi();
 
       if (role === 'user') {
         if (row) {
@@ -1861,9 +1878,22 @@ class ChatApp {
           if (textEl) {
             textEl.dataset.rawText = text;
             this.promptMacros.renderUserText(textEl, text);
+          } else if (text.trim()) {
+            const el = row.querySelector('.chat-message.user') || row.querySelector('.chat-message');
+            if (el) {
+              const textElNew = document.createElement('div');
+              textElNew.className = 'user-text';
+              textElNew.dataset.rawText = text;
+              this.promptMacros.renderUserText(textElNew, text);
+              const grid = el.querySelector('.message-images');
+              if (grid) el.insertBefore(textElNew, grid);
+              else el.prepend(textElNew);
+            }
           }
+          this._updateUserRowImages(row, pendingForUser);
           this._removeFollowingRows(row, false);
         }
+        this._clearComposerDraft(this.currentConvId);
         await this._runRegenerate(messageId);
       } else if (row) {
         const mb = row.querySelector('.message-bubble');
@@ -1874,9 +1904,64 @@ class ChatApp {
       this.showError(err.message);
       if (/не найдено|not found/i.test(err.message)) {
         this.log?.warn('msg', 'Сообщение не найдено на сервере — перезагрузка истории');
+        this._exitMessageEditUi();
+        this._resetComposerUi();
+        if (this.currentConvId) this._restoreComposerDraft(this.currentConvId);
         await this.loadMessages();
       }
     }
+  }
+
+  _exitMessageEditUi() {
+    const row = this.editingMessageId ? this._findRow(this.editingMessageId) : null;
+    row?.classList.remove('is-being-edited');
+    row?.querySelector('.message-images')?.classList.remove('hidden');
+    this.editingMessageId = null;
+    this.editingRole = null;
+    this._editComposerBackup = null;
+    this.$.userInput.placeholder = this._inputPlaceholderDefault;
+  }
+
+  _cancelMessageEdit() {
+    if (!this.editingMessageId) return;
+    const backup = this._editComposerBackup;
+    this._exitMessageEditUi();
+    this._resetComposerUi();
+
+    if (backup) {
+      this.$.userInput.value = backup.text;
+      this.autoResizeInput();
+      for (const att of backup.attachments) {
+        this.pendingAttachments.push(att);
+        this.renderAttachmentChip(att);
+      }
+      if (this.pendingAttachments.length) {
+        this.$.attachmentStrip.classList.remove('hidden');
+      }
+    } else if (this.currentConvId) {
+      this._restoreComposerDraft(this.currentConvId);
+    }
+  }
+
+  _updateUserRowImages(row, attachments) {
+    const el = row.querySelector('.chat-message.user') || row.querySelector('.chat-message');
+    if (!el) return;
+    const urls = attachments
+      .map((a) => (a.preview_url ? resolveMediaUrl(a.preview_url) : ''))
+      .filter(Boolean);
+    let grid = el.querySelector('.message-images');
+    if (!urls.length) {
+      grid?.remove();
+      return;
+    }
+    if (!grid) {
+      grid = document.createElement('div');
+      grid.className = 'message-images';
+      el.appendChild(grid);
+    }
+    grid.innerHTML = '';
+    for (const url of urls) grid.appendChild(this._createImage(url));
+    this._bindImageClicks(el);
   }
 
   cancelGeneration() {
@@ -2242,20 +2327,27 @@ class ChatApp {
       this._playGenerationDoneSound();
     }
     this._generationHadImages = false;
-    if (this.streamRow && assistantMessageId) {
-      this.streamRow.dataset.messageId = assistantMessageId;
-      this._attachActions(this.streamRow, 'assistant');
-    }
     this._regenerating = false;
-    this.endStreaming();
-    if (conversationTitle && this.currentConv) {
-      this.currentConv.title = conversationTitle;
-      const conv = this.conversations.find((c) => c.id === this.currentConvId);
-      if (conv) conv.title = conversationTitle;
-      this._setSettingsChatTitle(conversationTitle);
+    const afterReload = () => {
+      if (assistantMessageId) {
+        const row = this._findRow(assistantMessageId);
+        if (row) this._attachActions(row, 'assistant');
+      }
+      this.endStreaming();
+      if (conversationTitle && this.currentConv) {
+        this.currentConv.title = conversationTitle;
+        const conv = this.conversations.find((c) => c.id === this.currentConvId);
+        if (conv) conv.title = conversationTitle;
+        this._setSettingsChatTitle(conversationTitle);
+      }
+      this._conversationsFingerprint = '';
+      void this.loadConversations();
+    };
+    if (this.currentConvId) {
+      void this.loadMessages().then(afterReload).catch(() => afterReload());
+    } else {
+      afterReload();
     }
-    this._conversationsFingerprint = '';
-    void this.loadConversations();
   }
 
   onWsError(message, code) {
@@ -2486,9 +2578,7 @@ class ChatApp {
     }
 
     if (this.editingMessageId === messageId) {
-      this.editingMessageId = null;
-      this.editingRole = null;
-      this.$.userInput.placeholder = this._inputPlaceholderDefault;
+      this._cancelMessageEdit();
     }
 
     if (this.streaming) {
@@ -2512,7 +2602,7 @@ class ChatApp {
     }
   }
 
-  editMessage(messageId, role) {
+  async editMessage(messageId, role) {
     if (this.streaming) {
       this.showError('Дождитесь окончания генерации');
       return;
@@ -2527,15 +2617,50 @@ class ChatApp {
     const text = this._extractMessagePlainText(row, role);
     if (role === 'user') {
       this.$.userInput.placeholder = 'Enter — сохранить и перегенерировать ответ';
-    } else {
-      this.$.userInput.placeholder = 'Enter — сохранить изменения';
+      await this._enterUserMessageEdit(messageId, row, text);
+      return;
     }
 
+    this.$.userInput.placeholder = 'Enter — сохранить изменения';
     this.editingMessageId = messageId;
     this.editingRole = role;
     this.$.userInput.value = text.trim();
     this.autoResizeInput();
     this.$.userInput.focus();
+  }
+
+  async _enterUserMessageEdit(messageId, row, text) {
+    this._editComposerBackup = {
+      text: this.$.userInput.value,
+      attachments: this.pendingAttachments.map((a) => ({ ...a })),
+    };
+    this._resetComposerUi();
+
+    this.editingMessageId = messageId;
+    this.editingRole = 'user';
+    row.classList.add('is-being-edited');
+    row.querySelector('.message-images')?.classList.add('hidden');
+
+    this.$.userInput.value = text.trim();
+    this.autoResizeInput();
+    this.$.userInput.focus();
+
+    try {
+      const attachments = await this.api(
+        `/api/conversations/${this.currentConvId}/messages/${messageId}/attachments`,
+      );
+      for (const att of attachments) {
+        if (!att?.id) continue;
+        if (this.pendingAttachments.some((a) => a.id === att.id)) continue;
+        this.pendingAttachments.push(att);
+        this.renderAttachmentChip(att);
+      }
+      if (this.pendingAttachments.length) {
+        this.$.attachmentStrip.classList.remove('hidden');
+      }
+    } catch (err) {
+      this.showError(err.message || 'Не удалось загрузить вложения');
+    }
   }
 
   async regenerateMessage(messageId) {
@@ -2639,11 +2764,110 @@ class ChatApp {
     });
   }
 
+  _readComposerDrafts() {
+    try {
+      const raw = localStorage.getItem(COMPOSER_DRAFTS_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  _writeComposerDrafts(drafts) {
+    try {
+      localStorage.setItem(COMPOSER_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+    } catch (err) {
+      this.log?.warn('chat', `Не удалось сохранить черновик: ${err.message}`);
+    }
+  }
+
+  _formatApiErrorDetail(detail) {
+    if (!detail) return '';
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => (typeof item === 'object' && item?.msg ? item.msg : String(item)))
+        .join('; ');
+    }
+    return String(detail);
+  }
+
+  _scheduleComposerDraftSave() {
+    if (!this.currentConvId) return;
+    clearTimeout(this._composerDraftDebounceTimer);
+    this._composerDraftDebounceTimer = setTimeout(
+      () => this._saveComposerDraft(this.currentConvId),
+      400,
+    );
+  }
+
+  _saveComposerDraft(convId = this.currentConvId) {
+    if (!convId) return;
+    const text = this.$.userInput?.value ?? '';
+    const attachments = this.pendingAttachments.map((a) => ({
+      id: a.id,
+      original_name: a.original_name,
+      mime_type: a.mime_type,
+      size_bytes: a.size_bytes,
+      preview_url: a.preview_url,
+    }));
+    const drafts = this._readComposerDrafts();
+    if (!text.trim() && !attachments.length) {
+      delete drafts[convId];
+    } else {
+      drafts[convId] = { text, attachments, updatedAt: Date.now() };
+    }
+    this._writeComposerDrafts(drafts);
+  }
+
+  _clearComposerDraft(convId) {
+    if (!convId) return;
+    const drafts = this._readComposerDrafts();
+    if (!drafts[convId]) return;
+    delete drafts[convId];
+    this._writeComposerDrafts(drafts);
+  }
+
+  _resetComposerUi() {
+    this.pendingAttachments = [];
+    this.$.attachmentStrip.innerHTML = '';
+    this.$.attachmentStrip.classList.add('hidden');
+    if (this.$.userInput) {
+      this.$.userInput.value = '';
+      this.autoResizeInput();
+    }
+  }
+
+  _restoreComposerDraft(convId) {
+    if (!convId) return;
+    const draft = this._readComposerDrafts()[convId];
+    if (!draft) return;
+
+    if (typeof draft.text === 'string' && this.$.userInput) {
+      this.$.userInput.value = draft.text;
+      this.autoResizeInput();
+    }
+
+    const list = Array.isArray(draft.attachments) ? draft.attachments : [];
+    for (const att of list) {
+      if (!att?.id) continue;
+      if (this.pendingAttachments.some((a) => a.id === att.id)) continue;
+      this.pendingAttachments.push(att);
+      this.renderAttachmentChip(att);
+    }
+    if (this.pendingAttachments.length) {
+      this.$.attachmentStrip.classList.remove('hidden');
+    }
+  }
+
   async uploadFiles(fileList) {
     if (!this.currentConvId) {
       this.showError('Сначала выберите или создайте беседу');
       return;
     }
+    if (!fileList?.length) return;
     const files = Array.from(fileList);
     const max = this.config.max_files_per_message || 10;
     if (this.pendingAttachments.length + files.length > max) {
@@ -2659,7 +2883,8 @@ class ChatApp {
       const res = await fetch('/api/upload', { method: 'POST', body: fd });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || 'Ошибка загрузки');
+        const detail = this._formatApiErrorDetail(body.detail);
+        throw new Error(detail || res.statusText || 'Ошибка загрузки');
       }
       const data = await res.json();
       for (const att of data.attachments) {
@@ -2667,18 +2892,20 @@ class ChatApp {
         this.renderAttachmentChip(att);
       }
       this.$.attachmentStrip.classList.remove('hidden');
+      this._saveComposerDraft(this.currentConvId);
     } catch (err) {
       this.showError(err.message);
     }
-    this.$.fileInput.value = '';
+    if (this.$.fileInput) this.$.fileInput.value = '';
   }
 
   renderAttachmentChip(att) {
     const chip = document.createElement('div');
     chip.className = 'attachment-chip';
     chip.dataset.id = att.id;
-    const preview = att.preview_url
-      ? `<img src="${this.escapeAttr(att.preview_url)}" alt="">`
+    const previewUrl = att.preview_url ? resolveMediaUrl(att.preview_url) : '';
+    const preview = previewUrl
+      ? `<img src="${this.escapeAttr(previewUrl)}" alt="">`
       : '<span class="chip-file-icon">📄</span>';
     chip.innerHTML = `${preview}<span class="chip-name">${this.escape(att.original_name)}</span>
       <button type="button" class="attachment-chip-remove" title="Убрать" aria-label="Убрать">×</button>`;
@@ -2688,6 +2915,7 @@ class ChatApp {
       if (!this.pendingAttachments.length) {
         this.$.attachmentStrip.classList.add('hidden');
       }
+      this._saveComposerDraft(this.currentConvId);
     });
     this.$.attachmentStrip.appendChild(chip);
   }
@@ -2721,6 +2949,7 @@ class ChatApp {
       this.$.attachmentStrip.classList.remove('hidden');
       this.$.userInput?.focus();
     }
+    this._saveComposerDraft(this.currentConvId);
   }
 
   _setSettingsChatTitle(title) {

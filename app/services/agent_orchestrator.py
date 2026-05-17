@@ -213,6 +213,7 @@ class AgentOrchestrator:
         tool_calls_meta: list[dict[str, Any]],
         emit: EventEmitter,
         llm_model: str | None = None,
+        existing_message: Message | None = None,
     ) -> AgentTurnResult | None:
         """Сохранить частичный ответ, если лимит tools исчерпан, но есть результат."""
         if not all_image_urls and not tool_calls_meta:
@@ -227,6 +228,7 @@ class AgentOrchestrator:
             media_url_rewrites=media_url_rewrites,
             tool_calls_meta=tool_calls_meta,
             overflow_note=self._tool_loop_overflow_note(),
+            existing_message=existing_message,
         )
         await self._emit_turn_done(
             session,
@@ -381,6 +383,11 @@ class AgentOrchestrator:
                 )
                 tool_calls_meta.extend(completion.tool_calls)
 
+                turn_executor = self._executor(
+                    session,
+                    conversation_id,
+                    source_user_message_id=user_message.id,
+                )
                 for tc in completion.tool_calls:
                     fn = tc["function"]
                     name = fn["name"]
@@ -391,11 +398,7 @@ class AgentOrchestrator:
                     logger.info("tool_start: %s", name)
 
                     try:
-                        result = await self._executor(
-                            session,
-                            conversation_id,
-                            source_user_message_id=user_message.id,
-                        ).run(name, args)
+                        result = await turn_executor.run(name, args)
                         result_content = result.content
                     except Exception as exc:
                         logger.exception("Ошибка инструмента %s", name)
@@ -473,6 +476,7 @@ class AgentOrchestrator:
             tool_calls_meta=tool_calls_meta,
             emit=emit,
             llm_model=llm_model,
+            existing_message=stream_draft.message,
         )
         if partial is not None:
             return partial
@@ -612,6 +616,11 @@ class AgentOrchestrator:
                 )
                 tool_calls_meta.extend(completion.tool_calls)
 
+                turn_executor = self._executor(
+                    session,
+                    conversation_id,
+                    source_user_message_id=user_message.id,
+                )
                 for tc in completion.tool_calls:
                     fn = tc["function"]
                     name = fn["name"]
@@ -620,11 +629,7 @@ class AgentOrchestrator:
                     await emit("tool_start", {"name": name, "arguments": args})
                     logger.info("tool_start: %s", name)
                     try:
-                        result = await self._executor(
-                            session,
-                            conversation_id,
-                            source_user_message_id=user_message.id,
-                        ).run(name, args)
+                        result = await turn_executor.run(name, args)
                         result_content = result.content
                     except Exception as exc:
                         logger.exception("Ошибка инструмента %s", name)
@@ -698,6 +703,7 @@ class AgentOrchestrator:
             tool_calls_meta=tool_calls_meta,
             emit=emit,
             llm_model=llm_model,
+            existing_message=stream_draft.message,
         )
         if partial is not None:
             return partial

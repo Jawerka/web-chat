@@ -289,6 +289,36 @@ class AttachmentRepository:
         )
         return list(result.scalars().all())
 
+    async def sync_message_attachments(
+        self,
+        message_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        attachment_ids: list[uuid.UUID],
+    ) -> None:
+        """
+        Заменить набор вложений сообщения.
+
+        Снятые с сообщения остаются в беседе (message_id=None).
+        """
+        current = await self.list_for_message(message_id)
+        current_ids = {a.id for a in current}
+        new_ids = set(attachment_ids)
+
+        for att in current:
+            if att.id not in new_ids:
+                att.message_id = None
+
+        for aid in new_ids - current_ids:
+            att = await self.get_by_id(aid)
+            if att is None:
+                raise ValueError(f"Вложение {aid} не найдено")
+            if att.conversation_id is not None and att.conversation_id != conversation_id:
+                raise ValueError(f"Вложение {aid} принадлежит другой беседе")
+            att.message_id = message_id
+            att.conversation_id = conversation_id
+
+        await self._session.flush()
+
 
 class MessageRepository:
     """Сообщения беседы."""
