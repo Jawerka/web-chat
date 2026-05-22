@@ -255,7 +255,7 @@ class GalleryApp {
     card.dataset.id = item.id;
     card.innerHTML = `
       <div class="gallery-card-media">
-        <img src="${this.escapeAttr(item.thumb_url)}" alt="${this.escapeAttr(item.filename)}" loading="lazy" decoding="async">
+        <img src="${this.escapeAttr(mediaPreviewUrl(item.thumb_url))}" alt="${this.escapeAttr(item.filename)}" loading="lazy" decoding="async">
         <button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl" data-id="${this.escapeAttr(item.id)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${ICON_ATTACH}</button>
         <div class="gallery-card-actions">
           <button type="button" class="gallery-card-action gallery-card-save" data-id="${this.escapeAttr(item.id)}" title="Сохранить" aria-label="Сохранить">${ICON_SAVE}</button>

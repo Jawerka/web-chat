@@ -59,9 +59,27 @@ async def serve_asset_thumb(
     asset_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Миниатюра из БД."""
+    """Миниатюра WebP из БД (или legacy JPEG в thumb_data)."""
     service = MediaService(db)
     result = await service.get_thumb_bytes(asset_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Изображение не найдено")
+    data, mime = result
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/asset/{asset_id}/preview")
+async def serve_asset_preview(
+    asset_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Облегчённое WebP-превью для мобильных и плотных сеток."""
+    service = MediaService(db)
+    result = await service.get_preview_bytes(asset_id)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Изображение не найдено")
     data, mime = result

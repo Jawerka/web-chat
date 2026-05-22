@@ -36,6 +36,7 @@ class AssistantStreamDraft:
         self._conversation = conversation
         self._emit = emit
         self._message: Message | None = None
+        self._json_cache: dict[str, Any] = {}
         self._buffer = ""
         self._flush_lock = asyncio.Lock()
         self._pending_flush = False
@@ -49,10 +50,8 @@ class AssistantStreamDraft:
         return self._buffer
 
     def _content_json(self) -> dict[str, Any]:
-        if self._message is None:
-            return {}
-        payload = self._message.content_json
-        return dict(payload) if isinstance(payload, dict) else {}
+        """Только in-memory кэш — не читать ORM после commit (MissingGreenlet)."""
+        return dict(self._json_cache)
 
     def _current_content_text(self) -> str:
         if self._message is None:
@@ -63,16 +62,28 @@ class AssistantStreamDraft:
         """Гарантировать черновик assistant в БД."""
         if self._message is not None:
             return self._message
+        stale = await self._msg_repo.settle_stale_streaming_assistant_messages(
+            self._conversation.id,
+            keep_message_id=None,
+        )
+        if stale:
+            logger.info(
+                "Снят streaming с %d зависших черновиков (conv=%s)",
+                stale,
+                self._conversation.id,
+            )
+        initial_json = {
+            "images": [],
+            "image_asset_ids": [],
+            "streaming": True,
+            "phase": "text",
+        }
+        self._json_cache = dict(initial_json)
         self._message = await self._msg_repo.create(
             conversation_id=self._conversation.id,
             role=MessageRole.ASSISTANT,
             content_text="",
-            content_json={
-                "images": [],
-                "image_asset_ids": [],
-                "streaming": True,
-                "phase": "text",
-            },
+            content_json=initial_json,
         )
         await self._conv_repo.touch(self._conversation)
         await self._session.commit()
@@ -89,6 +100,7 @@ class AssistantStreamDraft:
             return
         merged = self._content_json()
         merged.update(patch)
+        self._json_cache = merged
         await self._msg_repo.update_content(
             self._message,
             content_text=self._current_content_text(),

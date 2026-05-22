@@ -87,13 +87,14 @@ def generate_image(
         Текстовый отчёт с URL (PUBLIC_BASE_URL/media/generated/...).
     """
     logger.info(
-        "generate_image: prompt=%r count=%d %dx%d steps=%d seed=%s",
+        "SD txt2img запрос: prompt=%r count=%d %dx%d steps=%d seed=%s url=%s",
         prompt[:80],
         max(1, min(10, int(count))),
         width,
         height,
         steps,
         seed,
+        sd_base if (sd_base := resolve_sd_webui_url(sd_webui_url)) else settings.sd_webui_url,
     )
     t0 = time.monotonic()
 

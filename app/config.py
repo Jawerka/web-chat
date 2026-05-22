@@ -62,8 +62,23 @@ class Settings(BaseSettings):
     llm_vision_jpeg_quality: int = 88
     llm_vision_max_side_px: int = 4096
 
+    # Превью в UI: WebP в БД и на диске (legacy generated/thumbs)
+    media_thumb_max_px: int = 512
+    media_preview_max_px: int = 320
+    media_thumb_webp_quality: int = 82
+    media_preview_webp_quality: int = 72
+
     upload_retention_days: int = 7
     generated_retention_days: int = 30
+
+    # Журнал: файл + уровень (консоль systemd/journal всегда дублируется)
+    log_file: str = "logs/web-chat.log"
+    log_level: str = "INFO"
+    log_file_max_bytes: int = 10 * 1024 * 1024
+    log_file_backup_count: int = 5
+    # Ожидание LLM при 503 Loading model (секунды, суммарно)
+    llm_model_load_wait_sec: int = 120
+    llm_model_load_retry_sec: float = 2.0
 
     @field_validator("public_base_url", "public_base_url_vpn")
     @classmethod

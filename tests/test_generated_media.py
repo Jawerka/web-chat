@@ -29,6 +29,7 @@ def test_save_image_and_thumbnail(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert (gen / name).is_file()
     assert thumb is not None
     assert (thumbs / thumb).is_file()
+    assert thumb.endswith(".webp")
 
 
 @pytest.mark.asyncio

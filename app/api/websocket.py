@@ -13,6 +13,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.api.ws_manager import manager
 from app.db import session as db_session
+from app.log_context import log_turn_context
 from app.services.generation_state import get_generation_state
 from app.db.models import MessageRole
 from app.db.repositories import MessageRepository
@@ -39,6 +40,15 @@ async def _run_turn_task(
     integration: IntegrationOverrides | None = None,
 ) -> None:
     """Фоновая задача хода агента с отдельной сессией БД."""
+    import time
+
+    t0 = time.monotonic()
+    preview = (user_text[:80] + "…") if len(user_text) > 80 else user_text
+    logger.info(
+        "turn start: user_message text=%r attachments=%d",
+        preview,
+        len(attachment_ids),
+    )
 
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         await manager.send_json(conversation_id, {"type": event_type, **payload})
@@ -62,6 +72,7 @@ async def _run_turn_task(
             await session.commit()
         except TurnCancelled:
             await session.rollback()
+            logger.info("turn done: cancelled за %.1fs", time.monotonic() - t0)
             await emit(
                 "error",
                 {
@@ -71,16 +82,23 @@ async def _run_turn_task(
             )
         except ToolLoopExceeded as exc:
             await session.rollback()
+            logger.warning("turn done: tool_loop за %.1fs — %s", time.monotonic() - t0, exc)
             await emit("error", {"message": str(exc), "code": "tool_loop"})
         except LLMError as exc:
             await session.rollback()
+            logger.warning(
+                "turn done: llm_error за %.1fs — %s",
+                time.monotonic() - t0,
+                exc,
+            )
             await emit("error", {"message": str(exc), "code": "llm_error"})
         except ValueError as exc:
             await session.rollback()
+            logger.warning("turn done: validation за %.1fs — %s", time.monotonic() - t0, exc)
             await emit("error", {"message": str(exc), "code": "validation"})
         except Exception:
             await session.rollback()
-            logger.exception("Ошибка turn беседы %s", conversation_id)
+            logger.exception("turn done: internal за %.1fs", time.monotonic() - t0)
             await emit(
                 "error",
                 {
@@ -88,6 +106,8 @@ async def _run_turn_task(
                     "code": "internal",
                 },
             )
+        else:
+            logger.info("turn done: ok за %.1fs", time.monotonic() - t0)
 
 
 async def _run_regenerate_task(
@@ -98,6 +118,10 @@ async def _run_regenerate_task(
     integration: IntegrationOverrides | None = None,
 ) -> None:
     """Перегенерация ответа на user-сообщение (или на предыдущее user для assistant)."""
+    import time
+
+    t0 = time.monotonic()
+    logger.info("turn start: regenerate message_id=%s", message_id)
 
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         await manager.send_json(conversation_id, {"type": event_type, **payload})
@@ -153,6 +177,7 @@ async def _run_regenerate_task(
             await session.commit()
         except TurnCancelled:
             await session.rollback()
+            logger.info("turn done: regenerate cancelled за %.1fs", time.monotonic() - t0)
             await emit(
                 "error",
                 {
@@ -162,16 +187,34 @@ async def _run_regenerate_task(
             )
         except ToolLoopExceeded as exc:
             await session.rollback()
+            logger.warning(
+                "turn done: regenerate tool_loop за %.1fs — %s",
+                time.monotonic() - t0,
+                exc,
+            )
             await emit("error", {"message": str(exc), "code": "tool_loop"})
         except LLMError as exc:
             await session.rollback()
+            logger.warning(
+                "turn done: regenerate llm_error за %.1fs — %s",
+                time.monotonic() - t0,
+                exc,
+            )
             await emit("error", {"message": str(exc), "code": "llm_error"})
         except ValueError as exc:
             await session.rollback()
+            logger.warning(
+                "turn done: regenerate validation за %.1fs — %s",
+                time.monotonic() - t0,
+                exc,
+            )
             await emit("error", {"message": str(exc), "code": "validation"})
         except Exception:
             await session.rollback()
-            logger.exception("Ошибка regenerate беседы %s", conversation_id)
+            logger.exception(
+                "turn done: regenerate internal за %.1fs",
+                time.monotonic() - t0,
+            )
             await emit(
                 "error",
                 {
@@ -179,6 +222,8 @@ async def _run_regenerate_task(
                     "code": "internal",
                 },
             )
+        else:
+            logger.info("turn done: regenerate ok за %.1fs", time.monotonic() - t0)
 
 
 def _schedule_turn_task(
@@ -219,10 +264,20 @@ def _schedule_regenerate_task(
     return runner
 
 
-def _start_background_turn(conversation_id: uuid.UUID, coro) -> None:
+def _start_background_turn(
+    conversation_id: uuid.UUID,
+    coro,
+    *,
+    turn_kind: str,
+) -> None:
     """Запустить фоновую задачу с учётом busy/cancel."""
+
+    async def _wrapped(cancel_event: asyncio.Event) -> None:
+        with log_turn_context(conversation_id, turn_kind=turn_kind):
+            await coro(cancel_event)
+
     cancel_event = manager.reset_cancel(conversation_id)
-    task = asyncio.create_task(coro(cancel_event))
+    task = asyncio.create_task(_wrapped(cancel_event))
     manager.set_active_task(conversation_id, task)
     task.add_done_callback(lambda _: manager.clear_active_task(conversation_id))
 
@@ -269,6 +324,9 @@ async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID)
 
             if msg_type == "user_message":
                 if manager.is_busy(conversation_id):
+                    logger.warning(
+                        "WS user_message отклонён: busy (активная задача уже идёт)",
+                    )
                     await websocket.send_json(
                         {
                             "type": "error",
@@ -298,6 +356,11 @@ async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID)
                         pass
 
                 integration = parse_integration_overrides(data)
+                logger.info(
+                    "WS user_message принят: %d вложений, llm_override=%s",
+                    len(attachment_ids),
+                    bool(integration.llm_model or integration.llm_base_url),
+                )
                 _start_background_turn(
                     conversation_id,
                     _schedule_turn_task(
@@ -306,11 +369,16 @@ async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID)
                         list(attachment_ids),
                         integration,
                     ),
+                    turn_kind="user_message",
                 )
                 continue
 
             if msg_type == "regenerate":
                 if manager.is_busy(conversation_id):
+                    logger.warning(
+                        "WS regenerate отклонён: busy message_id=%s",
+                        data.get("message_id"),
+                    )
                     await websocket.send_json(
                         {
                             "type": "error",
@@ -331,9 +399,11 @@ async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID)
                     )
                     continue
                 integration = parse_integration_overrides(data)
+                logger.info("WS regenerate принят: message_id=%s", regen_id)
                 _start_background_turn(
                     conversation_id,
                     _schedule_regenerate_task(conversation_id, regen_id, integration),
+                    turn_kind="regenerate",
                 )
                 continue
 

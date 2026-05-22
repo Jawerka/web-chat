@@ -187,9 +187,13 @@ class AttachmentService:
 
     @staticmethod
     def preview_url(attachment: Attachment) -> str | None:
-        """URL превью для изображений; для документов — None."""
+        """URL превью для изображений (thumb WebP); для документов — None."""
         if not is_image_mime(attachment.mime_type):
             return None
+        if attachment.media_asset_id is not None:
+            from app.integrations.media_utils import asset_thumb_url
+
+            return asset_thumb_url(attachment.media_asset_id)
         return AttachmentService.public_url(attachment)
 
     async def extract_text(

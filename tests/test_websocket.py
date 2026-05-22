@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
 from app.db.models import MessageRole
-from app.db.session import configure_database, init_db
+from app.db.session import configure_database, dispose_database, init_db
 from app.main import create_app
 from app.services.agent_orchestrator import AgentTurnResult
 
@@ -19,9 +19,10 @@ from app.services.agent_orchestrator import AgentTurnResult
 def sync_client(tmp_path, monkeypatch):
     """Синхронный TestClient для WebSocket."""
     db_file = tmp_path / "ws.sqlite"
-    configure_database(f"sqlite+aiosqlite:///{db_file}")
 
     async def _init() -> None:
+        await dispose_database()
+        configure_database(f"sqlite+aiosqlite:///{db_file}")
         await init_db()
 
     import asyncio

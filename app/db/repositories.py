@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import String, cast, delete, func, or_, select, update
@@ -164,6 +165,18 @@ class ConversationRepository:
         await self._session.flush()
 
 
+@dataclass(frozen=True, slots=True)
+class GalleryAssetMeta:
+    """Метаданные MediaAsset для списка галереи (без BLOB)."""
+
+    id: uuid.UUID
+    mime_type: str
+    original_name: str | None
+    created_at: datetime
+    size_bytes: int
+    has_thumb: bool
+
+
 class MediaAssetRepository:
     """Изображения в БД."""
 
@@ -179,7 +192,7 @@ class MediaAssetRepository:
         await self._session.flush()
 
     async def list_images_recent(self, limit: int = 1000) -> list[MediaAsset]:
-        """Изображения из БД, новые первыми."""
+        """Изображения из БД, новые первыми (полные строки, включая BLOB)."""
         stmt = (
             select(MediaAsset)
             .where(MediaAsset.mime_type.like("image/%"))
@@ -188,6 +201,37 @@ class MediaAssetRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_gallery_metadata(self, limit: int = 1000) -> list[GalleryAssetMeta]:
+        """Метаданные для галереи без чтения data/thumb_data из SQLite."""
+        cap = max(1, int(limit))
+        stmt = (
+            select(
+                MediaAsset.id,
+                MediaAsset.mime_type,
+                MediaAsset.original_name,
+                MediaAsset.created_at,
+                func.length(MediaAsset.data).label("size_bytes"),
+                MediaAsset.thumb_data.isnot(None).label("has_thumb"),
+            )
+            .where(MediaAsset.mime_type.like("image/%"))
+            .order_by(MediaAsset.created_at.desc())
+            .limit(cap)
+        )
+        result = await self._session.execute(stmt)
+        rows: list[GalleryAssetMeta] = []
+        for row in result.all():
+            rows.append(
+                GalleryAssetMeta(
+                    id=row.id,
+                    mime_type=row.mime_type,
+                    original_name=row.original_name,
+                    created_at=row.created_at,
+                    size_bytes=int(row.size_bytes or 0),
+                    has_thumb=bool(row.has_thumb),
+                )
+            )
+        return rows
 
     async def create(
         self,
@@ -390,11 +434,41 @@ class MessageRepository:
         result = await self._session.execute(stmt)
         return list(result.all())
 
-    async def get_streaming_assistant_message(
+    async def get_last_message(self, conversation_id: uuid.UUID) -> Message | None:
+        """Последнее сообщение беседы (любая роль)."""
+        result = await self._session.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def settle_stale_streaming_assistant_messages(
         self,
         conversation_id: uuid.UUID,
-    ) -> Message | None:
-        """Последний черновик assistant с флагом streaming в content_json."""
+        *,
+        keep_message_id: uuid.UUID | None = None,
+    ) -> int:
+        """
+        Снять streaming:true со всех assistant, кроме разрешённого.
+
+        По умолчанию streaming допустим только у последнего сообщения беседы
+        (и только если это assistant). Все более ранние с streaming:false.
+
+        Args:
+            keep_message_id: Явно сохранить streaming у этого id (активный черновик).
+
+        Returns:
+            Число обновлённых сообщений.
+        """
+        last = await self.get_last_message(conversation_id)
+        allowed_id: uuid.UUID | None = keep_message_id
+        if allowed_id is None and last is not None and last.role == MessageRole.ASSISTANT:
+            payload = last.content_json if isinstance(last.content_json, dict) else {}
+            if payload.get("streaming"):
+                allowed_id = last.id
+
         result = await self._session.execute(
             select(Message)
             .where(
@@ -402,12 +476,38 @@ class MessageRepository:
                 Message.role == MessageRole.ASSISTANT,
             )
             .order_by(Message.created_at.desc())
-            .limit(15)
+            .limit(50)
         )
+        settled = 0
         for message in result.scalars():
+            if allowed_id is not None and message.id == allowed_id:
+                continue
             payload = message.content_json if isinstance(message.content_json, dict) else {}
-            if payload.get("streaming"):
-                return message
+            if not payload.get("streaming"):
+                continue
+            merged = dict(payload)
+            merged["streaming"] = False
+            merged["phase"] = None
+            merged["active_tool"] = None
+            await self.update_content(
+                message,
+                content_text=message.content_text or "",
+                content_json=merged,
+            )
+            settled += 1
+        return settled
+
+    async def get_streaming_assistant_message(
+        self,
+        conversation_id: uuid.UUID,
+    ) -> Message | None:
+        """Черновик assistant с streaming — только если это последнее сообщение беседы."""
+        last = await self.get_last_message(conversation_id)
+        if last is None or last.role != MessageRole.ASSISTANT:
+            return None
+        payload = last.content_json if isinstance(last.content_json, dict) else {}
+        if payload.get("streaming"):
+            return last
         return None
 
     async def list_for_conversation(

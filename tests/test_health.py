@@ -5,19 +5,59 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from app.services.health_service import HealthHistoryPoint, HealthReport, ServiceProbe
+
+
+def _sample_report(*, overall: str = "ok", llm: str = "ok", sd: str = "ok") -> HealthReport:
+    return HealthReport(
+        status=overall,  # type: ignore[arg-type]
+        generated_at=1_700_000_000.0,
+        uptime_sec=120.0,
+        llm=llm,
+        sd=sd,
+        public_base_url="http://test",
+        public_base_url_lan="http://test",
+        public_base_url_vpn=None,
+        timeouts_ok=True,
+        llm_model_configured="test-model",
+        services=[
+            ServiceProbe(
+                id="llm",
+                name="LLM",
+                status="ok" if llm == "ok" else "unavailable",
+                latency_ms=10,
+            ),
+            ServiceProbe(
+                id="sd",
+                name="SD",
+                status="ok" if sd == "ok" else "unavailable",
+                latency_ms=20,
+            ),
+        ],
+        history=[
+            HealthHistoryPoint(
+                ts=1_700_000_000.0,
+                overall=100,
+                llm=100,
+                sd=100,
+                database=100,
+            ),
+        ],
+        active_generations=0,
+    )
+
 
 @pytest.mark.asyncio
 async def test_health_returns_structure(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """GET /api/health возвращает status и sd."""
+    """GET /api/health возвращает расширенный JSON."""
 
-    async def _ok() -> str:
-        return "ok"
+    async def _report() -> HealthReport:
+        return _sample_report()
 
-    monkeypatch.setattr("app.api.health.check_llm_available", _ok)
-    monkeypatch.setattr("app.api.health.check_sd_available", _ok)
+    monkeypatch.setattr("app.api.health.build_health_report", _report)
     response = await client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
@@ -26,6 +66,20 @@ async def test_health_returns_structure(
     assert data["sd"] == "ok"
     assert "public_base_url" in data
     assert data["timeouts_ok"] is True
+    assert "services" in data
+    assert "history" in data
+
+
+@pytest.mark.asyncio
+async def test_health_dashboard_html(
+    client: AsyncClient,
+) -> None:
+    """GET /health — HTML-дашборд."""
+    response = await client.get("/health")
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "Состояние сервисов" in response.text
+    assert "/static/js/health.js" in response.text
 
 
 @pytest.mark.asyncio
@@ -35,14 +89,20 @@ async def test_health_degraded_when_sd_down(
 ) -> None:
     """status=degraded при недоступном SD."""
 
-    async def _llm_ok() -> str:
-        return "ok"
+    async def _report() -> HealthReport:
+        return _sample_report(overall="degraded", sd="unavailable")
 
-    async def _sd_down() -> str:
-        return "unavailable"
-
-    monkeypatch.setattr("app.api.health.check_llm_available", _llm_ok)
-    monkeypatch.setattr("app.api.health.check_sd_available", _sd_down)
+    monkeypatch.setattr("app.api.health.build_health_report", _report)
     response = await client.get("/api/health")
     assert response.json()["status"] == "degraded"
     assert response.json()["sd"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_health_logs_endpoint(client: AsyncClient) -> None:
+    """GET /api/health/logs — объединённый журнал."""
+    response = await client.get("/api/health/logs?limit=100")
+    assert response.status_code == 200
+    data = response.json()
+    assert "lines" in data
+    assert "line_count" in data

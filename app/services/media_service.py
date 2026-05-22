@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import re
 import uuid
@@ -13,7 +12,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -22,19 +20,24 @@ from app.db.repositories import MediaAssetRepository
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     asset_media_url,
+    asset_preview_url,
+    asset_thumb_url,
     compress_image_for_llm,
     is_image_mime,
+    make_asset_preview_bytes,
+    make_asset_thumb_bytes,
     parse_asset_id_from_url,
     resolve_generated_file,
     resolve_upload_file,
     safe_filename,
+    sniff_image_mime,
 )
 
 logger = logging.getLogger(__name__)
 
 _MAX_IMPORT_BYTES = 15 * 1024 * 1024
 _ASSET_URL_RE = re.compile(
-    r"/media/asset/([0-9a-fA-F-]{36})(?:/thumb)?",
+    r"/media/asset/([0-9a-fA-F-]{36})(?:/(?:thumb|preview|llm))?",
     re.IGNORECASE,
 )
 _GENERATED_URL_RE = re.compile(
@@ -61,7 +64,11 @@ class MediaService:
 
     @staticmethod
     def thumb_url(asset_id: uuid.UUID) -> str:
-        return f"/media/asset/{asset_id}/thumb"
+        return asset_thumb_url(asset_id)
+
+    @staticmethod
+    def preview_url(asset_id: uuid.UUID) -> str:
+        return asset_preview_url(asset_id)
 
     async def create_from_bytes(
         self,
@@ -74,7 +81,7 @@ class MediaService:
     ) -> MediaAsset:
         """Сохранить изображение в БД (в текущей сессии)."""
         if thumb_data is None and is_image_mime(mime_type):
-            thumb_data = await asyncio.to_thread(_make_thumb_bytes, data)
+            thumb_data = await asyncio.to_thread(make_asset_thumb_bytes, data)
         return await self._repo.create(
             data=data,
             mime_type=mime_type,
@@ -122,7 +129,7 @@ class MediaService:
         for data, mime_type, conversation_id, original_name, thumb_data in items:
             thumb = thumb_data
             if thumb is None and is_image_mime(mime_type):
-                thumb = await asyncio.to_thread(_make_thumb_bytes, data)
+                thumb = await asyncio.to_thread(make_asset_thumb_bytes, data)
             prepared.append((data, mime_type, conversation_id, original_name, thumb))
 
         async def _write(session):
@@ -159,11 +166,22 @@ class MediaService:
         if asset is None:
             return None
         if asset.thumb_data:
-            return asset.thumb_data, "image/jpeg"
-        thumb = await asyncio.to_thread(_make_thumb_bytes, asset.data)
+            return asset.thumb_data, sniff_image_mime(asset.thumb_data)
+        thumb = await asyncio.to_thread(make_asset_thumb_bytes, asset.data)
         if thumb:
-            return thumb, "image/jpeg"
+            return thumb, "image/webp"
         return asset.data, asset.mime_type
+
+    async def get_preview_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
+        """Облегчённое WebP-превью (из thumb или полного кадра)."""
+        asset = await self._repo.get_by_id(asset_id)
+        if asset is None:
+            return None
+        source = asset.thumb_data or asset.data
+        preview = await asyncio.to_thread(make_asset_preview_bytes, source)
+        if preview:
+            return preview, "image/webp"
+        return await self.get_thumb_bytes(asset_id)
 
     async def get_llm_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
         """Байты изображения для vision API (сжатие при превышении llm_vision_max_bytes)."""
@@ -326,8 +344,9 @@ class MediaService:
                     url_map[old] = new_url
                 try:
                     path.unlink(missing_ok=True)
-                    thumb = GENERATED_ROOT / "thumbs" / f"{Path(filename).stem}.jpg"
-                    thumb.unlink(missing_ok=True)
+                    stem = Path(filename).stem
+                    for ext in (".webp", ".jpg"):
+                        (GENERATED_ROOT / "thumbs" / f"{stem}{ext}").unlink(missing_ok=True)
                 except OSError:
                     pass
                 logger.info(
@@ -486,20 +505,6 @@ def _name_from_url(url: str) -> str:
     path = urlparse(url).path
     name = Path(path).name
     return name or "image"
-
-
-def _make_thumb_bytes(data: bytes, max_size: tuple[int, int] = (512, 512)) -> bytes | None:
-    try:
-        with Image.open(io.BytesIO(data)) as img:
-            img.thumbnail(max_size)
-            if img.mode in ("RGBA", "P", "LA"):
-                img = img.convert("RGB")
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            return buf.getvalue()
-    except Exception as exc:
-        logger.warning("Миниатюра: %s", exc)
-        return None
 
 
 async def _fetch_url_bytes(url: str) -> tuple[bytes, str]:

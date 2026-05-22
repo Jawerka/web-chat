@@ -47,6 +47,18 @@ async def list_messages(
         )
 
     msg_repo = MessageRepository(db)
+    if before is None:
+        from app.api.ws_manager import manager
+
+        keep_id = (
+            manager.get_streaming_message(conversation_id)
+            if manager.is_busy(conversation_id)
+            else None
+        )
+        await msg_repo.settle_stale_streaming_assistant_messages(
+            conversation_id,
+            keep_message_id=keep_id,
+        )
     messages = await msg_repo.list_for_conversation(
         conversation_id,
         limit=limit,

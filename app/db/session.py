@@ -28,16 +28,34 @@ engine = None
 async_session_factory = None
 
 
+async def dispose_database() -> None:
+    """
+    Корректно закрыть async engine (aiosqlite).
+
+    Вызывать перед повторным configure_database в тестах.
+    sync_engine.dispose() даёт MissingGreenlet при закрытии пула.
+    """
+    global engine, async_session_factory
+    if engine is not None:
+        await engine.dispose()
+    engine = None
+    async_session_factory = None
+
+
 def configure_database(database_url: str | None = None) -> None:
     """
     Создать или пересоздать engine и фабрику сессий.
 
     Используется при старте и в тестах (временная SQLite).
+    Перед сменой URL в async-коде сначала await dispose_database().
     """
     global engine, async_session_factory
     url = database_url or settings.database_url
     if engine is not None:
-        engine.sync_engine.dispose()
+        logger.warning(
+            "configure_database: engine уже есть — вызовите await dispose_database() "
+            "перед переконфигурацией, иначе возможны утечки соединений",
+        )
     connect_args: dict = {}
     if "sqlite" in url:
         connect_args["timeout"] = 60.0

@@ -40,6 +40,12 @@ async def test_media_asset_serve(client: AsyncClient) -> None:
 
     thumb = await client.get(f"/media/asset/{aid}/thumb")
     assert thumb.status_code == 200
+    assert thumb.headers["content-type"].startswith("image/webp")
+
+    preview = await client.get(f"/media/asset/{aid}/preview")
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("image/webp")
+    assert len(preview.content) <= len(thumb.content)
 
 
 @pytest.mark.asyncio
@@ -54,9 +60,13 @@ async def test_upload_image_stored_in_db(client: AsyncClient) -> None:
     )
     assert up.status_code == 200
     att = up.json()["attachments"][0]
-    assert "/media/asset/" in att["preview_url"]
+    assert att["preview_url"].endswith("/thumb")
 
-    asset_id = uuid.UUID(att["preview_url"].rstrip("/").split("/")[-1])
+    import re
+
+    m = re.search(r"/media/asset/([0-9a-f-]{36})", att["preview_url"], re.I)
+    assert m is not None
+    asset_id = uuid.UUID(m.group(1))
     async with db_session.async_session_factory() as session:
         repo = MediaAssetRepository(session)
         asset = await repo.get_by_id(asset_id)

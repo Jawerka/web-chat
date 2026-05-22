@@ -9,12 +9,13 @@ import pytest
 
 from app.db.models import Message, MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository, PresetRepository
-from app.db.session import async_session_factory, configure_database, init_db
+from app.db.session import async_session_factory, configure_database, dispose_database, init_db
 from app.services.agent_orchestrator import AgentOrchestrator
 
 
 @pytest.mark.asyncio
 async def test_tool_limit_updates_existing_draft(tmp_path) -> None:
+    await dispose_database()
     configure_database(f"sqlite+aiosqlite:///{tmp_path / 'limit.sqlite'}")
     await init_db()
 

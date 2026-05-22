@@ -3,8 +3,10 @@
  */
 /* global formatMarkdown */
 
-/** Зона у низа чата: внутри — «прилипание» к автоскроллу. */
-const SCROLL_STICKY_PX = 100;
+/** Порог для кнопки «вниз» и ручного «прилипания». */
+const SCROLL_STICKY_PX = 72;
+/** Автоскролл при стриминге только если пользователь почти у низа. */
+const SCROLL_FOLLOW_PX = 28;
 
 const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
 /** Черновик поля ввода и вложений по беседе (до отправки) */
@@ -38,23 +40,6 @@ const MESSAGE_STATUS_HTML = `
       <span class="message-status-text"></span>
     </div>
   </div>`;
-
-function resolveMediaUrl(url) {
-  if (!url) return url;
-  const s = String(url).trim();
-  if (s.startsWith('/media/')) {
-    return `${window.location.origin}${s}`;
-  }
-  try {
-    const u = new URL(s, window.location.origin);
-    if (u.pathname.startsWith('/media/')) {
-      return `${window.location.origin}${u.pathname}${u.search}`;
-    }
-  } catch {
-    /* ignore */
-  }
-  return s;
-}
 
 function extractMarkdownImageUrls(text) {
   if (!text) return [];
@@ -102,12 +87,12 @@ function imageUrlsFromMessage(m) {
     m.role === 'assistant' && !hasStructured
   ) ? extractMarkdownImageUrls(m.content_text) : [];
   const merged = [...fromAssets, ...fromJson, ...fromParts, ...fromMd];
-  return [...new Set(merged.map(resolveMediaUrl).filter(Boolean))];
+  return [...new Set(merged.map(mediaFullUrl).filter(Boolean))];
 }
 
 /** Ключ для сравнения URL картинок (pathname, без origin). */
 function imageUrlKey(url) {
-  const resolved = resolveMediaUrl(url);
+  const resolved = mediaFullUrl(url);
   if (!resolved) return '';
   try {
     return new URL(resolved, window.location.origin).pathname;
@@ -267,6 +252,7 @@ class ChatApp {
     this._generationHadImages = false;
     this._conversationsFingerprint = '';
     this._messagesFingerprint = '';
+    this._scrollRaf = null;
     this._globalSyncIntervalMs = 3500;
     this._sidebarSwipe = null;
     this._serverLlmModel = '';
@@ -311,7 +297,6 @@ class ChatApp {
       settingsSaveBtn: document.getElementById('settings-save-btn'),
       settingsSaveStatus: document.getElementById('settings-save-status'),
       settingsBtn: document.getElementById('settings-btn'),
-      logsBtn: document.getElementById('logs-btn'),
       connStatus: document.getElementById('conn-status'),
       connStatusLabel: document.getElementById('conn-status-label'),
       placeholder: document.getElementById('placeholder'),
@@ -393,7 +378,6 @@ class ChatApp {
     this._bindSidebarSwipeGestures();
 
     this.$.settingsBtn?.addEventListener('click', () => this.showPanel('settings'));
-    this.$.logsBtn?.addEventListener('click', () => this.openLogsPanel());
     this.$.macroInsertBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this.promptMacros.isPickerOpen()) {
@@ -1266,7 +1250,11 @@ class ChatApp {
         if (!this.streaming && !this._generationResumeActive) {
           await this._resumeOngoingGeneration(status);
         } else {
-          await this._refreshStreamingBubbleFromServer();
+          const tempPlaceholder = this.streamRow?.hasAttribute('data-temp')
+            && !this.streamRow?.dataset?.messageId;
+          if (!tempPlaceholder) {
+            await this._refreshStreamingBubbleFromServer(status);
+          }
           this._syncResumeProgress(status);
           if (!this._generationWatchRunning) this._watchGenerationUntilDone();
         }
@@ -1276,17 +1264,14 @@ class ChatApp {
 
       if (this._generationResumeActive || this.streaming) {
         this._generationResumeActive = false;
-        await this.loadMessages();
+        await this._completeGenerationUi({ preserveScroll: !this._scrollStuckToBottom });
         this._messagesFingerprint = await this._messagesFingerprintFromServer();
-        this.endStreaming();
         return;
       }
 
       if (messagesChanged) {
-        const wasAtBottom = this._scrollStuckToBottom;
-        await this.loadMessages();
+        await this.loadMessages({ preserveScroll: !this._scrollStuckToBottom });
         this._messagesFingerprint = msgFp;
-        if (wasAtBottom) this.scrollToBottom(true);
       }
     } catch (err) {
       this.log?.warn('sync', err.message);
@@ -1696,11 +1681,11 @@ class ChatApp {
       if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = false;
 
       this._resetComposerUi();
-      await this.loadMessages();
+      this._scrollStuckToBottom = true;
+      await this.loadMessages({ scrollToEnd: true });
       await this._resumeOngoingGeneration();
       this._restoreComposerDraft(id);
       this._restorePendingAttachmentsFromSession();
-      this._scrollStuckToBottom = true;
       this.renderConvList();
       this.connectSocket();
     } finally {
@@ -1708,25 +1693,61 @@ class ChatApp {
     }
   }
 
-  async loadMessages() {
+  /**
+   * @param {{ preserveScroll?: boolean, scrollToEnd?: boolean }} [opts]
+   */
+  async loadMessages(opts = {}) {
+    const scrollEl = this._chatHistoryScrollEl();
+    const preserve =
+      opts.preserveScroll === true
+      || (opts.preserveScroll !== false && opts.scrollToEnd !== true && !this._scrollStuckToBottom);
+    const scrollTopBefore = scrollEl?.scrollTop ?? 0;
+    const scrollHeightBefore = scrollEl?.scrollHeight ?? 0;
+
     const messages = await this.api(`/api/conversations/${this.currentConvId}/messages?limit=100`);
-    this.$.chatMessages.innerHTML = '';
+    const streamingAssistantIds = messages
+      .filter((m) => m.role === 'assistant' && m.content_json?.streaming)
+      .map((m) => m.id);
+    const activeStreamingId = streamingAssistantIds.length
+      ? streamingAssistantIds[streamingAssistantIds.length - 1]
+      : null;
+    const fragment = document.createDocumentFragment();
     for (const m of messages) {
-      this.appendMessageFromDb(m);
+      fragment.appendChild(this._messageRowFromDb(m, { activeStreamingId }));
     }
+    this.$.chatMessages.replaceChildren(fragment);
     this._messagesFingerprint = this._messagesFingerprintFromList(messages);
-    this.scrollToBottom(true);
+
+    if (preserve && scrollEl) {
+      const delta = scrollEl.scrollHeight - scrollHeightBefore;
+      scrollEl.scrollTop = scrollTopBefore + delta;
+      this._onChatScroll();
+    } else {
+      this.scrollToBottom(opts.scrollToEnd !== false);
+    }
   }
 
   appendMessageFromDb(m) {
+    this.$.chatMessages.appendChild(this._messageRowFromDb(m));
+  }
+
+  _messageRowFromDb(m, { activeStreamingId = null } = {}) {
     const urls = imageUrlsFromMessage(m);
     if (m.role === 'user') {
-      this.addUserBubble(m.content_text || '', m.id, urls);
-    } else if (m.role === 'assistant' && m.content_json?.streaming) {
-      this.appendAssistantDraftFromDb(m, urls);
-    } else if (m.role === 'assistant') {
-      this.addAssistantBubble(m.content_text || '', urls, m.id);
+      return this._buildUserRow(m.content_text || '', m.id, urls);
     }
+    if (m.role === 'assistant' && m.content_json?.streaming) {
+      if (activeStreamingId && m.id !== activeStreamingId) {
+        return this._buildAssistantRow(m.content_text || '', urls, m.id);
+      }
+      return this._buildAssistantDraftRow(m, urls);
+    }
+    if (m.role === 'assistant') {
+      return this._buildAssistantRow(m.content_text || '', urls, m.id);
+    }
+    const fallback = document.createElement('div');
+    fallback.className = 'message-row';
+    return fallback;
   }
 
   _ensureAssistantStreamShell(el) {
@@ -1768,6 +1789,10 @@ class ChatApp {
   }
 
   appendAssistantDraftFromDb(m, imageUrls = null) {
+    this.$.chatMessages.appendChild(this._buildAssistantDraftRow(m, imageUrls));
+  }
+
+  _buildAssistantDraftRow(m, imageUrls = null) {
     const urls = imageUrls ?? imageUrlsFromMessage(m);
     const el = document.createElement('div');
     el.className = 'chat-message assistant';
@@ -1775,7 +1800,7 @@ class ChatApp {
     this._fillAssistantBubble(el, m.content_text || '', urls);
     const row = this._wrapMessage('assistant', el, m.id);
     row.dataset.streamingDraft = 'true';
-    this.$.chatMessages.appendChild(row);
+    return row;
   }
 
   connectSocket() {
@@ -1836,7 +1861,7 @@ class ChatApp {
 
     const ids = this.pendingAttachments.map((a) => a.id);
     const pendingImages = this.pendingAttachments
-      .map((a) => resolveMediaUrl(a.preview_url))
+      .map((a) => mediaFullUrl(a.preview_url))
       .filter(Boolean);
     this.addUserBubble(text, null, pendingImages);
     this._resetComposerUi();
@@ -1947,7 +1972,7 @@ class ChatApp {
     const el = row.querySelector('.chat-message.user') || row.querySelector('.chat-message');
     if (!el) return;
     const urls = attachments
-      .map((a) => (a.preview_url ? resolveMediaUrl(a.preview_url) : ''))
+      .map((a) => (a.preview_url ? mediaFullUrl(a.preview_url) : ''))
       .filter(Boolean);
     let grid = el.querySelector('.message-images');
     if (!urls.length) {
@@ -2017,9 +2042,12 @@ class ChatApp {
     }
     bubble.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src');
-      if (src) img.src = resolveMediaUrl(src);
+      if (src) {
+        img.dataset.url = mediaFullUrl(src);
+        img.src = mediaPreviewUrl(src);
+      }
     });
-    this.scrollToBottom();
+    this._scheduleScrollToBottom();
   }
 
   onImages(urls) {
@@ -2030,7 +2058,7 @@ class ChatApp {
       this.hideProgress();
       this.streamEl?.classList.add('has-images');
     }
-    this.scrollToBottom();
+    this._scheduleScrollToBottom();
   }
 
   onToolStart(name) {
@@ -2039,7 +2067,7 @@ class ChatApp {
     }
     this._ensureStreamTarget();
     this.showProgress(TOOL_PROGRESS_LABELS[name] || `Выполняется: ${name}`);
-    this.scrollToBottom();
+    this._scheduleScrollToBottom();
   }
 
   onToolDone() {
@@ -2082,11 +2110,54 @@ class ChatApp {
       tempRow.removeAttribute('data-temp');
       tempRow.dataset.messageId = id;
       this._applyStreamUI(tempRow);
+      const bubble = this.streamEl?.querySelector('.message-bubble');
+      if (bubble) bubble.innerHTML = '';
+      if (this.streamImagesEl) this.streamImagesEl.innerHTML = '';
+      if (this.streamEl) {
+        this.streamEl.dataset.rawContent = '';
+        this.streamEl.classList.remove('has-content', 'has-images');
+        this.streamText = '';
+      }
       this._attachActions(tempRow, 'assistant');
+      this._removeExtraStreamRows(id);
       return;
     }
+    this._removeExtraStreamRows(id);
     if (!this._bindStreamToMessageId(id)) {
-      void this.loadMessages().then(() => this._bindStreamToMessageId(id));
+      void this._ensureAssistantDraftRow(id);
+    }
+  }
+
+  _removeExtraStreamRows(keepMessageId) {
+    this.$.chatMessages.querySelectorAll('.message-row.assistant').forEach((row) => {
+      const mid = row.dataset.messageId;
+      if (!mid || mid === keepMessageId) return;
+      const el = row.querySelector('.chat-message.assistant');
+      if (el?.classList.contains('streaming')) {
+        this._settleStreamElement(el);
+        row.removeAttribute('data-streaming-draft');
+      }
+    });
+    const orphanTemp = this.$.chatMessages.querySelector(
+      '.message-row.assistant[data-temp="true"]',
+    );
+    if (orphanTemp && orphanTemp !== this.streamRow) {
+      orphanTemp.remove();
+    }
+  }
+
+  async _ensureAssistantDraftRow(messageId) {
+    try {
+      const messages = await this.api(
+        `/api/conversations/${this.currentConvId}/messages?limit=30`,
+      );
+      const draft = messages.find((m) => m.id === messageId);
+      if (draft) {
+        this.$.chatMessages.appendChild(this._buildAssistantDraftRow(draft));
+      }
+      this._bindStreamToMessageId(messageId);
+    } catch (err) {
+      this.log?.warn('chat', err.message);
     }
   }
 
@@ -2167,10 +2238,10 @@ class ChatApp {
     }
 
     if (!status.in_progress) {
-      this._generationResumeActive = false;
-      if (this.streaming) {
-        await this.loadMessages();
-        this.endStreaming();
+      if (this.streaming || this._generationResumeActive) {
+        await this._completeGenerationUi({ preserveScroll: !this._scrollStuckToBottom });
+      } else {
+        this._generationResumeActive = false;
       }
       return;
     }
@@ -2192,20 +2263,25 @@ class ChatApp {
         bound = this._bindStreamToMessageId(draftRow.dataset.messageId);
       }
     }
+    if (!bound && streamId) {
+      const messages = await this.api(
+        `/api/conversations/${this.currentConvId}/messages?limit=50`,
+      );
+      const draft = messages.find((m) => m.id === streamId);
+      if (draft) {
+        this.$.chatMessages.appendChild(this._buildAssistantDraftRow(draft));
+        bound = this._bindStreamToMessageId(draft.id);
+      }
+    }
     if (!bound) {
       const messages = await this.api(
         `/api/conversations/${this.currentConvId}/messages?limit=50`,
       );
-      const draft = [...messages]
-        .reverse()
-        .find((m) => m.role === 'assistant' && m.content_json?.streaming);
-      if (draft) {
-        bound = this._bindStreamToMessageId(draft.id);
-      }
-      if (!bound && messages[messages.length - 1]?.role === 'user') {
+      if (messages[messages.length - 1]?.role === 'user') {
         this._beginResumePlaceholder();
         if (streamId && this.streamRow) {
           this.streamRow.dataset.messageId = streamId;
+          this.streamRow.removeAttribute('data-temp');
         }
       }
     }
@@ -2225,26 +2301,38 @@ class ChatApp {
     return Boolean(this.streamEl);
   }
 
-  async _refreshStreamingBubbleFromServer() {
+  async _refreshStreamingBubbleFromServer(statusFromSync = null) {
     if (!this.currentConvId) return;
-    const targetId = this.streamRow?.dataset?.messageId;
+    const boundId = this.streamRow?.dataset?.messageId || null;
+    const isTemp = this.streamRow?.hasAttribute('data-temp');
+
+    let authoritativeId = boundId;
+    if (!authoritativeId) {
+      const st = statusFromSync || await this.api(
+        `/api/conversations/${this.currentConvId}/generation-status`,
+      );
+      authoritativeId = st?.streaming_message_id || null;
+    }
+    if (!authoritativeId) {
+      if (isTemp) return;
+      return;
+    }
+
     const messages = await this.api(
       `/api/conversations/${this.currentConvId}/messages?limit=50`,
     );
-
-    let target = null;
-    if (targetId) {
-      target = messages.find((m) => m.id === targetId);
-    }
-    if (!target) {
-      target = [...messages]
-        .reverse()
-        .find((m) => m.role === 'assistant' && m.content_json?.streaming);
-    }
+    const target = messages.find((m) => m.id === authoritativeId);
     if (!target) return;
 
-    if (!this.streamEl || (targetId && target.id !== targetId)) {
-      this._bindStreamToMessageId(target.id);
+    if (!this.streamEl || boundId !== target.id) {
+      if (isTemp && this.streamRow) {
+        this.streamRow.dataset.messageId = target.id;
+        this.streamRow.removeAttribute('data-temp');
+        this._applyStreamUI(this.streamRow);
+        this._attachActions(this.streamRow, 'assistant');
+      } else {
+        this._bindStreamToMessageId(target.id);
+      }
     }
     if (!this.streamEl) return;
 
@@ -2297,12 +2385,12 @@ class ChatApp {
           `/api/conversations/${this.currentConvId}/generation-status`,
         );
         if (!st.in_progress) {
-          this._generationResumeActive = false;
           this._generationWatchRunning = false;
-          await this.loadMessages();
+          const stick = this._scrollStuckToBottom;
+          await this._completeGenerationUi({ preserveScroll: !stick });
+          this._messagesFingerprint = await this._messagesFingerprintFromServer();
           this._conversationsFingerprint = '';
           await this._syncConversationsFromServer();
-          this.endStreaming();
           return;
         }
         await this._refreshStreamingBubbleFromServer();
@@ -2328,11 +2416,8 @@ class ChatApp {
     }
     this._generationHadImages = false;
     this._regenerating = false;
+
     const afterReload = () => {
-      if (assistantMessageId) {
-        const row = this._findRow(assistantMessageId);
-        if (row) this._attachActions(row, 'assistant');
-      }
       this.endStreaming();
       if (conversationTitle && this.currentConv) {
         this.currentConv.title = conversationTitle;
@@ -2343,10 +2428,85 @@ class ChatApp {
       this._conversationsFingerprint = '';
       void this.loadConversations();
     };
+
+    const hasLiveStream = Boolean(
+      this.streamRow && (this.streamText || this.streamImagesEl?.children.length),
+    );
+    const hadRegenerate = this._regenerating;
+
+    if (assistantMessageId && hasLiveStream && !hadRegenerate) {
+      this._finalizeStreamRow(assistantMessageId);
+      this._settleAllStreamRows();
+      void this._messagesFingerprintFromServer()
+        .then((fp) => {
+          this._messagesFingerprint = fp;
+          afterReload();
+        })
+        .catch(() => afterReload());
+      return;
+    }
+
     if (this.currentConvId) {
-      void this.loadMessages().then(afterReload).catch(() => afterReload());
+      void this._completeGenerationUi({ preserveScroll: !this._scrollStuckToBottom })
+        .then(afterReload)
+        .catch(() => afterReload());
     } else {
       afterReload();
+    }
+  }
+
+  /**
+   * Завершение генерации в UI: финализация черновика или перезагрузка без дублей.
+   */
+  async _completeGenerationUi({ preserveScroll = false } = {}) {
+    this._generationResumeActive = false;
+    const messageId = this.streamRow?.dataset?.messageId;
+    const hasLiveStream = Boolean(
+      this.streamRow && (this.streamText || this.streamImagesEl?.children.length),
+    );
+    if (hasLiveStream && messageId) {
+      this._finalizeStreamRow(messageId);
+    } else {
+      await this.loadMessages({ preserveScroll });
+    }
+    this._settleAllStreamRows();
+    this.endStreaming();
+  }
+
+  _settleStreamElement(el) {
+    if (!el) return;
+    el.classList.remove('streaming', 'waiting', 'is-busy');
+    const status = el.querySelector('.message-status');
+    status?.classList.add('hidden');
+  }
+
+  _settleAllStreamRows() {
+    this.$.chatMessages?.querySelectorAll('.chat-message.assistant.streaming').forEach((el) => {
+      this._settleStreamElement(el);
+    });
+    this.$.chatMessages?.querySelectorAll('.message-row[data-streaming-draft="true"]').forEach(
+      (row) => {
+        row.removeAttribute('data-streaming-draft');
+      },
+    );
+    if (!this.streaming) {
+      this.$.chatMessages?.querySelectorAll('.message-row.assistant[data-temp="true"]').forEach(
+        (row) => row.remove(),
+      );
+    }
+  }
+
+  _finalizeStreamRow(messageId) {
+    if (!this.streamRow) return;
+    this.streamRow.dataset.messageId = messageId;
+    this.streamRow.removeAttribute('data-streaming-draft');
+    this.streamRow.removeAttribute('data-temp');
+    if (this.streamEl) {
+      this._settleStreamElement(this.streamEl);
+    }
+    this._attachActions(this.streamRow, 'assistant');
+    if (this._scrollStuckToBottom) {
+      this._scheduleScrollToBottom(true);
     }
   }
 
@@ -2382,7 +2542,7 @@ class ChatApp {
     }
 
     if (this.streamEl) {
-      this.streamEl.classList.remove('streaming', 'waiting', 'is-busy', 'has-content', 'has-images');
+      this._settleStreamElement(this.streamEl);
       if (!this.streamText && !this.streamImagesEl?.children.length) {
         this.streamRow?.remove();
       }
@@ -2390,6 +2550,7 @@ class ChatApp {
       this.streamRow = null;
       this.streamImagesEl = null;
     }
+    this._settleAllStreamRows();
   }
 
   _findRow(messageId) {
@@ -2453,6 +2614,11 @@ class ChatApp {
   }
 
   addUserBubble(text, messageId = null, imageUrls = []) {
+    this.$.chatMessages.appendChild(this._buildUserRow(text, messageId, imageUrls));
+    this._scheduleScrollToBottom(true);
+  }
+
+  _buildUserRow(text, messageId = null, imageUrls = []) {
     const el = document.createElement('div');
     el.className = 'chat-message user';
     if (text) {
@@ -2462,24 +2628,28 @@ class ChatApp {
       this.promptMacros.renderUserText(textEl, text);
       el.appendChild(textEl);
     }
-    const urls = [...new Set(imageUrls.map(resolveMediaUrl))];
+    const urls = [...new Set(imageUrls.map(mediaFullUrl))];
     if (urls.length) {
       const grid = document.createElement('div');
       grid.className = 'message-images';
-      for (const url of urls) grid.appendChild(this._createImage(url));
+      for (const url of urls) grid.appendChild(this._createImage(url, { scrollOnLoad: false }));
       el.appendChild(grid);
       this._bindImageClicks(el);
     }
-    this.$.chatMessages.appendChild(this._wrapMessage('user', el, messageId));
-    this.scrollToBottom();
+    return this._wrapMessage('user', el, messageId);
   }
 
   addAssistantBubble(text, imageUrls, messageId = null) {
+    this.$.chatMessages.appendChild(this._buildAssistantRow(text, imageUrls, messageId));
+    this._scheduleScrollToBottom(true);
+  }
+
+  _buildAssistantRow(text, imageUrls, messageId = null) {
     const el = document.createElement('div');
     el.className = 'chat-message assistant';
     el.dataset.rawContent = text || '';
     const displayText = stripMarkdownImages(text);
-    const urls = [...new Set(imageUrls.map(resolveMediaUrl).filter(Boolean))];
+    const urls = [...new Set(imageUrls.map(mediaFullUrl).filter(Boolean))];
     if (displayText) {
       const bubble = document.createElement('div');
       bubble.className = 'message-bubble';
@@ -2489,12 +2659,11 @@ class ChatApp {
     if (urls.length) {
       const grid = document.createElement('div');
       grid.className = 'message-images';
-      for (const url of urls) grid.appendChild(this._createImage(url));
+      for (const url of urls) grid.appendChild(this._createImage(url, { scrollOnLoad: false }));
       el.appendChild(grid);
     }
     this._bindImageClicks(el);
-    this.$.chatMessages.appendChild(this._wrapMessage('assistant', el, messageId));
-    this.scrollToBottom();
+    return this._wrapMessage('assistant', el, messageId);
   }
 
   _extractMessagePlainText(row, role) {
@@ -2717,7 +2886,7 @@ class ChatApp {
     const unique = [];
     const seen = new Set();
     for (const raw of urls || []) {
-      const resolved = resolveMediaUrl(raw);
+      const resolved = mediaFullUrl(raw);
       const key = imageUrlKey(resolved);
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -2732,7 +2901,7 @@ class ChatApp {
   _appendImagesToGrid(grid, urls) {
     let added = 0;
     for (const raw of urls || []) {
-      const resolved = resolveMediaUrl(raw);
+      const resolved = mediaFullUrl(raw);
       if (!resolved || this._gridHasImageKey(grid, resolved)) continue;
       grid.appendChild(this._createImage(resolved));
       added += 1;
@@ -2740,17 +2909,21 @@ class ChatApp {
     return added;
   }
 
-  _createImage(url) {
-    const resolved = resolveMediaUrl(url);
+  _createImage(url, { scrollOnLoad = true } = {}) {
+    const full = mediaFullUrl(url);
+    const preview = mediaPreviewUrl(url);
     const frame = document.createElement('div');
     frame.className = 'message-image-frame';
     const img = document.createElement('img');
-    img.src = resolved;
-    img.dataset.url = resolved;
+    img.src = preview;
+    img.dataset.url = full;
     img.alt = 'Изображение';
     img.loading = 'lazy';
-    img.addEventListener('click', () => this.openLightbox(resolved));
-    img.addEventListener('load', () => this.scrollToBottom(), { once: true });
+    img.decoding = 'async';
+    img.addEventListener('click', () => this.openLightbox(full));
+    if (scrollOnLoad) {
+      img.addEventListener('load', () => this._scheduleScrollToBottom(), { once: true });
+    }
     frame.appendChild(img);
     return frame;
   }
@@ -2759,7 +2932,7 @@ class ChatApp {
     container.querySelectorAll('img').forEach((img) => {
       img.addEventListener('click', (e) => {
         e.preventDefault();
-        this.openLightbox(img.src);
+        this.openLightbox(img.dataset.url || mediaFullUrl(img.src));
       });
     });
   }
@@ -2903,7 +3076,7 @@ class ChatApp {
     const chip = document.createElement('div');
     chip.className = 'attachment-chip';
     chip.dataset.id = att.id;
-    const previewUrl = att.preview_url ? resolveMediaUrl(att.preview_url) : '';
+    const previewUrl = att.preview_url ? mediaPreviewUrl(att.preview_url) : '';
     const preview = previewUrl
       ? `<img src="${this.escapeAttr(previewUrl)}" alt="">`
       : '<span class="chip-file-icon">📄</span>';
@@ -3118,14 +3291,26 @@ class ChatApp {
     this._updateScrollBtn();
   }
 
+  _scheduleScrollToBottom(force = false) {
+    if (this._scrollRaf != null) return;
+    this._scrollRaf = requestAnimationFrame(() => {
+      this._scrollRaf = null;
+      this.scrollToBottom(force);
+    });
+  }
+
   scrollToBottom(force = false) {
     const el = this._chatHistoryScrollEl();
     if (!el) return;
+    const dist = this._distanceFromBottom(el);
     if (force) {
       this._scrollStuckToBottom = true;
-    }
-    if (force || this._scrollStuckToBottom) {
       el.scrollTop = el.scrollHeight;
+    } else if (dist <= SCROLL_FOLLOW_PX) {
+      this._scrollStuckToBottom = true;
+      el.scrollTop = el.scrollHeight;
+    } else {
+      this._scrollStuckToBottom = false;
     }
     this._updateScrollBtn();
   }
@@ -3138,7 +3323,7 @@ class ChatApp {
     if (show) {
       this.$.scrollBtn.title = this._scrollStuckToBottom
         ? 'Вниз'
-        : 'Вниз (прилипнуть к новым сообщениям)';
+        : 'Вниз (следовать за новыми сообщениями)';
     }
   }
 
@@ -3146,7 +3331,7 @@ class ChatApp {
     const urls = [];
     const seen = new Set();
     const add = (raw) => {
-      const resolved = resolveMediaUrl(raw);
+      const resolved = mediaFullUrl(raw);
       if (!resolved || seen.has(resolved)) return;
       seen.add(resolved);
       urls.push(resolved);
@@ -3155,7 +3340,7 @@ class ChatApp {
       add(img.dataset.url || img.getAttribute('src'));
     });
     this.$.chatMessages.querySelectorAll('.message-bubble img, .md-inline-img').forEach((img) => {
-      add(img.getAttribute('src'));
+      add(img.dataset.url || img.getAttribute('src'));
     });
     return urls;
   }
@@ -3178,7 +3363,7 @@ class ChatApp {
   }
 
   async downloadLightboxImage() {
-    const url = resolveMediaUrl(this._lightboxCurrentUrl());
+    const url = mediaFullUrl(this._lightboxCurrentUrl());
     if (!url) return;
     const btn = this.$.lightboxSave;
     if (btn) btn.disabled = true;
@@ -3202,14 +3387,14 @@ class ChatApp {
   }
 
   async attachLightboxImageToComposer() {
-    const url = resolveMediaUrl(this._lightboxCurrentUrl());
+    const url = mediaFullUrl(this._lightboxCurrentUrl());
     if (!url) return;
     if (!this.currentConvId) {
       this.showError('Сначала выберите или создайте беседу');
       return;
     }
     const key = imageUrlKey(url);
-    if (this.pendingAttachments.some((a) => imageUrlKey(resolveMediaUrl(a.preview_url)) === key)) {
+    if (this.pendingAttachments.some((a) => imageUrlKey(mediaFullUrl(a.preview_url)) === key)) {
       this.showError('Это изображение уже прикреплено', 3000);
       return;
     }
@@ -3232,7 +3417,7 @@ class ChatApp {
   }
 
   openLightbox(url) {
-    const resolved = resolveMediaUrl(url);
+    const resolved = mediaFullUrl(url);
     this._lightboxUrls = this._collectGalleryUrls();
     if (!this._lightboxUrls.length) {
       this._lightboxUrls = [resolved];

@@ -8,7 +8,7 @@ import logging
 from collections import deque
 from threading import Lock
 
-_BUFFER: deque[str] = deque(maxlen=500)
+_BUFFER: deque[str] = deque(maxlen=2000)
 _LOCK = Lock()
 _HANDLER: logging.Handler | None = None
 
@@ -26,14 +26,25 @@ class RingBufferHandler(logging.Handler):
             _BUFFER.append(line)
 
 
-def install_log_buffer() -> None:
+def install_log_buffer(
+    *,
+    formatter: logging.Formatter | None = None,
+    ctx_filter: logging.Filter | None = None,
+) -> None:
     """Подключить буфер к корневому логгеру (один раз)."""
     global _HANDLER
     if _HANDLER is not None:
         return
     handler = RingBufferHandler()
     handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+    handler.setFormatter(
+        formatter
+        or logging.Formatter(
+            "%(asctime)s %(levelname)s [%(name)s] conv=%(conv_id)s turn=%(turn)s %(message)s",
+        ),
+    )
+    if ctx_filter is not None:
+        handler.addFilter(ctx_filter)
     logging.getLogger().addHandler(handler)
     _HANDLER = handler
 

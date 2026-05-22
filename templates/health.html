@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1018">
+  <title>{{ title }}</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/health.css">
+</head>
+<body>
+  <div class="health-app">
+    <header class="health-header">
+      <div class="health-header-main">
+        <a href="/" class="health-back" title="В чат">← Чат</a>
+        <h1>Состояние сервисов</h1>
+        <p class="health-sub" id="health-updated">Загрузка…</p>
+      </div>
+      <div class="health-header-actions">
+        <label class="health-auto">
+          <input type="checkbox" id="health-auto-refresh" checked>
+          Обновлять каждые 5 с
+        </label>
+        <button type="button" class="btn" id="health-refresh">Обновить</button>
+      </div>
+    </header>
+
+    <section class="health-summary" id="health-summary" aria-live="polite">
+      <div class="summary-badge" id="summary-badge">—</div>
+      <div class="summary-meta">
+        <span id="summary-uptime"></span>
+        <span id="summary-gens"></span>
+        <span id="summary-timeouts"></span>
+      </div>
+    </section>
+
+    <section class="health-charts">
+      <article class="chart-card">
+        <h2>Доступность (90 замеров)</h2>
+        <canvas id="chart-overall" width="640" height="120" aria-label="График общей доступности"></canvas>
+        <div class="chart-legend">
+          <span class="leg leg-overall">Общее</span>
+          <span class="leg leg-llm">LLM</span>
+          <span class="leg leg-sd">SD</span>
+          <span class="leg leg-db">БД</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="services-grid" id="services-grid"></section>
+
+    <section class="health-logs">
+      <div class="logs-toolbar">
+        <h2>Журнал</h2>
+        <span class="logs-count" id="logs-count">0 строк</span>
+        <button type="button" class="btn btn-primary" id="logs-save">Сохранить лог</button>
+        <button type="button" class="btn" id="logs-refresh">Обновить лог</button>
+      </div>
+      <pre class="logs-view styled-scrollbar" id="logs-view" aria-label="Объединённый журнал"></pre>
+    </section>
+  </div>
+  <script src="/static/js/health.js" defer></script>
+</body>
+</html>

@@ -155,6 +155,9 @@ class AgentOrchestrator:
             "image_asset_ids": all_image_asset_ids,
             "tool_calls": tool_calls_meta,
             "reasoning": None,
+            "streaming": False,
+            "phase": None,
+            "active_tool": None,
         }
         if existing_message is not None:
             await msg_repo.update_content(
@@ -313,6 +316,12 @@ class AgentOrchestrator:
             )
 
         await emit("ack", {"user_message_id": str(user_message.id)})
+        stale = await msg_repo.settle_stale_streaming_assistant_messages(conversation_id)
+        if stale:
+            logger.info(
+                "Снят streaming с %d зависших черновиков перед новым ходом",
+                stale,
+            )
         await session.commit()
         logger.info(
             "БД: commit user-сообщения %s перед LLM/tools",
@@ -345,6 +354,7 @@ class AgentOrchestrator:
         all_image_asset_ids: list[str] = []
         media_url_rewrites: dict[str, str] = {}
         tool_calls_meta: list[dict[str, Any]] = []
+        sd_tool_counts: dict[str, int] = {}
         stream_draft = AssistantStreamDraft(
             session,
             msg_repo,
@@ -395,7 +405,23 @@ class AgentOrchestrator:
 
                     await stream_draft.set_active_tool(name)
                     await emit("tool_start", {"name": name, "arguments": args})
-                    logger.info("tool_start: %s", name)
+                    if name in ("generate_image", "img2img", "upscale_images"):
+                        sd_tool_counts[name] = sd_tool_counts.get(name, 0) + 1
+                        n = sd_tool_counts[name]
+                        logger.info(
+                            "tool_start: %s (вызов #%d в ходе, round=%d)",
+                            name,
+                            n,
+                            round_idx + 1,
+                        )
+                        if n > 1:
+                            logger.warning(
+                                "Повторный %s в том же ходе (#%d) — очередь SD/WebUI",
+                                name,
+                                n,
+                            )
+                    else:
+                        logger.info("tool_start: %s", name)
 
                     try:
                         result = await turn_executor.run(name, args)
@@ -523,6 +549,12 @@ class AgentOrchestrator:
             user_parts = user_message.content_text or ""
 
         await emit("ack", {"user_message_id": str(user_message.id)})
+        stale = await msg_repo.settle_stale_streaming_assistant_messages(conversation_id)
+        if stale:
+            logger.info(
+                "Снят streaming с %d зависших черновиков перед перегенерацией",
+                stale,
+            )
         await session.commit()
         logger.info(
             "БД: commit после delete_after, user %s перед LLM/tools",
@@ -578,6 +610,7 @@ class AgentOrchestrator:
         all_image_asset_ids: list[str] = []
         media_url_rewrites: dict[str, str] = {}
         tool_calls_meta: list[dict[str, Any]] = []
+        sd_tool_counts: dict[str, int] = {}
         stream_draft = AssistantStreamDraft(
             session,
             msg_repo,
@@ -627,7 +660,23 @@ class AgentOrchestrator:
                     args = self._llm.parse_tool_arguments(fn["arguments"])
                     await stream_draft.set_active_tool(name)
                     await emit("tool_start", {"name": name, "arguments": args})
-                    logger.info("tool_start: %s", name)
+                    if name in ("generate_image", "img2img", "upscale_images"):
+                        sd_tool_counts[name] = sd_tool_counts.get(name, 0) + 1
+                        n = sd_tool_counts[name]
+                        logger.info(
+                            "tool_start: %s (вызов #%d в ходе, round=%d)",
+                            name,
+                            n,
+                            round_idx + 1,
+                        )
+                        if n > 1:
+                            logger.warning(
+                                "Повторный %s в том же ходе (#%d) — очередь SD/WebUI",
+                                name,
+                                n,
+                            )
+                    else:
+                        logger.info("tool_start: %s", name)
                     try:
                         result = await turn_executor.run(name, args)
                         result_content = result.content

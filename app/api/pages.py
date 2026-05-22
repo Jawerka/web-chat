@@ -32,3 +32,13 @@ async def macros_page(request: Request) -> HTMLResponse:
         "macros.html",
         {"title": "Быстрые промпты"},
     )
+
+
+@router.get("/health", response_class=HTMLResponse, include_in_schema=False)
+async def health_dashboard(request: Request) -> HTMLResponse:
+    """Дашборд состояния сервисов."""
+    return templates.TemplateResponse(
+        request,
+        "health.html",
+        {"title": "Состояние сервисов"},
+    )

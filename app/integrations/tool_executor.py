@@ -75,7 +75,12 @@ class ToolExecutor:
         Raises:
             ValueError: Неизвестный инструмент.
         """
-        logger.info("Вызов инструмента %s args=%s", name, list(arguments.keys()))
+        logger.info(
+            "Вызов инструмента %s args=%s conv=%s",
+            name,
+            list(arguments.keys()),
+            self._conversation_id or "-",
+        )
         if name == "generate_image":
             return await self._run_sd_image_tool(generate_image, arguments, name)
         if name == "img2img":

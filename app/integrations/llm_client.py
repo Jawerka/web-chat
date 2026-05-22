@@ -7,11 +7,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from openai import AsyncOpenAI
+import httpx
+from openai import APIStatusError, AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from app.config import settings
@@ -19,6 +21,10 @@ from app.integrations.runtime_config import resolve_llm_base_url
 from app.integrations.tool_definitions import TOOL_DEFINITIONS
 
 logger = logging.getLogger(__name__)
+
+# Кэш автовыбора модели: base_url -> (model_id, monotonic_expires)
+_MODEL_CACHE: dict[str, tuple[str, float]] = {}
+_MODEL_CACHE_LOCK = asyncio.Lock()
 
 
 class LLMError(Exception):
@@ -34,6 +40,13 @@ class LLMCompletion:
     finish_reason: str | None = None
 
 
+def _is_model_loading_error(exc: BaseException) -> bool:
+    if isinstance(exc, APIStatusError) and exc.status_code == 503:
+        return True
+    text = str(exc).lower()
+    return "503" in text and "loading" in text
+
+
 class LLMClient:
     """Async OpenAI-клиент к локальному LLM."""
 
@@ -43,6 +56,7 @@ class LLMClient:
             base_url=self._base_url,
             api_key=settings.llm_api_key or "not-needed",
             timeout=settings.llm_timeout_sec,
+            max_retries=0,
         )
         self._model: str | None = settings.llm_model or None
 
@@ -50,22 +64,86 @@ class LLMClient:
         """
         Вернуть имя модели: override, из настроек или первая из GET /v1/models.
 
-        Args:
-            override: Явная модель от клиента (пустая строка игнорируется).
+        При 503 «Loading model» — повтор с паузой (до llm_model_load_wait_sec).
         """
         if override and override.strip():
             return override.strip()
         if self._model:
             return self._model
-        try:
-            models = await self._client.models.list()
-            if not models.data:
-                raise LLMError("Список моделей LLM пуст")
-            self._model = models.data[0].id
-            logger.info("Автовыбор модели LLM: %s", self._model)
+
+        cached = _MODEL_CACHE.get(self._base_url)
+        if cached and cached[1] > time.monotonic():
+            self._model = cached[0]
             return self._model
-        except Exception as exc:
-            raise LLMError(f"Не удалось получить список моделей: {exc}") from exc
+
+        model_id = await self._fetch_first_model_id()
+        self._model = model_id
+        async with _MODEL_CACHE_LOCK:
+            _MODEL_CACHE[self._base_url] = (model_id, time.monotonic() + 300.0)
+        logger.info("Автовыбор модели LLM: %s (base=%s)", model_id, self._base_url)
+        return model_id
+
+    async def _fetch_first_model_id(self) -> str:
+        url = f"{self._base_url.rstrip('/')}/models"
+        headers: dict[str, str] = {}
+        if settings.llm_api_key:
+            headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+
+        deadline = time.monotonic() + max(5, settings.llm_model_load_wait_sec)
+        attempt = 0
+        last_exc: Exception | None = None
+
+        while time.monotonic() < deadline:
+            attempt += 1
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.get(url, headers=headers or None)
+                if response.is_success:
+                    data = response.json()
+                    models = data.get("data") if isinstance(data, dict) else None
+                    if not models:
+                        raise LLMError("Список моделей LLM пуст")
+                    first = models[0]
+                    model_id = first.get("id") if isinstance(first, dict) else str(first)
+                    if not model_id:
+                        raise LLMError("Список моделей LLM пуст")
+                    if attempt > 1:
+                        logger.info(
+                            "LLM models: готово с попытки %d (HTTP %s)",
+                            attempt,
+                            response.status_code,
+                        )
+                    return str(model_id)
+
+                body_preview = (response.text or "")[:200]
+                if response.status_code == 503:
+                    logger.warning(
+                        "LLM models: HTTP 503 (попытка %d), тело=%r — ожидание загрузки модели",
+                        attempt,
+                        body_preview,
+                    )
+                    last_exc = LLMError(
+                        f"Не удалось получить список моделей: Error code: 503 - {body_preview}",
+                    )
+                else:
+                    logger.warning(
+                        "LLM models: HTTP %s (попытка %d), тело=%r",
+                        response.status_code,
+                        attempt,
+                        body_preview,
+                    )
+                    last_exc = LLMError(
+                        f"Не удалось получить список моделей: HTTP {response.status_code}",
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning("LLM models: сеть (попытка %d): %s", attempt, exc)
+                last_exc = LLMError(f"Не удалось получить список моделей: {exc}")
+
+            await asyncio.sleep(settings.llm_model_load_retry_sec)
+
+        if last_exc is not None:
+            raise last_exc
+        raise LLMError("Не удалось получить список моделей: таймаут ожидания загрузки LLM")
 
     @staticmethod
     def _parse_completion(response: ChatCompletion) -> LLMCompletion:
@@ -168,7 +246,22 @@ class LLMClient:
                 tool_choice="auto",
             )
         except Exception as exc:
-            raise LLMError(f"Ошибка LLM: {exc}") from exc
+            if _is_model_loading_error(exc):
+                logger.warning("LLM chat: модель загружается (503), повтор resolve_model")
+                self._model = None
+                _MODEL_CACHE.pop(self._base_url, None)
+                model_name = await self.resolve_model(model)
+                try:
+                    response = await self._client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        tools=tools if tools is not None else TOOL_DEFINITIONS,
+                        tool_choice="auto",
+                    )
+                except Exception as retry_exc:
+                    raise LLMError(f"Ошибка LLM: {retry_exc}") from retry_exc
+            else:
+                raise LLMError(f"Ошибка LLM: {exc}") from exc
         return self._parse_completion(response)
 
     async def complete_with_stream(

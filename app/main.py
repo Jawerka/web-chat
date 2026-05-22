@@ -24,17 +24,14 @@ from app.api.websocket import router as ws_router
 from app.config import settings
 from app.db.session import init_db
 from app.integrations.mcp_server import start_mcp_background
-from app.logging_buffer import install_log_buffer
+from app.logging_setup import setup_logging
 from app.middleware.public_base_url import PublicBaseUrlMiddleware
 from app.public_url import public_base_url_lan, public_base_url_vpn
 from app.services.retention_task import start_retention_background
 
 _ROOT = Path(__file__).resolve().parents[1]
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +39,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Инициализация при старте и остановка при выключении."""
     settings.validate_timeouts()
-    install_log_buffer()
     await init_db()
     start_mcp_background()
     retention_task, retention_stop = start_retention_background()

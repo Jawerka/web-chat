@@ -1,0 +1,360 @@
+:root {
+  --bg: #0b1018;
+  --surface: #141c28;
+  --surface2: #1a2433;
+  --border: #2a3a52;
+  --text: #e8eef6;
+  --muted: #8fa3be;
+  --ok: #3ecf8e;
+  --warn: #f0b429;
+  --load: #5b9fd4;
+  --bad: #f07178;
+  --accent: #5b9fd4;
+  --radius: 12px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font);
+  background: radial-gradient(1200px 600px at 10% -10%, #1a2a42 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, #152238 0%, transparent 50%),
+    var(--bg);
+  color: var(--text);
+}
+
+.health-app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 3rem;
+}
+
+.health-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.health-header h1 {
+  margin: 0.35rem 0 0.25rem;
+  font-size: 1.65rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.health-back {
+  display: inline-block;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.health-back:hover {
+  text-decoration: underline;
+}
+
+.health-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.health-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.health-auto {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  padding: 0.45rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #3d7ab8, #5b9fd4);
+  border-color: transparent;
+  color: #fff;
+}
+
+.health-summary {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1.25rem;
+}
+
+.summary-badge {
+  font-size: 1.1rem;
+  font-weight: 700;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.summary-badge.ok {
+  background: rgba(62, 207, 142, 0.15);
+  color: var(--ok);
+  border: 1px solid rgba(62, 207, 142, 0.35);
+}
+
+.summary-badge.degraded {
+  background: rgba(240, 180, 41, 0.12);
+  color: var(--warn);
+  border: 1px solid rgba(240, 180, 41, 0.35);
+}
+
+.summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.health-charts {
+  margin-bottom: 1.25rem;
+}
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.15rem 0.85rem;
+}
+
+.chart-card h2 {
+  margin: 0 0 0.65rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.chart-card canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+  background: #0d1219;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.6rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.leg::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+
+.leg-overall::before { background: #c8d4e8; }
+.leg-llm::before { background: var(--load); }
+.leg-sd::before { background: var(--ok); }
+.leg-db::before { background: #a78bfa; }
+
+.services-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.service-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.service-card.status-ok { border-left: 3px solid var(--ok); }
+.service-card.status-loading { border-left: 3px solid var(--load); }
+.service-card.status-degraded { border-left: 3px solid var(--warn); }
+.service-card.status-unavailable { border-left: 3px solid var(--bad); }
+
+.service-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.service-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.service-status {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.service-status.ok { color: var(--ok); background: rgba(62, 207, 142, 0.12); }
+.service-status.loading { color: var(--load); background: rgba(91, 159, 212, 0.15); }
+.service-status.degraded { color: var(--warn); background: rgba(240, 180, 41, 0.12); }
+.service-status.unavailable { color: var(--bad); background: rgba(240, 113, 120, 0.12); }
+
+.service-detail {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.service-url {
+  font-size: 0.75rem;
+  color: #6b849e;
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+.meter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.meter-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.meter-track {
+  height: 8px;
+  background: #0d1219;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.5s ease;
+}
+
+.meter-fill.ok { background: linear-gradient(90deg, #2a9d6a, var(--ok)); }
+.meter-fill.load { background: linear-gradient(90deg, #3d7ab8, var(--load)); }
+.meter-fill.warn { background: linear-gradient(90deg, #c49214, var(--warn)); }
+.meter-fill.bad { background: linear-gradient(90deg, #c44, var(--bad)); }
+
+.meter-fill.pulse {
+  animation: pulse-bar 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse-bar {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.health-logs {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+}
+
+.logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.logs-toolbar h2 {
+  margin: 0;
+  font-size: 1rem;
+  flex: 1;
+  min-width: 120px;
+}
+
+.logs-count {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.logs-view {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: #b8c8dc;
+  background: #0a0e14;
+  border: 1px solid #1e2a3c;
+  border-radius: 8px;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.styled-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.styled-scrollbar::-webkit-scrollbar-thumb {
+  background: #3a4f6a;
+  border-radius: 4px;
+}
+
+@media (max-width: 600px) {
+  .health-app { padding: 1rem; }
+  .services-grid { grid-template-columns: 1fr; }
+}

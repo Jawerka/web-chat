@@ -10,8 +10,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import MediaAsset
-from app.db.repositories import MediaAssetRepository
+from app.db.repositories import GalleryAssetMeta, MediaAssetRepository
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     GENERATED_THUMB_ROOT,
@@ -53,18 +52,18 @@ class GalleryItem:
         }
 
 
-def _item_from_asset(asset: MediaAsset) -> GalleryItem:
-    """Элемент галереи из записи MediaAsset."""
-    name = asset.original_name or f"{asset.id}.png"
-    url = asset_media_url(asset.id)
-    thumb = f"/media/asset/{asset.id}/thumb" if asset.thumb_data else url
+def _item_from_gallery_meta(meta: GalleryAssetMeta) -> GalleryItem:
+    """Элемент галереи из метаданных MediaAsset (без BLOB)."""
+    name = meta.original_name or f"{meta.id}.png"
+    url = asset_media_url(meta.id)
+    thumb = f"/media/asset/{meta.id}/thumb" if meta.has_thumb else url
     return GalleryItem(
-        id=str(asset.id),
+        id=str(meta.id),
         filename=name,
         url=url,
         thumb_url=thumb,
-        size_kb=round(len(asset.data) / 1024, 1),
-        mtime=asset.created_at.timestamp(),
+        size_kb=round(meta.size_bytes / 1024, 1),
+        mtime=meta.created_at.timestamp(),
         source="db",
     )
 
@@ -81,13 +80,13 @@ def _list_local_generated_images(limit: int) -> list[GalleryItem]:
 
     items: list[GalleryItem] = []
     for path in paths[:limit]:
-        thumb_name = path.stem + ".jpg"
-        thumb_path = GENERATED_THUMB_ROOT / thumb_name
-        thumb = (
-            generated_thumb_url(thumb_name)
-            if thumb_path.is_file()
-            else generated_media_url(path.name)
-        )
+        thumb = generated_media_url(path.name)
+        for ext in (".webp", ".jpg"):
+            thumb_name = path.stem + ext
+            thumb_path = GENERATED_THUMB_ROOT / thumb_name
+            if thumb_path.is_file():
+                thumb = generated_thumb_url(thumb_name)
+                break
         stat = path.stat()
         items.append(
             GalleryItem(
@@ -115,9 +114,9 @@ async def list_gallery_images(
     """
     limit = max(1, min(GALLERY_MAX_LIMIT, int(limit)))
     repo = MediaAssetRepository(session)
-    db_assets = await repo.list_images_recent(limit=limit * 2)
+    db_assets = await repo.list_gallery_metadata(limit=limit * 2)
 
-    db_items = [_item_from_asset(a) for a in db_assets if is_image_mime(a.mime_type)]
+    db_items = [_item_from_gallery_meta(a) for a in db_assets if is_image_mime(a.mime_type)]
     ingested_names = {(a.original_name or "").lower() for a in db_assets if a.original_name}
 
     local_items: list[GalleryItem] = []
@@ -152,5 +151,6 @@ def delete_gallery_disk_file(filename: str) -> None:
         raise ValueError("Недопустимое имя файла")
     path = resolve_generated_file(safe, thumbs=False)
     path.unlink(missing_ok=True)
-    thumb = GENERATED_THUMB_ROOT / f"{Path(safe).stem}.jpg"
-    thumb.unlink(missing_ok=True)
+    stem = Path(safe).stem
+    for ext in (".webp", ".jpg"):
+        (GENERATED_THUMB_ROOT / f"{stem}{ext}").unlink(missing_ok=True)

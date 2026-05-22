@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from starlette.datastructures import UploadFile
 
-from app.db.session import async_session_factory, configure_database, init_db
+from app.db.session import async_session_factory, configure_database, dispose_database, init_db
 from app.integrations.tool_executor import ToolExecutor
 from app.services.attachment_service import AttachmentService
 
@@ -18,6 +18,7 @@ async def test_pdf_extract_and_prepare_for_llm(tmp_path: Path) -> None:
     """Загрузка PDF → extract_text → кэш в БД, длина <= max_chars."""
     import fitz
 
+    await dispose_database()
     configure_database(f"sqlite+aiosqlite:///{tmp_path}/extract.sqlite")
     await init_db()
 
