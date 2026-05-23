@@ -14,7 +14,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.api.ws_manager import manager
 from app.db import session as db_session
 from app.log_context import log_turn_context
+from app.security.access import check_api_key, check_ws_origin, client_ip_from_request
+from app.security.rate_limit import RateLimitExceeded, check_rate_limit
 from app.services.generation_state import get_generation_state
+from app.services.turn_recovery import settle_interrupted_turn
 from app.db.models import MessageRole
 from app.db.repositories import MessageRepository
 from app.integrations.llm_client import LLMClient, LLMError
@@ -29,6 +32,23 @@ from app.services.agent_orchestrator import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
+
+
+async def _commit_or_settle_turn(
+    session,
+    conversation_id: uuid.UUID,
+    *,
+    status_code: str,
+    status_message: str | None = None,
+) -> None:
+    """Сохранить частичный черновик вместо полного rollback."""
+    await settle_interrupted_turn(
+        session,
+        conversation_id,
+        status_code=status_code,
+        status_message=status_message,
+    )
+    await session.commit()
 
 
 async def _run_turn_task(
@@ -71,7 +91,11 @@ async def _run_turn_task(
             )
             await session.commit()
         except TurnCancelled:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="cancelled",
+            )
             logger.info("turn done: cancelled за %.1fs", time.monotonic() - t0)
             await emit(
                 "error",
@@ -81,11 +105,21 @@ async def _run_turn_task(
                 },
             )
         except ToolLoopExceeded as exc:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="tool_loop",
+                status_message=str(exc),
+            )
             logger.warning("turn done: tool_loop за %.1fs — %s", time.monotonic() - t0, exc)
             await emit("error", {"message": str(exc), "code": "tool_loop"})
         except LLMError as exc:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="llm_error",
+                status_message=str(exc),
+            )
             logger.warning(
                 "turn done: llm_error за %.1fs — %s",
                 time.monotonic() - t0,
@@ -97,7 +131,12 @@ async def _run_turn_task(
             logger.warning("turn done: validation за %.1fs — %s", time.monotonic() - t0, exc)
             await emit("error", {"message": str(exc), "code": "validation"})
         except Exception:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="internal",
+                status_message="Внутренняя ошибка сервера",
+            )
             logger.exception("turn done: internal за %.1fs", time.monotonic() - t0)
             await emit(
                 "error",
@@ -176,7 +215,11 @@ async def _run_regenerate_task(
             )
             await session.commit()
         except TurnCancelled:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="cancelled",
+            )
             logger.info("turn done: regenerate cancelled за %.1fs", time.monotonic() - t0)
             await emit(
                 "error",
@@ -186,7 +229,12 @@ async def _run_regenerate_task(
                 },
             )
         except ToolLoopExceeded as exc:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="tool_loop",
+                status_message=str(exc),
+            )
             logger.warning(
                 "turn done: regenerate tool_loop за %.1fs — %s",
                 time.monotonic() - t0,
@@ -194,7 +242,12 @@ async def _run_regenerate_task(
             )
             await emit("error", {"message": str(exc), "code": "tool_loop"})
         except LLMError as exc:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="llm_error",
+                status_message=str(exc),
+            )
             logger.warning(
                 "turn done: regenerate llm_error за %.1fs — %s",
                 time.monotonic() - t0,
@@ -210,7 +263,12 @@ async def _run_regenerate_task(
             )
             await emit("error", {"message": str(exc), "code": "validation"})
         except Exception:
-            await session.rollback()
+            await _commit_or_settle_turn(
+                session,
+                conversation_id,
+                status_code="internal",
+                status_message="Внутренняя ошибка сервера",
+            )
             logger.exception(
                 "turn done: regenerate internal за %.1fs",
                 time.monotonic() - t0,
@@ -278,13 +336,22 @@ def _start_background_turn(
 
     cancel_event = manager.reset_cancel(conversation_id)
     task = asyncio.create_task(_wrapped(cancel_event))
+
+    def _on_turn_done(t: asyncio.Task[None]) -> None:
+        manager.clear_active_task(conversation_id)
+        if not t.cancelled() and t.exception() is not None:
+            logger.debug("turn task завершилась с ошибкой: conv=%s", conversation_id)
+
     manager.set_active_task(conversation_id, task)
-    task.add_done_callback(lambda _: manager.clear_active_task(conversation_id))
+    task.add_done_callback(_on_turn_done)
 
 
 @router.websocket("/ws/{conversation_id}")
 async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
     """Интерактивный чат по WebSocket."""
+    # До accept — иначе WebSocketException не сработает
+    check_api_key(websocket)
+    check_ws_origin(websocket)
     base_token = bind_request_public_base_url(
         host=websocket.headers.get("host"),
         client_host=websocket.client.host if websocket.client else None,
@@ -323,6 +390,20 @@ async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID)
                 continue
 
             if msg_type == "user_message":
+                try:
+                    ip = client_ip_from_request(websocket)
+                    check_rate_limit(f"{ip}:ws_message")
+                except RateLimitExceeded as rl:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": str(rl),
+                            "code": "rate_limit_error",
+                            "retry_after_sec": rl.retry_after_sec,
+                        }
+                    )
+                    continue
+
                 if manager.is_busy(conversation_id):
                     logger.warning(
                         "WS user_message отклонён: busy (активная задача уже идёт)",
@@ -349,11 +430,21 @@ async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID)
 
                 raw_ids = data.get("attachment_ids") or []
                 attachment_ids: list[uuid.UUID] = []
+                invalid_ids: list[str] = []
                 for raw in raw_ids:
                     try:
                         attachment_ids.append(uuid.UUID(str(raw)))
                     except ValueError:
-                        pass
+                        invalid_ids.append(str(raw))
+                if invalid_ids:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": f"Невалидные attachment_id: {', '.join(invalid_ids)}",
+                            "code": "validation",
+                        }
+                    )
+                    continue
 
                 integration = parse_integration_overrides(data)
                 logger.info(

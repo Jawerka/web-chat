@@ -16,6 +16,7 @@ from app.services.gallery_service import (
     delete_gallery_asset,
     delete_gallery_disk_file,
     list_gallery_images,
+    purge_all_gallery,
 )
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +36,17 @@ async def api_gallery(
         "images": [i.to_api_dict() for i in items],
         "count": len(items),
     }
+
+
+@router.delete("/api/gallery/all")
+async def api_purge_gallery_all(
+    purge_messages: bool = True,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Удалить все изображения галереи (с подтверждением на клиенте)."""
+    stats = await purge_all_gallery(db, purge_messages=purge_messages)
+    await db.commit()
+    return stats
 
 
 @router.delete("/api/gallery/db/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)

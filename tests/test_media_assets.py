@@ -10,6 +10,7 @@ from httpx import AsyncClient
 from app.db import session as db_session
 from app.db.repositories import MediaAssetRepository
 from app.services.media_service import MediaService
+from tests.helpers import api_create_conversation
 
 # 1×1 PNG
 _PNG = bytes.fromhex(
@@ -19,9 +20,9 @@ _PNG = bytes.fromhex(
 
 
 @pytest.mark.asyncio
-async def test_media_asset_serve(client: AsyncClient) -> None:
-    conv = await client.post("/api/conversations", json={})
-    cid = uuid.UUID(conv.json()["id"])
+async def test_media_asset_serve(client: AsyncClient, test_conv_title: str) -> None:
+    conv = await api_create_conversation(client, test_conv_title)
+    cid = uuid.UUID(conv["id"])
 
     async with db_session.async_session_factory() as session:
         media = MediaService(session)
@@ -49,9 +50,9 @@ async def test_media_asset_serve(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_image_stored_in_db(client: AsyncClient) -> None:
-    conv = await client.post("/api/conversations", json={})
-    cid = conv.json()["id"]
+async def test_upload_image_stored_in_db(client: AsyncClient, test_conv_title: str) -> None:
+    conv = await api_create_conversation(client, test_conv_title)
+    cid = conv["id"]
 
     files = {"files": ("test.png", _PNG, "image/png")}
     up = await client.post(
@@ -77,6 +78,7 @@ async def test_upload_image_stored_in_db(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_list_messages_imports_legacy_generated_to_db(
     client: AsyncClient,
+    test_conv_title: str,
 ) -> None:
     """GET /messages импортирует legacy /media/generated в БД и сохраняет asset URL."""
 
@@ -84,8 +86,8 @@ async def test_list_messages_imports_legacy_generated_to_db(
     from app.db.repositories import ConversationRepository, MessageRepository
     from app.integrations.media_utils import GENERATED_ROOT, generated_media_url
 
-    conv = await client.post("/api/conversations", json={})
-    cid = uuid.UUID(conv.json()["id"])
+    conv = await api_create_conversation(client, test_conv_title)
+    cid = uuid.UUID(conv["id"])
 
     filename = f"test_legacy_{uuid.uuid4().hex[:8]}.png"
     path = GENERATED_ROOT / filename

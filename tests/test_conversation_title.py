@@ -17,6 +17,7 @@ from app.services.conversation_title_service import (
     _normalize_title,
     maybe_generate_conversation_title,
 )
+from tests.cleanup import record_test_conversation_id
 
 
 def test_normalize_title_strips_quotes() -> None:
@@ -70,6 +71,7 @@ async def test_maybe_generate_title_updates_conversation(client: AsyncClient) ->
             title=DEFAULT_CONVERSATION_TITLE,
             preset_id=preset.id,
         )
+        record_test_conversation_id(conv.id)
 
         msg_repo = MessageRepository(session)
         await msg_repo.create(
@@ -110,6 +112,7 @@ async def test_maybe_generate_skips_after_second_user_message(client: AsyncClien
             title=DEFAULT_CONVERSATION_TITLE,
             preset_id=preset.id,
         )
+        record_test_conversation_id(conv.id)
         msg_repo = MessageRepository(session)
         await msg_repo.create(
             conversation_id=conv.id,
@@ -136,14 +139,17 @@ async def test_maybe_generate_skips_after_second_user_message(client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_maybe_generate_skips_custom_title(client: AsyncClient) -> None:
+async def test_maybe_generate_skips_custom_title(
+    client: AsyncClient,
+    repo_conv_title: str,
+) -> None:
     """Пользовательский заголовок не перезаписывается."""
     async with db_session.async_session_factory() as session:
         preset = await PresetRepository(session).get_default()
         assert preset is not None
 
         conv_repo = ConversationRepository(session)
-        conv = await conv_repo.create(title="Мой проект", preset_id=preset.id)
+        conv = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
         await session.commit()
 
         llm = AsyncMock()

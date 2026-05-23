@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 from starlette.datastructures import UploadFile
 
-from app.db.session import async_session_factory, configure_database, dispose_database, init_db
+from app.db import session as db_session
+from app.db.session import dispose_database, init_db
+from tests.safety import assert_not_using_production_database, safe_configure_database
 from app.integrations.tool_executor import ToolExecutor
 from app.services.attachment_service import AttachmentService
 
@@ -19,8 +21,9 @@ async def test_pdf_extract_and_prepare_for_llm(tmp_path: Path) -> None:
     import fitz
 
     await dispose_database()
-    configure_database(f"sqlite+aiosqlite:///{tmp_path}/extract.sqlite")
+    safe_configure_database(f"sqlite+aiosqlite:///{tmp_path}/extract.sqlite")
     await init_db()
+    assert_not_using_production_database()
 
     buf = io.BytesIO()
     doc = fitz.open()
@@ -36,7 +39,7 @@ async def test_pdf_extract_and_prepare_for_llm(tmp_path: Path) -> None:
         headers={"content-type": "application/pdf"},
     )
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         service = AttachmentService(session)
         attachment = await service.register_upload(upload_file)
         await session.commit()
@@ -52,7 +55,7 @@ async def test_pdf_extract_and_prepare_for_llm(tmp_path: Path) -> None:
     assert len(result.content) > 0
     assert len(result.content) <= 500 + 80
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         service = AttachmentService(session)
         prepared = await service.prepare_for_llm([attachment.id])
 

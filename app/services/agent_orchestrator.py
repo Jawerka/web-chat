@@ -175,7 +175,7 @@ class AgentOrchestrator:
             "image_asset_ids": all_image_asset_ids,
             "tool_calls": tool_calls_meta,
             "reasoning": None,
-            "streaming": False,
+            "streaming": None,
             "phase": None,
             "active_tool": None,
         }

@@ -266,6 +266,53 @@ async def delete_gallery_asset(session: AsyncSession, asset_id: uuid.UUID) -> No
     await repo.delete(asset)
 
 
+async def purge_all_gallery(
+    session: AsyncSession,
+    *,
+    purge_messages: bool = True,
+    limit: int = GALLERY_MAX_LIMIT,
+) -> dict[str, int]:
+    """
+    Удалить все элементы галереи (БД + диск).
+
+    Returns:
+        Счётчики deleted_db, deleted_disk, messages_purged.
+    """
+    items = await list_gallery_images(session, limit=limit)
+    deleted_db = 0
+    deleted_disk = 0
+    messages_purged = 0
+
+    for item in items:
+        if item.source == "db":
+            try:
+                asset_id = uuid.UUID(item.id)
+            except ValueError:
+                continue
+            if purge_messages:
+                messages_purged += await purge_asset_from_messages(session, asset_id)
+            await delete_gallery_asset(session, asset_id)
+            deleted_db += 1
+        else:
+            if purge_messages:
+                messages_purged += await purge_generated_from_messages(session, item.filename)
+            delete_gallery_disk_file(item.filename)
+            deleted_disk += 1
+
+    logger.info(
+        "Галерея очищена: db=%d disk=%d purge_messages=%s",
+        deleted_db,
+        deleted_disk,
+        purge_messages,
+    )
+    return {
+        "deleted_db": deleted_db,
+        "deleted_disk": deleted_disk,
+        "total": deleted_db + deleted_disk,
+        "messages_purged": messages_purged,
+    }
+
+
 def delete_gallery_disk_file(filename: str) -> None:
     """Удалить файл из data/generated/ и миниатюру."""
     safe = safe_filename(filename)

@@ -57,11 +57,11 @@ def test_rewrite_asset_url_to_llm_variant() -> None:
 @pytest.mark.asyncio
 async def test_serve_asset_llm_endpoint(client) -> None:
     """GET /media/asset/{id}/llm отдаёт тело ≤ лимита для большого asset."""
-    from app.db.session import async_session_factory
+    from app.db import session as db_session
     from app.services.media_service import MediaService
 
     raw = _rgb_png_bytes(2200, 2200)
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         service = MediaService(session)
         asset = await service.create_from_bytes(raw, "image/png")
         await session.commit()

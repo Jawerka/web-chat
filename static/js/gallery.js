@@ -57,6 +57,9 @@ class GalleryApp {
   }
 
   bindEvents() {
+    const purgeAllBtn = document.getElementById('gallery-purge-all');
+    purgeAllBtn?.addEventListener('click', () => void this.purgeAllGallery(purgeAllBtn));
+
     this.els.lightboxClose?.addEventListener('click', () => this.closeLightbox());
     this.els.lightboxPrev?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -421,6 +424,46 @@ class GalleryApp {
       this.flashStatus('Сохранено');
     } catch (err) {
       this.flashStatus(err.message, true);
+    }
+  }
+
+  async purgeAllGallery(btn) {
+    const n = this.items.length;
+    if (n === 0) {
+      this.flashStatus('Галерея уже пуста');
+      return;
+    }
+    const ok = confirm(
+      `Удалить все ${n} изображений из галереи?\n\n`
+      + 'Ссылки на них в сообщениях чата также будут убраны. Это действие нельзя отменить.',
+    );
+    if (!ok) return;
+
+    const prevText = btn?.textContent;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Удаление…';
+    }
+    try {
+      const res = await fetch('/api/gallery/all?purge_messages=true', { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+      const data = await res.json();
+      this.closeLightbox();
+      this.items = [];
+      this.itemById.clear();
+      this.renderGrid();
+      this.updateCount(0);
+      this.flashStatus(`Удалено: ${data.total ?? n}`);
+    } catch (err) {
+      this.flashStatus(err.message, true);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = prevText || 'Очистить галерею';
+      }
     }
   }
 

@@ -10,19 +10,22 @@ from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
 from app.db.models import MessageRole
-from app.db.session import configure_database, dispose_database, init_db
+from app.db.session import dispose_database, init_db
+from tests.safety import assert_not_using_production_database, safe_configure_database
 from app.main import create_app
 from app.services.agent_orchestrator import AgentTurnResult
+from tests.helpers import sync_api_create_conversation
 
 
 @pytest.fixture
 def sync_client(tmp_path, monkeypatch):
     """Синхронный TestClient для WebSocket."""
     db_file = tmp_path / "ws.sqlite"
+    db_url = f"sqlite+aiosqlite:///{db_file}"
 
     async def _init() -> None:
         await dispose_database()
-        configure_database(f"sqlite+aiosqlite:///{db_file}")
+        safe_configure_database(db_url)
         await init_db()
 
     import asyncio
@@ -43,9 +46,12 @@ def sync_client(tmp_path, monkeypatch):
         yield client
 
 
-def test_websocket_ping_and_messages_api(sync_client: TestClient) -> None:
+def test_websocket_ping_and_messages_api(
+    sync_client: TestClient,
+    test_conv_title: str,
+) -> None:
     """connected, ping/pong и GET messages."""
-    conv = sync_client.post("/api/conversations", json={}).json()
+    conv = sync_api_create_conversation(sync_client, test_conv_title)
     conv_id = conv["id"]
 
     with sync_client.websocket_connect(f"/ws/{conv_id}") as ws:
@@ -61,9 +67,12 @@ def test_websocket_ping_and_messages_api(sync_client: TestClient) -> None:
     assert messages.json() == []
 
 
-def test_websocket_user_message_mocked(sync_client: TestClient) -> None:
+def test_websocket_user_message_mocked(
+    sync_client: TestClient,
+    test_conv_title: str,
+) -> None:
     """user_message с mock оркестратора → ack, text_delta, done."""
-    conv_id = sync_client.post("/api/conversations", json={}).json()["id"]
+    conv_id = sync_api_create_conversation(sync_client, test_conv_title)["id"]
 
     fake_user = type("M", (), {"id": uuid.uuid4()})()
     fake_assistant = type("M", (), {"id": uuid.uuid4()})()
@@ -108,15 +117,19 @@ def test_websocket_user_message_mocked(sync_client: TestClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_messages_list_after_db_insert(client: AsyncClient, tmp_path) -> None:
+async def test_messages_list_after_db_insert(
+    client: AsyncClient,
+    test_conv_title: str,
+) -> None:
     """GET messages возвращает сохранённые сообщения."""
+    from app.db import session as db_session
     from app.db.repositories import MessageRepository
-    from app.db.session import async_session_factory
+    from tests.helpers import api_create_conversation
 
-    conv_resp = await client.post("/api/conversations", json={})
-    conv_id = uuid.UUID(conv_resp.json()["id"])
+    conv = await api_create_conversation(client, test_conv_title)
+    conv_id = uuid.UUID(conv["id"])
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         msg_repo = MessageRepository(session)
         await msg_repo.create(
             conversation_id=conv_id,

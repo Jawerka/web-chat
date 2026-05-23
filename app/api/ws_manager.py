@@ -6,27 +6,109 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
+# Секунды без сокетов, после которых чистим служебное состояние беседы
+_SESSION_IDLE_SEC = 300
+# Интервал фоновой уборки «зомби»-задач
+_SWEEP_INTERVAL_SEC = 60
+
+
+@dataclass
+class ConversationSessionState:
+    """Состояние одной беседы в WS-менеджере."""
+
+    websockets: set[WebSocket] = field(default_factory=set)
+    cancel_event: asyncio.Event | None = None
+    active_task: asyncio.Task[None] | None = None
+    streaming_message_id: uuid.UUID | None = None
+    last_activity: float = field(default_factory=time.monotonic)
+
 
 class ConnectionManager:
-    """Подключения conversation_id → set[WebSocket] и события отмены."""
+    """Подключения и turn-state по conversation_id."""
 
     def __init__(self) -> None:
-        self._connections: dict[uuid.UUID, set[WebSocket]] = defaultdict(set)
-        self._cancel_events: dict[uuid.UUID, asyncio.Event] = {}
-        self._active_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
-        self._streaming_messages: dict[uuid.UUID, uuid.UUID] = {}
+        self._sessions: dict[uuid.UUID, ConversationSessionState] = {}
+        self._sweeper_task: asyncio.Task[None] | None = None
+
+    def _session(self, conversation_id: uuid.UUID) -> ConversationSessionState:
+        state = self._sessions.get(conversation_id)
+        if state is None:
+            state = ConversationSessionState()
+            self._sessions[conversation_id] = state
+        state.last_activity = time.monotonic()
+        return state
+
+    def ensure_sweeper(self) -> None:
+        """Запустить фоновую уборку (один раз на процесс)."""
+        if self._sweeper_task is not None and not self._sweeper_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._sweeper_task = loop.create_task(self._sweeper_loop())
+
+    async def _sweeper_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(_SWEEP_INTERVAL_SEC)
+                self._sweep_idle_sessions()
+                self._sweep_done_tasks()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("WS sweeper: ошибка")
+
+    def _sweep_done_tasks(self) -> None:
+        for cid, state in list(self._sessions.items()):
+            task = state.active_task
+            if task is not None and task.done():
+                state.active_task = None
+                logger.debug("WS sweeper: снята завершённая задача conv=%s", cid)
+
+    def _sweep_idle_sessions(self) -> None:
+        now = time.monotonic()
+        for cid, state in list(self._sessions.items()):
+            if state.websockets:
+                continue
+            if state.active_task is not None and not state.active_task.done():
+                continue
+            if now - state.last_activity < _SESSION_IDLE_SEC:
+                continue
+            self._cleanup_session_state(cid, state, reason="idle")
+
+    def _cleanup_session_state(
+        self,
+        conversation_id: uuid.UUID,
+        state: ConversationSessionState,
+        *,
+        reason: str,
+    ) -> None:
+        if state.active_task is not None and not state.active_task.done():
+            if state.cancel_event is not None:
+                state.cancel_event.set()
+            return
+        state.cancel_event = None
+        state.active_task = None
+        state.streaming_message_id = None
+        if conversation_id in self._sessions and not state.websockets:
+            del self._sessions[conversation_id]
+        logger.debug("WS state очищен (%s): conv=%s", reason, conversation_id)
 
     async def connect(self, conversation_id: uuid.UUID, websocket: WebSocket) -> None:
         """Принять WebSocket и зарегистрировать."""
         await websocket.accept()
-        self._connections[conversation_id].add(websocket)
+        self._session(conversation_id).websockets.add(websocket)
+        self.ensure_sweeper()
         logger.info("WS подключён: беседа %s", conversation_id)
 
     def disconnect(self, conversation_id: uuid.UUID, websocket: WebSocket) -> bool:
@@ -36,14 +118,15 @@ class ConnectionManager:
         Returns:
             True, если к беседе больше нет активных подключений.
         """
-        conns = self._connections.get(conversation_id)
-        if not conns:
+        state = self._sessions.get(conversation_id)
+        if state is None:
             return True
-        conns.discard(websocket)
-        if not conns:
-            del self._connections[conversation_id]
-            return True
-        return False
+        state.websockets.discard(websocket)
+        state.last_activity = time.monotonic()
+        if state.websockets:
+            return False
+        self._cleanup_session_state(conversation_id, state, reason="disconnect")
+        return True
 
     async def send_json(
         self,
@@ -53,8 +136,11 @@ class ConnectionManager:
         exclude: WebSocket | None = None,
     ) -> None:
         """Отправить JSON всем подключённым клиентам беседы."""
+        state = self._sessions.get(conversation_id)
+        if state is None:
+            return
         dead: list[WebSocket] = []
-        for ws in list(self._connections.get(conversation_id, [])):
+        for ws in list(state.websockets):
             if ws is exclude:
                 continue
             try:
@@ -66,8 +152,9 @@ class ConnectionManager:
 
     def reset_cancel(self, conversation_id: uuid.UUID) -> asyncio.Event:
         """Создать/сбросить событие отмены для нового turn."""
+        state = self._session(conversation_id)
         event = asyncio.Event()
-        self._cancel_events[conversation_id] = event
+        state.cancel_event = event
         self.clear_streaming_message(conversation_id)
         return event
 
@@ -76,40 +163,51 @@ class ConnectionManager:
         conversation_id: uuid.UUID,
         message_id: uuid.UUID,
     ) -> None:
-        self._streaming_messages[conversation_id] = message_id
+        self._session(conversation_id).streaming_message_id = message_id
 
     def get_streaming_message(self, conversation_id: uuid.UUID) -> uuid.UUID | None:
-        return self._streaming_messages.get(conversation_id)
+        state = self._sessions.get(conversation_id)
+        return state.streaming_message_id if state else None
 
     def clear_streaming_message(self, conversation_id: uuid.UUID) -> None:
-        self._streaming_messages.pop(conversation_id, None)
+        state = self._sessions.get(conversation_id)
+        if state is not None:
+            state.streaming_message_id = None
 
     def cancel_turn(self, conversation_id: uuid.UUID) -> None:
         """Сигнал отмены текущей генерации."""
-        event = self._cancel_events.get(conversation_id)
-        if event is not None:
-            event.set()
+        state = self._sessions.get(conversation_id)
+        if state is not None and state.cancel_event is not None:
+            state.cancel_event.set()
             logger.info("WS cancel: беседа %s", conversation_id)
 
     def get_cancel_event(self, conversation_id: uuid.UUID) -> asyncio.Event:
-        return self._cancel_events.setdefault(conversation_id, asyncio.Event())
+        state = self._session(conversation_id)
+        if state.cancel_event is None:
+            state.cancel_event = asyncio.Event()
+        return state.cancel_event
 
     def set_active_task(self, conversation_id: uuid.UUID, task: asyncio.Task[None]) -> None:
-        self._active_tasks[conversation_id] = task
+        self._session(conversation_id).active_task = task
 
     def clear_active_task(self, conversation_id: uuid.UUID) -> None:
-        self._active_tasks.pop(conversation_id, None)
+        state = self._sessions.get(conversation_id)
+        if state is not None:
+            state.active_task = None
 
     def is_busy(self, conversation_id: uuid.UUID) -> bool:
-        task = self._active_tasks.get(conversation_id)
+        state = self._sessions.get(conversation_id)
+        if state is None:
+            return False
+        task = state.active_task
         return task is not None and not task.done()
 
     def busy_conversation_ids(self) -> set[uuid.UUID]:
-        """Беседы с активной фоновой генерацией (для синхронизации UI)."""
+        """Беседы с активной фоновой генерацией."""
         return {
             cid
-            for cid, task in self._active_tasks.items()
-            if task is not None and not task.done()
+            for cid, state in self._sessions.items()
+            if state.active_task is not None and not state.active_task.done()
         }
 
 

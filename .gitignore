@@ -2,6 +2,8 @@
 .venv/
 .env
 
+audit.md
+
 # Python
 __pycache__/
 *.py[cod]

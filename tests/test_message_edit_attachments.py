@@ -10,12 +10,16 @@ from httpx import AsyncClient
 from app.db import session as db_session
 from app.db.models import MessageRole
 from app.db.repositories import AttachmentRepository, MessageRepository
+from tests.helpers import api_create_conversation
 
 
 @pytest.mark.asyncio
-async def test_list_and_patch_message_attachments(client: AsyncClient) -> None:
-    conv = await client.post("/api/conversations", json={})
-    cid = uuid.UUID(conv.json()["id"])
+async def test_list_and_patch_message_attachments(
+    client: AsyncClient,
+    test_conv_title: str,
+) -> None:
+    conv = await api_create_conversation(client, test_conv_title)
+    cid = uuid.UUID(conv["id"])
 
     png = (
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"

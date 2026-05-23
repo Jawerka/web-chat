@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-16):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Production: `deploy/install.sh` + systemd из шаблонов. Автотесты: **118** (`pytest -q`). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки). Журнал — [ниже](#журнал-прогресса).
+> **Статус реализации (2026-05-23):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Идёт **стабилизация P0** по [TODO-2.md](TODO-2.md): API key, rate limit, WS lifecycle, partial turn recovery, purge галереи. Production: `deploy/install.sh` + systemd. Автотесты: **148** (`pytest -q`), парадигма — [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки), план — [TODO-2.md](TODO-2.md). Журнал — [ниже](#журнал-прогресса).
 
 > **Системные промпты:** эталонные тексты пресетов (txt2img, img2img, default, document_analysis) — в [`Sys-prompt.md`](Sys-prompt.md).  
 > При любых правках промптов, инструментов или поведения агента **сначала** сверяйся с `Sys-prompt.md`, затем переноси изменения в `app/db/seed.py` и при необходимости в `app/db/migrate.py` (обновление существующей БД).
@@ -431,7 +431,8 @@ user: текст + image (attachment → MediaAsset)
 - MCP: запрет внешних URL в `img2img`/upscale — только `PUBLIC_BASE_URL` и локальные имена файлов.
 - Санитизация HTML на клиенте (`sanitizeHtml` из prompt-extension).
 - Секреты только в `.env`, файл в `.gitignore`.
-- Rate limit (in-memory): uploads и `generate_image` на IP/сессию — простая защита от злоупотребления.
+- Rate limit (in-memory): `POST /api/upload`, `POST /api/conversations`, WS `user_message` — см. [SECURITY.md](SECURITY.md), `.env` `RATE_LIMIT_*` (2026-05-23).
+- API key (опционально): `API_ACCESS_KEY` + `TRUSTED_WS_ORIGINS` — см. [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -1592,11 +1593,84 @@ Alias: латиница, цифры, `_`, `-`; в чате — `@alias`.
 ```python
 @pytest.mark.asyncio
 async def test_agent_generate_image_mock_llm(client, mock_sd):
-  """LLM возвращает tool_call → SD mock → URL в результате."""
-  ...
+    """LLM возвращает tool_call → SD mock → URL в результате."""
+    ...
 ```
 
-### 14.3. Ручной QA (чеклист)
+### 14.4. Парадигма pytest (обязательно для новых тестов)
+
+**Цель:** unit/integration не трогают production SQLite (`DATABASE_URL`) и не удаляют живые беседы пользователя.
+
+#### Изоляция БД
+
+| Правило | Как |
+|--------|-----|
+| Временная SQLite на тест | Фикстура `client` (autouse path) или `safe_configure_database(url)` из `tests/safety.py` |
+| Запрещено | `configure_database()` с `settings.database_url` / production path |
+| Сессии SQLAlchemy | Только `from app.db import session as db_session` → `db_session.async_session_factory()` **после** `safe_configure_database` |
+| Запрещено | `from app.db.session import async_session_factory` на уровне модуля (устаревшая ссылка на engine) |
+| Проверка | `assert_not_using_production_database()` в тестах со своей БД |
+
+#### Беседы (вкладки чата)
+
+| Правило | Как |
+|--------|-----|
+| Заголовок | Префикс `[pytest]` — фикстуры `test_conv_title` / `repo_conv_title` |
+| REST | `api_create_conversation(client, test_conv_title)` или `sync_api_create_conversation` |
+| Repository | `repo_create_conversation(session, preset.id, repo_conv_title)` |
+| Исключение | Тест поведения «Новая беседа» — `json={"title": ""}` + `record_created_conversation()`; для `DEFAULT_CONVERSATION_TITLE` в repo — явный `record_test_conversation_id(conv.id)` |
+| Запрещено | `POST /api/conversations` с `json={}`, `create(title="t")`, произвольные короткие заголовки без `[pytest]` |
+
+#### Очистка после `pytest` (финишер `pytest_sessionfinish`)
+
+| Где | Что удаляется | По умолчанию |
+|-----|----------------|--------------|
+| tmp SQLite из прогона | `[pytest]*` + id, зарегистрированные для **этой** tmp БД | Включено |
+| production SQLite | **Ничего** | — |
+| Live HTTP | Только при `WEB_CHAT_TEST_BASE_URL` | **Выключено** |
+| Live: заголовки | Только `[pytest] …` | — |
+| Live: сироты («Новая беседа», `t`) | Только `WEB_CHAT_TEST_CLEANUP_ORPHANS=1` **и** явный `WEB_CHAT_TEST_BASE_URL` | **Выключено** |
+| Live через `PUBLIC_BASE_URL` | Нужны `WEB_CHAT_TEST_CLEANUP_LIVE=1` **и** `WEB_CHAT_TEST_ALLOW_PUBLIC_CLEANUP=1` | **Выключено** |
+
+Модули: `tests/conventions.py`, `tests/cleanup.py`, `tests/safety.py`, `tests/helpers.py`, `tests/conftest.py`.
+
+Ручная уборка dev-сервера:
+
+```bash
+WEB_CHAT_TEST_BASE_URL=http://127.0.0.1:8099 python -m app.scripts.cleanup_test_conversations
+# сироты — только осознанно:
+WEB_CHAT_TEST_BASE_URL=... WEB_CHAT_TEST_CLEANUP_ORPHANS=1 \
+  python -m app.scripts.cleanup_test_conversations --orphan-default
+```
+
+#### Шаблон нового теста с беседой
+
+```python
+@pytest.mark.asyncio
+async def test_my_feature(client: AsyncClient, test_conv_title: str) -> None:
+    conv = await api_create_conversation(client, test_conv_title)
+    ...
+```
+
+#### Шаблон теста со своей SQLite
+
+```python
+@pytest.mark.asyncio
+async def test_repo_logic(tmp_path, repo_conv_title: str) -> None:
+    await dispose_database()
+    safe_configure_database(f"sqlite+aiosqlite:///{tmp_path / 'my.sqlite'}")
+    await init_db()
+    assert_not_using_production_database()
+    async with db_session.async_session_factory() as session:
+        conv = await repo_create_conversation(session, preset.id, repo_conv_title)
+```
+
+#### Live-тесты
+
+- Маркер `@pytest.mark.live` — только против `WEB_CHAT_TEST_BASE_URL` (отдельный инстанс).
+- Не использовать production `PUBLIC_BASE_URL` без `WEB_CHAT_TEST_ALLOW_PUBLIC_CLEANUP=1`.
+
+### 14.5. Ручной QA (чеклист)
 
 - [ ] Текст без tools
 - [ ] «Нарисуй кота» → 1+ PNG
@@ -1726,7 +1800,8 @@ Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 - [x] Поиск по истории (`GET /api/search`, поле в сайдбаре)
 - [x] Экспорт беседы в Markdown (`GET /api/conversations/{id}/export`, кнопка в настройках)
 - [ ] PostgreSQL вместо SQLite
-- [ ] Basic auth за reverse proxy
+- [x] API key / Origin / rate limit в приложении (2026-05-23, см. SECURITY.md)
+- [ ] Basic auth за reverse proxy (шаблон nginx — в TODO-2 P0.1)
 - [x] `img2img` + инструкции denoising (см. image-gen TODO)
 - [x] Вкладка «Галерея» (`/gallery`, ссылка в сайдбаре)
 - [ ] RAG / embeddings
@@ -1850,7 +1925,7 @@ MVP считается готовым после завершения **этап
 
 ### 20.5. Не реализовано / отложено
 
-- Rate limit (upload, generate_image) — в §1.12 запланирован, **нет в коде**.
+- ~~Rate limit~~ — **реализован** (2026-05-23): middleware + WS, см. `app/security/`, [SECURITY.md](SECURITY.md).
 - `reasoning_delta` в WS — в протоколе описан, UI опционален.
 - Расширенный `/api/health` (disk_free, generated_count) — упрощённый вариант в коде.
 - PostgreSQL, auth, RAG — §17.
@@ -1861,7 +1936,7 @@ MVP считается готовым после завершения **этап
 - [ ] `@@macro` в поле ввода → один `@` в спойлере.
 - [ ] Lightbox: download и attach в composer.
 - [ ] `sudo ./deploy/install.sh` → reboot → `systemctl status web-chat` active.
-- [ ] `pytest -q` → 118 passed.
+- [ ] `pytest -q` → 137 passed.
 
 ### 20.7. img2img: fallback init, UI и метаданные PNG (2026-05-16)
 
@@ -1922,6 +1997,28 @@ MVP считается готовым после завершения **этап
 | deploy | [x] | 2026-05-16 | install.sh, systemd templates, DEPLOY.md |
 | img2img doc | [x] | 2026-05-16 | §9.5 пайплайн, пресеты txt2img/img2img, init hints, fallback, 105 pytest |
 | img2img fix | [x] | 2026-05-16 | server-first init, no get_gallery, denoise 0.54, png-info, UI, §20.7, 118 pytest |
+| stabilize P0 | [~] | 2026-05-23 | API key, rate limit, WS cleanup, turn_recovery, gallery purge all, SECURITY.md — [TODO-2](TODO-2.md) |
+
+---
+
+## 21. Стабилизация (TODO-2, 2026-05-23)
+
+План и статус задач — в **[TODO-2.md](TODO-2.md)**. Кратко по уже сделанному в коде:
+
+| Область | Статус | Файлы / примечание |
+|---------|--------|-------------------|
+| API key + WS Origin | ✅ | `app/security/access.py`, `.env` `API_ACCESS_KEY`, `TRUSTED_WS_ORIGINS` |
+| Rate limiting | ✅ | `app/security/rate_limit.py`, `app/middleware/access_control.py` |
+| WS lifecycle | ✅ | `app/api/ws_manager.py` — `ConversationSessionState`, sweeper |
+| Черновик при ошибке turn | ✅ | `app/services/turn_recovery.py`, правки `websocket.py` |
+| Валидация PUBLIC_BASE_URL | ✅ частично | `app/config.py` — схема/loopback |
+| Очистка всей галереи | ✅ | `DELETE /api/gallery/all`, кнопка в `/gallery` |
+| Документация безопасности | ✅ | [SECURITY.md](SECURITY.md) |
+| Nginx/Caddy шаблоны | ⏳ | TODO-2 P0.1 |
+| Job queue для SD | ⏳ | TODO-2 P1.2 |
+| Скилл @alias / embeddings | ⏳ | TODO-2 Ф1–Ф2 |
+
+**Тесты:** см. `pytest -q` (актуальное число — в журнале ниже). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
 
 ---
 

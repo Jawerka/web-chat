@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import logging
 
+from ipaddress import ip_address
+from urllib.parse import urlparse
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -80,11 +83,57 @@ class Settings(BaseSettings):
     llm_model_load_wait_sec: int = 120
     llm_model_load_retry_sec: float = 2.0
 
+    # --- Доступ и лимиты (P0, см. TODO-2.md) ---
+    # Пустой API_ACCESS_KEY — без проверки (доверенная LAN)
+    api_access_key: str = ""
+    # Через запятую: http://192.168.88.44:8090 — пусто = не проверять Origin
+    trusted_ws_origins: str = ""
+    # IP reverse proxy, которым доверяем X-Forwarded-For (через запятую)
+    trusted_proxy_ips: str = ""
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 60
+    rate_limit_window_sec: int = 60
+
     @field_validator("public_base_url", "public_base_url_vpn")
     @classmethod
     def strip_trailing_slash(cls, value: str) -> str:
         """Убрать завершающий слэш — URL картинок собираются явно."""
         return value.rstrip("/") if value else value
+
+    @field_validator("public_base_url", "public_base_url_vpn")
+    @classmethod
+    def validate_public_base_url(cls, value: str) -> str:
+        """Схема http(s) и хост без loopback/metadata (кроме localhost для dev)."""
+        if not value:
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"PUBLIC_BASE_URL: недопустимая схема {parsed.scheme!r}")
+        host = (parsed.hostname or "").lower()
+        if not host:
+            raise ValueError("PUBLIC_BASE_URL: не указан host")
+        if host in ("localhost", "127.0.0.1"):
+            return value.rstrip("/")
+        try:
+            addr = ip_address(host)
+            if addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                raise ValueError(f"PUBLIC_BASE_URL: недопустимый host {host}")
+        except ValueError as exc:
+            if "does not appear to be an IPv4 or IPv6 address" not in str(exc):
+                raise
+        return value.rstrip("/")
+
+    def trusted_ws_origins_list(self) -> list[str]:
+        """Разрешённые Origin для WebSocket."""
+        if not self.trusted_ws_origins.strip():
+            return []
+        return [o.strip().rstrip("/") for o in self.trusted_ws_origins.split(",") if o.strip()]
+
+    def trusted_proxy_ip_set(self) -> frozenset[str]:
+        """IP reverse proxy для X-Forwarded-For."""
+        if not self.trusted_proxy_ips.strip():
+            return frozenset()
+        return frozenset(p.strip() for p in self.trusted_proxy_ips.split(",") if p.strip())
 
     @property
     def effective_mcp_port(self) -> int:

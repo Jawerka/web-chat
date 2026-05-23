@@ -10,24 +10,31 @@ import pytest
 from app.api.ws_manager import manager
 from app.db.models import MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository, PresetRepository
-from app.db.session import async_session_factory, configure_database, dispose_database, init_db
+from app.db import session as db_session
+from app.db.session import dispose_database, init_db
+from tests.safety import assert_not_using_production_database, safe_configure_database
 from app.services.generation_state import get_generation_state
 from app.services.streaming_draft import AssistantStreamDraft
 
 
 @pytest.mark.asyncio
-async def test_generation_status_includes_phase_from_draft(tmp_path) -> None:
+async def test_generation_status_includes_phase_from_draft(
+    tmp_path,
+    repo_conv_title: str,
+) -> None:
     """get_generation_state возвращает phase/active_tool из content_json черновика."""
     await dispose_database()
-    configure_database(f"sqlite+aiosqlite:///{tmp_path / 'phase.sqlite'}")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'phase.sqlite'}"
+    safe_configure_database(db_url)
     await init_db()
+    assert_not_using_production_database()
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         preset_repo = PresetRepository(session)
         preset = await preset_repo.get_default()
         assert preset is not None
         conv_repo = ConversationRepository(session)
-        conversation = await conv_repo.create(title="t", preset_id=preset.id)
+        conversation = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
         msg_repo = MessageRepository(session)
         draft = await msg_repo.create(
             conversation_id=conversation.id,
@@ -46,7 +53,7 @@ async def test_generation_status_includes_phase_from_draft(tmp_path) -> None:
 
     manager.clear_streaming_message(conv_id)
     with patch.object(manager, "is_busy", return_value=True):
-        async with async_session_factory() as session:
+        async with db_session.async_session_factory() as session:
             state = await get_generation_state(session, conv_id)
 
     assert state["in_progress"] is True
@@ -56,23 +63,28 @@ async def test_generation_status_includes_phase_from_draft(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_draft_enter_tool_round_keeps_message(tmp_path) -> None:
+async def test_stream_draft_enter_tool_round_keeps_message(
+    tmp_path,
+    repo_conv_title: str,
+) -> None:
     """enter_tool_round не удаляет черновик, add_images сохраняет URL."""
     await dispose_database()
-    configure_database(f"sqlite+aiosqlite:///{tmp_path / 'draft.sqlite'}")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'draft.sqlite'}"
+    safe_configure_database(db_url)
     await init_db()
+    assert_not_using_production_database()
 
     emitted: list[tuple[str, dict]] = []
 
     async def emit(event_type: str, payload: dict) -> None:
         emitted.append((event_type, payload))
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         preset_repo = PresetRepository(session)
         preset = await preset_repo.get_default()
         assert preset is not None
         conv_repo = ConversationRepository(session)
-        conversation = await conv_repo.create(title="t", preset_id=preset.id)
+        conversation = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
         msg_repo = MessageRepository(session)
 
         draft = AssistantStreamDraft(
@@ -100,18 +112,23 @@ async def test_stream_draft_enter_tool_round_keeps_message(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_settle_clears_streaming_when_last_is_user(tmp_path) -> None:
+async def test_settle_clears_streaming_when_last_is_user(
+    tmp_path,
+    repo_conv_title: str,
+) -> None:
     """streaming:true снимается, если последнее сообщение — user."""
     await dispose_database()
-    configure_database(f"sqlite+aiosqlite:///{tmp_path / 'stale.sqlite'}")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'stale.sqlite'}"
+    safe_configure_database(db_url)
     await init_db()
+    assert_not_using_production_database()
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         preset_repo = PresetRepository(session)
         preset = await preset_repo.get_default()
         assert preset is not None
         conv_repo = ConversationRepository(session)
-        conversation = await conv_repo.create(title="t", preset_id=preset.id)
+        conversation = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
         msg_repo = MessageRepository(session)
         old = await msg_repo.create(
             conversation_id=conversation.id,
@@ -128,7 +145,7 @@ async def test_settle_clears_streaming_when_last_is_user(tmp_path) -> None:
         conv_id = conversation.id
         old_id = old.id
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         msg_repo = MessageRepository(session)
         settled = await msg_repo.settle_stale_streaming_assistant_messages(conv_id)
         await session.commit()
@@ -139,18 +156,23 @@ async def test_settle_clears_streaming_when_last_is_user(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_settle_keeps_streaming_only_on_last_assistant(tmp_path) -> None:
+async def test_settle_keeps_streaming_only_on_last_assistant(
+    tmp_path,
+    repo_conv_title: str,
+) -> None:
     """streaming:true остаётся только у последнего assistant в беседе."""
     await dispose_database()
-    configure_database(f"sqlite+aiosqlite:///{tmp_path / 'two_drafts.sqlite'}")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'two_drafts.sqlite'}"
+    safe_configure_database(db_url)
     await init_db()
+    assert_not_using_production_database()
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         preset_repo = PresetRepository(session)
         preset = await preset_repo.get_default()
         assert preset is not None
         conv_repo = ConversationRepository(session)
-        conversation = await conv_repo.create(title="t", preset_id=preset.id)
+        conversation = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
         msg_repo = MessageRepository(session)
         first = await msg_repo.create(
             conversation_id=conversation.id,
@@ -169,7 +191,7 @@ async def test_settle_keeps_streaming_only_on_last_assistant(tmp_path) -> None:
         first_id = first.id
         second_id = second.id
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         msg_repo = MessageRepository(session)
         settled = await msg_repo.settle_stale_streaming_assistant_messages(conv_id)
         await session.commit()

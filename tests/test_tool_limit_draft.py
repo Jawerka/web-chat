@@ -9,20 +9,27 @@ import pytest
 
 from app.db.models import Message, MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository, PresetRepository
-from app.db.session import async_session_factory, configure_database, dispose_database, init_db
+from app.db import session as db_session
+from app.db.session import dispose_database, init_db
+from tests.safety import assert_not_using_production_database, safe_configure_database
 from app.services.agent_orchestrator import AgentOrchestrator
 
 
 @pytest.mark.asyncio
-async def test_tool_limit_updates_existing_draft(tmp_path) -> None:
+async def test_tool_limit_updates_existing_draft(tmp_path, repo_conv_title: str) -> None:
     await dispose_database()
-    configure_database(f"sqlite+aiosqlite:///{tmp_path / 'limit.sqlite'}")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'limit.sqlite'}"
+    safe_configure_database(db_url)
     await init_db()
+    assert_not_using_production_database()
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         preset = await PresetRepository(session).get_default()
         assert preset is not None
-        conv = await ConversationRepository(session).create(title="t", preset_id=preset.id)
+        conv = await ConversationRepository(session).create(
+            title=repo_conv_title,
+            preset_id=preset.id,
+        )
         msg_repo = MessageRepository(session)
         user = await msg_repo.create(
             conversation_id=conv.id,
@@ -48,7 +55,7 @@ async def test_tool_limit_updates_existing_draft(tmp_path) -> None:
     orchestrator = AgentOrchestrator()
     emit = AsyncMock()
 
-    async with async_session_factory() as session:
+    async with db_session.async_session_factory() as session:
         conv = await ConversationRepository(session).get_by_id(conv_id)
         assert conv is not None
         user = await MessageRepository(session).get_by_id(user_id)

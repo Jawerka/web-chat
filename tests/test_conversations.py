@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.helpers import api_create_conversation, record_created_conversation
+
 
 @pytest.mark.asyncio
 async def test_presets_seeded(client: AsyncClient) -> None:
@@ -23,9 +25,9 @@ async def test_presets_seeded(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_create_conversation_without_preset_id(client: AsyncClient) -> None:
     """POST /api/conversations без preset_id использует default."""
-    response = await client.post("/api/conversations", json={})
+    response = await client.post("/api/conversations", json={"title": ""})
     assert response.status_code == 201
-    data = response.json()
+    data = record_created_conversation(response.json())
     assert data["title"] == "Новая беседа"
     assert "id" in data
     assert "preset_id" in data
@@ -36,13 +38,13 @@ async def test_create_conversation_without_preset_id(client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
-async def test_list_and_get_conversation(client: AsyncClient) -> None:
+async def test_list_and_get_conversation(
+    client: AsyncClient,
+    test_conv_title: str,
+) -> None:
     """Список бесед и GET по id."""
-    created = await client.post(
-        "/api/conversations",
-        json={"title": "Тестовая беседа"},
-    )
-    conv_id = created.json()["id"]
+    created = await api_create_conversation(client, test_conv_title)
+    conv_id = created["id"]
 
     listing = await client.get("/api/conversations")
     assert listing.status_code == 200
@@ -50,14 +52,17 @@ async def test_list_and_get_conversation(client: AsyncClient) -> None:
 
     one = await client.get(f"/api/conversations/{conv_id}")
     assert one.status_code == 200
-    assert one.json()["title"] == "Тестовая беседа"
+    assert one.json()["title"] == test_conv_title
 
 
 @pytest.mark.asyncio
-async def test_patch_and_delete_conversation(client: AsyncClient) -> None:
+async def test_patch_and_delete_conversation(
+    client: AsyncClient,
+    test_conv_title: str,
+) -> None:
     """PATCH заголовка и DELETE беседы."""
-    created = await client.post("/api/conversations", json={})
-    conv_id = created.json()["id"]
+    created = await api_create_conversation(client, test_conv_title)
+    conv_id = created["id"]
 
     patched = await client.patch(
         f"/api/conversations/{conv_id}",
@@ -74,13 +79,16 @@ async def test_patch_and_delete_conversation(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_patch_conversation_preset_to_img2img(client: AsyncClient) -> None:
+async def test_patch_conversation_preset_to_img2img(
+    client: AsyncClient,
+    test_conv_title: str,
+) -> None:
     """PATCH preset_id на img2img (регрессия: UUID с дефисами в SQLite)."""
     presets = (await client.get("/api/presets")).json()
     img2img = next(p for p in presets if p["slug"] == "img2img")
 
-    created = await client.post("/api/conversations", json={"title": "Img2img preset"})
-    conv_id = created.json()["id"]
+    created = await api_create_conversation(client, test_conv_title)
+    conv_id = created["id"]
 
     patched = await client.patch(
         f"/api/conversations/{conv_id}",

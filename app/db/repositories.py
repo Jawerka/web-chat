@@ -159,6 +159,15 @@ class ConversationRepository:
         """Удалить беседу (каскад messages)."""
         await self._session.delete(conversation)
 
+    async def list_with_title_prefix(self, prefix: str) -> list[Conversation]:
+        """Беседы, заголовок которых начинается с prefix."""
+        result = await self._session.execute(
+            select(Conversation)
+            .where(Conversation.title.startswith(prefix))
+            .order_by(Conversation.updated_at.desc())
+        )
+        return list(result.scalars().all())
+
     async def touch(self, conversation: Conversation) -> None:
         """Обновить updated_at беседы."""
         conversation.updated_at = datetime.now(UTC)

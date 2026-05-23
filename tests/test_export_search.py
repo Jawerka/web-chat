@@ -13,13 +13,16 @@ from app.db.repositories import ConversationRepository, MessageRepository, Prese
 
 
 @pytest.mark.asyncio
-async def test_export_conversation_markdown(client: AsyncClient) -> None:
+async def test_export_conversation_markdown(
+    client: AsyncClient,
+    repo_conv_title: str,
+) -> None:
     """GET export возвращает markdown с заголовком и сообщениями."""
     async with db_session.async_session_factory() as session:
         preset = await PresetRepository(session).get_default()
         assert preset is not None
         conv = await ConversationRepository(session).create(
-            title="Тест экспорта",
+            title=repo_conv_title,
             preset_id=preset.id,
         )
         msg_repo = MessageRepository(session)
@@ -40,7 +43,7 @@ async def test_export_conversation_markdown(client: AsyncClient) -> None:
     assert response.status_code == 200
     assert "text/markdown" in response.headers.get("content-type", "")
     body = response.text
-    assert "# Тест экспорта" in body
+    assert f"# {repo_conv_title}" in body
     assert "Привет" in body
     assert "Ответ" in body
     assert "Пользователь" in body
@@ -55,13 +58,13 @@ async def test_export_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_messages(client: AsyncClient) -> None:
+async def test_search_messages(client: AsyncClient, repo_conv_title: str) -> None:
     """Поиск находит подстроку в content_text."""
     async with db_session.async_session_factory() as session:
         preset = await PresetRepository(session).get_default()
         assert preset is not None
         conv = await ConversationRepository(session).create(
-            title="Поисковая беседа",
+            title=repo_conv_title,
             preset_id=preset.id,
         )
         await MessageRepository(session).create(
@@ -80,19 +83,23 @@ async def test_search_messages(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 1
-    assert data[0]["conversation_title"] == "Поисковая беседа"
+    assert data[0]["conversation_title"] == repo_conv_title
     assert "xyz" in data[0]["snippet"].lower()
     assert data[0]["match_kind"] == "message"
 
 
 @pytest.mark.asyncio
-async def test_search_by_conversation_title(client: AsyncClient) -> None:
+async def test_search_by_conversation_title(
+    client: AsyncClient,
+    repo_conv_title: str,
+) -> None:
     """Поиск находит беседу по слову в названии."""
     async with db_session.async_session_factory() as session:
         preset = await PresetRepository(session).get_default()
         assert preset is not None
+        search_title = f"{repo_conv_title} Queen Chrysalis"
         await ConversationRepository(session).create(
-            title="Queen Chrysalis токены",
+            title=search_title,
             preset_id=preset.id,
         )
         await session.commit()
@@ -106,13 +113,16 @@ async def test_search_by_conversation_title(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_any_word_in_message(client: AsyncClient) -> None:
+async def test_search_any_word_in_message(
+    client: AsyncClient,
+    repo_conv_title: str,
+) -> None:
     """Достаточно совпадения одного слова из запроса."""
     async with db_session.async_session_factory() as session:
         preset = await PresetRepository(session).get_default()
         assert preset is not None
         conv = await ConversationRepository(session).create(
-            title="Тест",
+            title=repo_conv_title,
             preset_id=preset.id,
         )
         await MessageRepository(session).create(
