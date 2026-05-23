@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import MediaAsset
 from app.db.repositories import MediaAssetRepository
+from app.services.media_registry import MediaRegistry
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     asset_media_url,
@@ -293,7 +294,7 @@ class MediaService:
         url_map: dict[str, str] = {}
         asset_ids: list[uuid.UUID] = []
         seen_files: set[str] = set()
-        pending: list[tuple[bytes, str, uuid.UUID | None, str | None, bytes | None]] = []
+        pending: list[tuple[bytes, str, uuid.UUID | None, str | None]] = []
         pending_meta: list[tuple[str, Path]] = []
 
         for match in _GENERATED_URL_RE.finditer(tool_output):
@@ -309,15 +310,7 @@ class MediaService:
             except OSError as exc:
                 logger.warning("ingest SD file %s: %s", filename, exc)
                 continue
-            pending.append(
-                (
-                    data,
-                    _guess_mime(filename),
-                    conversation_id,
-                    filename,
-                    None,
-                )
-            )
+            pending.append((data, _guess_mime(filename), conversation_id, filename))
             pending_meta.append((filename, path))
 
         if pending:
@@ -326,8 +319,9 @@ class MediaService:
                 len(pending),
                 conversation_id,
             )
+            registry = MediaRegistry(self._session)
             try:
-                assets = await MediaService.commit_media_assets_batch(pending)
+                registered = await registry.register_batch(pending)
             except Exception as exc:
                 logger.error(
                     "Не удалось сохранить изображения в БД (%d шт.): %s",
@@ -336,10 +330,10 @@ class MediaService:
                     exc_info=True,
                 )
                 raise
-            for asset, (filename, path) in zip(assets, pending_meta, strict=True):
-                new_url = asset_media_url(asset.id)
+            for reg, (filename, path) in zip(registered, pending_meta, strict=True):
+                new_url = reg.url
                 urls.append(new_url)
-                asset_ids.append(asset.id)
+                asset_ids.append(reg.id)
                 for old in _generated_url_variants(filename):
                     url_map[old] = new_url
                 try:
@@ -353,6 +347,13 @@ class MediaService:
                     "Изображение в БД: %s → %s",
                     filename,
                     new_url,
+                )
+            if asset_ids:
+                from app.api.ws_events import broadcast_gallery_update
+
+                await broadcast_gallery_update(
+                    "created",
+                    count=len(asset_ids),
                 )
 
         return urls, url_map, asset_ids

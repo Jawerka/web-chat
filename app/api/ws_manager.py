@@ -39,6 +39,7 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._sessions: dict[uuid.UUID, ConversationSessionState] = {}
+        self._system_websockets: set[WebSocket] = set()
         self._sweeper_task: asyncio.Task[None] | None = None
 
     def _session(self, conversation_id: uuid.UUID) -> ConversationSessionState:
@@ -106,6 +107,29 @@ class ConnectionManager:
         if conversation_id in self._sessions and not state.websockets:
             del self._sessions[conversation_id]
         logger.debug("WS state очищен (%s): conv=%s", reason, conversation_id)
+
+    async def connect_system(self, websocket: WebSocket) -> None:
+        """Системный канал: галерея, логи (без conversation_id)."""
+        await websocket.accept()
+        self._system_websockets.add(websocket)
+        self.ensure_sweeper()
+        logger.info("WS system подключён (всего %d)", len(self._system_websockets))
+
+    def disconnect_system(self, websocket: WebSocket) -> None:
+        self._system_websockets.discard(websocket)
+
+    async def broadcast_system(self, payload: dict) -> None:
+        """Отправить JSON всем подписчикам /ws/events."""
+        if not self._system_websockets:
+            return
+        dead: list[WebSocket] = []
+        for ws in list(self._system_websockets):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect_system(ws)
 
     async def connect(self, conversation_id: uuid.UUID, websocket: WebSocket) -> None:
         """Принять WebSocket и зарегистрировать."""
@@ -233,8 +257,12 @@ class ConnectionManager:
         }
 
     def websocket_count(self) -> int:
-        """Число открытых WS-сокетов (все беседы)."""
-        return sum(len(state.websockets) for state in self._sessions.values())
+        """Число открытых WS-сокетов (все беседы + system)."""
+        chat = sum(len(state.websockets) for state in self._sessions.values())
+        return chat + len(self._system_websockets)
+
+    def system_websocket_count(self) -> int:
+        return len(self._system_websockets)
 
     def active_turn_count(self) -> int:
         """Число бесед с незавершённой фоновой задачей."""

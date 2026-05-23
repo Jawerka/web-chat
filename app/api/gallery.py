@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.ws_events import broadcast_gallery_update
 from app.db.session import get_db
 from app.services.gallery_service import (
     GALLERY_MAX_LIMIT,
@@ -46,6 +47,7 @@ async def api_purge_gallery_all(
     """Удалить все изображения галереи (с подтверждением на клиенте)."""
     stats = await purge_all_gallery(db, purge_messages=purge_messages)
     await db.commit()
+    await broadcast_gallery_update("purge_all", count=stats.get("deleted_db", 0) + stats.get("deleted_disk", 0))
     return stats
 
 
@@ -61,6 +63,7 @@ async def api_delete_gallery_asset(
         await delete_gallery_asset(db, asset_id)
         await purge_asset_from_messages(db, asset_id)
         await db.commit()
+        await broadcast_gallery_update("deleted", asset_id=str(asset_id))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Не найдено") from exc
 
@@ -77,6 +80,7 @@ async def api_delete_gallery_disk(
 
         await purge_generated_from_messages(db, filename)
         await db.commit()
+        await broadcast_gallery_update("deleted")
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Не найдено") from exc
     except ValueError as exc:

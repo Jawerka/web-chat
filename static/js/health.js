@@ -138,6 +138,8 @@ class HealthDashboard {
     };
     this._logText = '';
     this._timer = null;
+    this._eventsSocket = null;
+    this._eventsLive = false;
     this.$.btnRefresh?.addEventListener('click', () => this.refreshAll());
     this.$.btnLogsRefresh?.addEventListener('click', () => this.fetchLogs());
     this.$.btnLogsSave?.addEventListener('click', () => this.saveLogs());
@@ -147,17 +149,48 @@ class HealthDashboard {
     });
     this.refreshAll();
     this._schedule();
+    this._connectSystemEvents();
   }
 
   _schedule() {
     if (this._timer) clearInterval(this._timer);
     if (this.$.autoRefresh?.checked) {
-      this._timer = setInterval(() => this.refreshAll(), 5000);
+      const ms = this._eventsLive ? 30000 : 5000;
+      this._timer = setInterval(() => this.refreshAll(), ms);
     }
   }
 
+  _connectSystemEvents() {
+    if (typeof SystemEventsSocket !== 'function') return;
+    this._eventsSocket = new SystemEventsSocket({
+      onOpen: () => {
+        this._eventsLive = true;
+        this._schedule();
+      },
+      onClose: () => {
+        this._eventsLive = false;
+        this._schedule();
+      },
+      onLogsAppend: (lines) => this._appendLogLines(lines),
+    });
+    this._eventsSocket.connect();
+  }
+
+  _appendLogLines(lines) {
+    if (!lines?.length) return;
+    const chunk = lines.join('\n');
+    this._logText = this._logText ? `${this._logText}\n${chunk}` : chunk;
+    this.$.logsView.textContent = this._logText;
+    const n = (this._logText.match(/\n/g) || []).length + (this._logText ? 1 : 0);
+    this.$.logsCount.textContent = `${n} строк`;
+    this.$.logsView.scrollTop = this.$.logsView.scrollHeight;
+  }
+
   async refreshAll() {
-    await Promise.all([this.fetchHealth(), this.fetchLogs()]);
+    await this.fetchHealth();
+    if (!this._eventsLive) {
+      await this.fetchLogs();
+    }
   }
 
   async fetchHealth() {

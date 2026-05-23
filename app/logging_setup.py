@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -21,6 +23,24 @@ _LOG_FORMAT = (
 _CONFIGURED = False
 
 
+class JsonLogFormatter(logging.Formatter):
+    """Структурированная строка лога (P1.6)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "conv_id": getattr(record, "conv_id", "-"),
+            "turn": getattr(record, "turn", "-"),
+            "ws_session": getattr(record, "ws_session", "-"),
+        }
+        if record.exc_info and record.exc_info[1] is not None:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
 def setup_logging() -> None:
     """Инициализировать корневой логгер (один раз)."""
     global _CONFIGURED
@@ -32,7 +52,11 @@ def setup_logging() -> None:
     root.setLevel(level)
 
     ctx_filter = LogContextFilter()
-    formatter = logging.Formatter(_LOG_FORMAT)
+    formatter: logging.Formatter
+    if settings.log_json:
+        formatter = JsonLogFormatter()
+    else:
+        formatter = logging.Formatter(_LOG_FORMAT)
 
     if not root.handlers:
         console = logging.StreamHandler()

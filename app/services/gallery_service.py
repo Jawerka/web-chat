@@ -13,7 +13,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Message
-from app.db.repositories import GalleryAssetMeta, MediaAssetRepository, MessageRepository
+from app.db.repositories import GalleryAssetMeta, MessageRepository
+from app.services.media_registry import MediaRegistry
 from app.integrations.media_utils import asset_media_url, generated_media_url
 from app.services.message_builder import strip_markdown_images
 
@@ -120,15 +121,15 @@ async def list_gallery_images(
     показываем только запись из БД.
     """
     limit = max(1, min(GALLERY_MAX_LIMIT, int(limit)))
-    repo = MediaAssetRepository(session)
-    db_assets = await repo.list_gallery_metadata(limit=limit * 2)
+    registry = MediaRegistry(session)
+    db_assets = await registry.list_gallery_metadata(limit=limit * 2)
 
     db_items = [_item_from_gallery_meta(a) for a in db_assets if is_image_mime(a.mime_type)]
     ingested_names = {(a.original_name or "").lower() for a in db_assets if a.original_name}
 
     local_items: list[GalleryItem] = []
     for item in _list_local_generated_images(limit=limit * 2):
-        if item.filename.lower() in ingested_names:
+        if MediaRegistry.disk_filename_claimed_by_db(item.filename, ingested_names):
             continue
         local_items.append(item)
 
@@ -259,11 +260,8 @@ async def _purge_messages_by_needles(session: AsyncSession, needles: set[str]) -
 
 async def delete_gallery_asset(session: AsyncSession, asset_id: uuid.UUID) -> None:
     """Удалить изображение из БД."""
-    repo = MediaAssetRepository(session)
-    asset = await repo.get_by_id(asset_id)
-    if asset is None:
-        raise FileNotFoundError(str(asset_id))
-    await repo.delete(asset)
+    registry = MediaRegistry(session)
+    await registry.delete_asset(asset_id)
 
 
 async def purge_all_gallery(

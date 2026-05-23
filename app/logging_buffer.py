@@ -24,6 +24,12 @@ class RingBufferHandler(logging.Handler):
             return
         with _LOCK:
             _BUFFER.append(line)
+        try:
+            from app.api.ws_events import schedule_logs_append
+
+            schedule_logs_append(line)
+        except Exception:
+            pass
 
 
 def install_log_buffer(

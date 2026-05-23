@@ -3,6 +3,9 @@
  */
 
 const POLL_MS = 5000;
+const POLL_FALLBACK_MS = typeof SYSTEM_EVENTS_POLL_FALLBACK_MS === 'number'
+  ? SYSTEM_EVENTS_POLL_FALLBACK_MS
+  : 30000;
 const GALLERY_LIMIT = 1000;
 /** См. chat.js — восстановление вложений после перехода в чат */
 const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
@@ -24,6 +27,8 @@ class GalleryApp {
     this.itemById = new Map();
     this.lightboxIndex = -1;
     this.pollTimer = null;
+    this._eventsSocket = null;
+    this._eventsLive = false;
     this.touchStart = null;
     this._pendingDeleteId = null;
     this._pendingDeleteBtn = null;
@@ -49,11 +54,33 @@ class GalleryApp {
   init() {
     this.bindEvents();
     this.refresh(true);
-    this.pollTimer = setInterval(() => this.refresh(false), POLL_MS);
+    this._startPoll(POLL_MS);
+    this._connectSystemEvents();
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) return;
       this.refresh(false);
     });
+  }
+
+  _startPoll(intervalMs) {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = setInterval(() => this.refresh(false), intervalMs);
+  }
+
+  _connectSystemEvents() {
+    if (typeof SystemEventsSocket !== 'function') return;
+    this._eventsSocket = new SystemEventsSocket({
+      onOpen: () => {
+        this._eventsLive = true;
+        this._startPoll(POLL_FALLBACK_MS);
+      },
+      onClose: () => {
+        this._eventsLive = false;
+        this._startPoll(POLL_MS);
+      },
+      onGalleryUpdate: () => this.refresh(false),
+    });
+    this._eventsSocket.connect();
   }
 
   bindEvents() {

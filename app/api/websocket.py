@@ -24,6 +24,7 @@ from app.db.repositories import MessageRepository
 from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import IntegrationOverrides, parse_integration_overrides
 from app.public_url import bind_request_public_base_url, reset_request_public_base_url
+from app.errors import AppError, ErrorCode, app_error_from_code
 from app.services.agent_orchestrator import (
     AgentOrchestrator,
     ToolLoopExceeded,
@@ -33,6 +34,29 @@ from app.services.agent_orchestrator import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
+
+
+def _ws_error_payload(
+    code: str,
+    message: str,
+    *,
+    retryable: bool | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    err = app_error_from_code(code, message, retryable=retryable)
+    return err.to_ws_payload() | extra
+
+
+async def _emit_error(
+    emit,
+    *,
+    code: str,
+    message: str,
+    retryable: bool = False,
+    **extra: Any,
+) -> None:
+    payload = _ws_error_payload(code, message, retryable=retryable, **extra)
+    await emit("error", {k: v for k, v in payload.items() if k != "type"})
 
 
 async def _commit_or_settle_turn(
@@ -102,12 +126,10 @@ async def _run_turn_task(
                 status_code="cancelled",
             )
             logger.info("turn done: cancelled за %.1fs", time.monotonic() - t0)
-            await emit(
-                "error",
-                {
-                    "message": "Генерация отменена",
-                    "code": "cancelled",
-                },
+            await _emit_error(
+                emit,
+                code=ErrorCode.CANCELLED,
+                message="Генерация отменена",
             )
         except ToolLoopExceeded as exc:
             await _commit_or_settle_turn(
@@ -117,7 +139,7 @@ async def _run_turn_task(
                 status_message=str(exc),
             )
             logger.warning("turn done: tool_loop за %.1fs — %s", time.monotonic() - t0, exc)
-            await emit("error", {"message": str(exc), "code": "tool_loop"})
+            await _emit_error(emit, code=ErrorCode.TOOL_LOOP, message=str(exc))
         except LLMError as exc:
             await _commit_or_settle_turn(
                 session,
@@ -130,11 +152,25 @@ async def _run_turn_task(
                 time.monotonic() - t0,
                 exc,
             )
-            await emit("error", {"message": str(exc), "code": "llm_error"})
+            await _emit_error(
+                emit,
+                code=ErrorCode.LLM_ERROR,
+                message=str(exc),
+                retryable=True,
+            )
+        except AppError as exc:
+            await session.rollback()
+            logger.warning("turn done: %s за %.1fs — %s", exc.code, time.monotonic() - t0, exc)
+            await _emit_error(
+                emit,
+                code=exc.code,
+                message=exc.user_message,
+                retryable=exc.retryable,
+            )
         except ValueError as exc:
             await session.rollback()
             logger.warning("turn done: validation за %.1fs — %s", time.monotonic() - t0, exc)
-            await emit("error", {"message": str(exc), "code": "validation"})
+            await _emit_error(emit, code=ErrorCode.VALIDATION, message=str(exc))
         except Exception:
             await _commit_or_settle_turn(
                 session,
@@ -143,12 +179,10 @@ async def _run_turn_task(
                 status_message="Внутренняя ошибка сервера",
             )
             logger.exception("turn done: internal за %.1fs", time.monotonic() - t0)
-            await emit(
-                "error",
-                {
-                    "message": "Внутренняя ошибка сервера",
-                    "code": "internal",
-                },
+            await _emit_error(
+                emit,
+                code=ErrorCode.INTERNAL,
+                message="Внутренняя ошибка сервера",
             )
         else:
             logger.info("turn done: ok за %.1fs", time.monotonic() - t0)
@@ -178,7 +212,7 @@ async def _run_regenerate_task(
         msg_repo = MessageRepository(session)
         message = await msg_repo.get_by_id(message_id)
         if message is None or message.conversation_id != conversation_id:
-            await emit("error", {"message": "Сообщение не найдено", "code": "validation"})
+            await _emit_error(emit, code=ErrorCode.VALIDATION, message="Сообщение не найдено")
             return
 
         if message.role == MessageRole.ASSISTANT:
@@ -187,24 +221,20 @@ async def _run_regenerate_task(
                 message.created_at,
             )
             if user_message is None:
-                await emit(
-                    "error",
-                    {
-                        "message": "Нет сообщения пользователя для перегенерации",
-                        "code": "validation",
-                    },
+                await _emit_error(
+                    emit,
+                    code=ErrorCode.VALIDATION,
+                    message="Нет сообщения пользователя для перегенерации",
                 )
                 return
             user_message_id = user_message.id
         elif message.role == MessageRole.USER:
             user_message_id = message.id
         else:
-            await emit(
-                "error",
-                {
-                    "message": "Нельзя перегенерировать это сообщение",
-                    "code": "validation",
-                },
+            await _emit_error(
+                emit,
+                code=ErrorCode.VALIDATION,
+                message="Нельзя перегенерировать это сообщение",
             )
             return
 
@@ -230,12 +260,10 @@ async def _run_regenerate_task(
                 status_code="cancelled",
             )
             logger.info("turn done: regenerate cancelled за %.1fs", time.monotonic() - t0)
-            await emit(
-                "error",
-                {
-                    "message": "Генерация отменена",
-                    "code": "cancelled",
-                },
+            await _emit_error(
+                emit,
+                code=ErrorCode.CANCELLED,
+                message="Генерация отменена",
             )
         except ToolLoopExceeded as exc:
             await _commit_or_settle_turn(
@@ -249,7 +277,7 @@ async def _run_regenerate_task(
                 time.monotonic() - t0,
                 exc,
             )
-            await emit("error", {"message": str(exc), "code": "tool_loop"})
+            await _emit_error(emit, code=ErrorCode.TOOL_LOOP, message=str(exc))
         except LLMError as exc:
             await _commit_or_settle_turn(
                 session,
@@ -262,7 +290,26 @@ async def _run_regenerate_task(
                 time.monotonic() - t0,
                 exc,
             )
-            await emit("error", {"message": str(exc), "code": "llm_error"})
+            await _emit_error(
+                emit,
+                code=ErrorCode.LLM_ERROR,
+                message=str(exc),
+                retryable=True,
+            )
+        except AppError as exc:
+            await session.rollback()
+            logger.warning(
+                "turn done: regenerate %s за %.1fs — %s",
+                exc.code,
+                time.monotonic() - t0,
+                exc,
+            )
+            await _emit_error(
+                emit,
+                code=exc.code,
+                message=exc.user_message,
+                retryable=exc.retryable,
+            )
         except ValueError as exc:
             await session.rollback()
             logger.warning(
@@ -270,7 +317,7 @@ async def _run_regenerate_task(
                 time.monotonic() - t0,
                 exc,
             )
-            await emit("error", {"message": str(exc), "code": "validation"})
+            await _emit_error(emit, code=ErrorCode.VALIDATION, message=str(exc))
         except Exception:
             await _commit_or_settle_turn(
                 session,
@@ -282,12 +329,10 @@ async def _run_regenerate_task(
                 "turn done: regenerate internal за %.1fs",
                 time.monotonic() - t0,
             )
-            await emit(
-                "error",
-                {
-                    "message": "Внутренняя ошибка сервера",
-                    "code": "internal",
-                },
+            await _emit_error(
+                emit,
+                code=ErrorCode.INTERNAL,
+                message="Внутренняя ошибка сервера",
             )
         else:
             logger.info("turn done: regenerate ok за %.1fs", time.monotonic() - t0)
@@ -355,6 +400,24 @@ def _start_background_turn(
     task.add_done_callback(_on_turn_done)
 
 
+@router.websocket("/ws/events")
+async def websocket_system_events(websocket: WebSocket) -> None:
+    """Системные события: gallery_update, logs_append (P1.3)."""
+    check_api_key(websocket)
+    check_ws_origin(websocket)
+    await manager.connect_system(websocket)
+    try:
+        await websocket.send_json({"type": "connected", "channel": "system"})
+        while True:
+            data = await websocket.receive_json()
+            if data.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        manager.disconnect_system(websocket)
+
+
 @router.websocket("/ws/{conversation_id}")
 async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
     """Интерактивный чат по WebSocket."""
@@ -403,12 +466,11 @@ async def _handle_ws_message(
             check_rate_limit(f"{ip}:ws_message")
         except RateLimitExceeded as rl:
             await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": str(rl),
-                    "code": "rate_limit_error",
-                    "retry_after_sec": rl.retry_after_sec,
-                }
+                _ws_error_payload(
+                    ErrorCode.RATE_LIMIT,
+                    str(rl),
+                    retry_after_sec=rl.retry_after_sec,
+                )
             )
             return True
 
@@ -417,22 +479,14 @@ async def _handle_ws_message(
                 "WS user_message отклонён: busy (активная задача уже идёт)",
             )
             await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": "Уже выполняется генерация",
-                    "code": "busy",
-                }
+                _ws_error_payload(ErrorCode.BUSY, "Уже выполняется генерация"),
             )
             return True
 
         user_text = (data.get("text") or "").strip()
         if not user_text:
             await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": "Пустое сообщение",
-                    "code": "validation",
-                }
+                _ws_error_payload(ErrorCode.VALIDATION, "Пустое сообщение"),
             )
             return True
 
@@ -446,11 +500,10 @@ async def _handle_ws_message(
                 invalid_ids.append(str(raw))
         if invalid_ids:
             await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": f"Невалидные attachment_id: {', '.join(invalid_ids)}",
-                    "code": "validation",
-                }
+                _ws_error_payload(
+                    ErrorCode.VALIDATION,
+                    f"Невалидные attachment_id: {', '.join(invalid_ids)}",
+                )
             )
             return True
 
@@ -479,22 +532,14 @@ async def _handle_ws_message(
                 data.get("message_id"),
             )
             await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": "Уже выполняется генерация",
-                    "code": "busy",
-                }
+                _ws_error_payload(ErrorCode.BUSY, "Уже выполняется генерация"),
             )
             return True
         try:
             regen_id = uuid.UUID(str(data.get("message_id", "")))
         except ValueError:
             await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": "Некорректный message_id",
-                    "code": "validation",
-                }
+                _ws_error_payload(ErrorCode.VALIDATION, "Некорректный message_id"),
             )
             return True
         integration = parse_integration_overrides(data)
@@ -507,11 +552,10 @@ async def _handle_ws_message(
         return True
 
     await websocket.send_json(
-        {
-            "type": "error",
-            "message": f"Неизвестный тип сообщения: {msg_type}",
-            "code": "unknown_type",
-        }
+        _ws_error_payload(
+            ErrorCode.UNKNOWN_TYPE,
+            f"Неизвестный тип сообщения: {msg_type}",
+        )
     )
     return True
 
@@ -562,8 +606,10 @@ async def _websocket_chat_loop_inner(
             data = await inbox.get()
             if not await _handle_ws_message(websocket, conversation_id, data):
                 break
+    except WebSocketDisconnect:
+        pass
     except Exception:
-        logger.exception("WS ошибка беседы %s", conversation_id)
+        logger.exception("WS internal: беседа %s", conversation_id)
     finally:
         receiver.cancel()
         try:

@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **179+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **203+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — WS events, anti-loop (тихий), job queue, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -140,7 +140,7 @@
 - [x] Тесты конкурентных записей — `tests/test_sqlite_concurrent_writes.py` (12× `run_write` параллельно)
 - [x] Метрика/лог при срабатывании retry `database is locked` — `sqlite_busy_retries_total`, health `/api/health`
 - [x] Батч по размеру буфера (`STREAM_FLUSH_MIN_BYTES=2048`) + debounce 350 ms — [`streaming_draft.py`](app/services/streaming_draft.py)
-- [ ] Подготовка DAO-слоя под Postgres ([TODO.md §17](TODO.md#17-дорожная-карта-v2)) — без миграции данных пока
+- [x] Подготовка DAO-слоя под Postgres — [`app/db/uow.py`](app/db/uow.py) (`UnitOfWork`, `SqlAlchemyUnitOfWork`)
 
 ---
 
@@ -165,7 +165,7 @@
 **Задачи:**
 
 - [x] WS `generation_update` после tool_start/done/done/ack — [`ws_events.py`](app/api/ws_events.py), UI `chat.js`
-- [ ] `gallery_update`, `logs_append` (постепенно вытеснить poll)
+- [x] `gallery_update`, `logs_append` — `/ws/events`, [`system-events.js`](static/js/system-events.js); poll fallback 30 с на gallery/health
 - [x] REST fallback для F5 — poll generation-status сохранён
 - [x] Broadcast по `conversation_id` через `ConnectionManager.send_json`
 
@@ -184,7 +184,7 @@
 - [x] Проверка `cancel_event` перед каждым tool (`before_tool`)
 - [x] Валидация `attachment_ids` с WS-ошибкой вместо silent `pass` ([websocket.py](app/api/websocket.py))
 
-**Критерии готовности:** тест «модель зовёт img2img 5 раз подряд → остановка с понятной ошибкой».
+**Критерии готовности:** тест «модель зовёт img2img 5 раз подряд → остановка»; anti-loop без UI-ошибки (только лог + `done`).
 
 ---
 
@@ -194,7 +194,7 @@
 
 - [x] Magic bytes + попытка decode изображения (Pillow), лимит пикселей — [`upload_validation.py`](app/integrations/upload_validation.py), `MAX_UPLOAD_IMAGE_PIXELS`
 - [x] Защита PDF/DOCX: сигнатура, `MAX_PDF_PAGES`, `EXTRACT_TIMEOUT_SEC` на extract
-- [ ] Единый media registry (метаданные в БД = источник правды; disk — storage) — задел под P2
+- [x] Единый media registry — [`media_registry.py`](app/services/media_registry.py); ingest/галерея через БД
 
 **Связь с TODO.md:** [§1.11](TODO.md#111-обработка-вложений), `safe_filename` уже есть.
 
@@ -202,11 +202,11 @@
 
 ## P1.6 — Наблюдаемость и ошибки
 
-- [ ] Структурированные логи (JSON опционально)
+- [x] Структурированные логи (JSON опционально) — `LOG_JSON=true`, [`JsonLogFormatter`](app/logging_setup.py)
 - [x] Correlation id WS-сессии в логах (`ws=` в формате, `log_ws_session`)
-- [ ] Канонические коды [`AppError`](audit.md) → [§13](TODO.md#13-обработка-ошибок)
+- [x] Канонические коды — [`app/errors.py`](app/errors.py) (`AppError`, `ErrorCode`), WS через `_emit_error`
 - [x] Health: свободное место `data/`, WAL, `active_turns` / `ws_connections` в probe app
-- [ ] Разделить `except Exception` в WS: бизнес (warning) vs internal (error + log)
+- [x] Разделить `except Exception` в WS: `WebSocketDisconnect` отдельно; internal — `logger.exception`
 
 ---
 
@@ -215,7 +215,7 @@
 - [x] Починить `tests/test_tool_limit_draft.py` (`streaming: None` в финальном сообщении)
 - [x] Tool loop integration — `tests/test_tool_loop_integration.py`
 - [x] WS reconnect / cancel event — `tests/test_ws_manager_lifecycle.py`
-- [ ] WS resume E2E; concurrent tabs E2E; cancel mid-tool E2E
+- [x] WS resume E2E; concurrent tabs E2E; cancel mid-tool E2E — `tests/test_ws_system_events.py`
 - [x] Security: SSRF URL / trusted media — `tests/test_security_urls.py`
 - [x] Security: path traversal upload — `test_upload.py`, `test_media_blocks_traversal`
 - [x] Security: XSS payload в markdown — `tests/test_markdown_sanitize.py`

@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_file_max_bytes: int = 10 * 1024 * 1024
     log_file_backup_count: int = 5
+    # true — JSON в консоль/файл/буфер UI (P1.6)
+    log_json: bool = False
     # Ожидание LLM при 503 Loading model (секунды, суммарно)
     llm_model_load_wait_sec: int = 120
     llm_model_load_retry_sec: float = 2.0
