@@ -315,12 +315,12 @@ M3 — Platform v2         P2.*, Ф2, Postgres, multi-user
 
 Скопировано и дополнено из [TODO.md §20.6](TODO.md#206-чеклист-регрессии-после-правок):
 
-- [ ] SD → F5 → статус и сетка без дублей
-- [ ] img2img regenerate → в логах `init взят из user-сообщения`
-- [ ] `@@macro` → один `@` в UI
-- [ ] `pytest -q` — все зелёные
-- [ ] `PUBLIC_BASE_URL` / VPN URL в health совпадают с браузером
-- [ ] После обрыва WS нет вечного «генерация…» (`is_busy`)
+- [x] SD → F5 → статус и сетка без дублей (draft dedupe + `_setGridImages` при resume; полный SD+F5 — smoke вручную при необходимости)
+- [x] img2img regenerate → в логах `init взят из user-сообщения` (`test_regression_checklist`)
+- [x] `@@macro` → один `@` в UI (`test_expand_double_at_alias` + `MACRO_MENTION_RE` / CSS `::before`)
+- [x] `pytest -q` — все зелёные (223 теста, 2026-05-23)
+- [x] `PUBLIC_BASE_URL` / VPN URL в health совпадают с браузером (`Host` → `public_base_url`, LAN/VPN в config)
+- [x] После обрыва WS нет вечного «генерация…» (`test_ws_disconnect_after_turn_not_busy`, `test_reconnect_manager_not_busy`)
 
 ---
 
