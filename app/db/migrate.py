@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import enum
 import logging
 import uuid
 
@@ -40,6 +41,26 @@ async def run_sqlite_migrations(engine: AsyncEngine) -> None:
 
         await _migrate_preset_prompts(conn)
         await _normalize_dashed_uuid_ids(conn)
+        await _normalize_sqlite_enum_names(conn)
+
+
+async def _normalize_sqlite_enum_names(conn) -> None:
+    """SQLite: имена Enum (USER) → значения StrEnum (user) для Postgres/ORM."""
+    from app.db.models import MessageRole, PromptMacroCategory
+
+    pairs: list[tuple[str, str, type[enum.StrEnum]]] = [
+        ("prompt_macros", "category", PromptMacroCategory),
+        ("messages", "role", MessageRole),
+    ]
+    for table, column, enum_cls in pairs:
+        for member in enum_cls:
+            await conn.execute(
+                text(
+                    f"UPDATE {table} SET {column} = :value "
+                    f"WHERE {column} = :name",
+                ),
+                {"value": member.value, "name": member.name},
+            )
 
 
 async def _normalize_dashed_uuid_ids(conn) -> None:

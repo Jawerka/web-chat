@@ -30,7 +30,10 @@ def alembic_database_url(url: str | None = None) -> str:
     """
     raw = database_url_raw(url)
     if "+asyncpg" in raw:
-        return raw.replace("postgresql+asyncpg", "postgresql+psycopg", 1)
+        # psycopg2 для Alembic: psycopg3 + SQLAlchemy 2.0 иногда ломает version parse
+        return raw.replace("postgresql+asyncpg", "postgresql+psycopg2", 1)
+    if "+psycopg://" in raw or raw.startswith("postgresql+psycopg://"):
+        return raw.replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
     if "+aiosqlite" in raw:
         return raw.replace("sqlite+aiosqlite", "sqlite", 1)
     return raw

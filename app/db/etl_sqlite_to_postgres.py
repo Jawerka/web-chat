@@ -6,12 +6,14 @@ ETL: копирование данных web-chat из SQLite в PostgreSQL (с�
 
 from __future__ import annotations
 
+import enum
 import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from sqlalchemy import delete, func, insert, inspect, select, text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -21,6 +23,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from app.db.alembic_runner import run_alembic_stamp, run_alembic_upgrade
+from app.db.migrate import run_sqlite_migrations
 from app.db.models import (
     Attachment,
     Base,
@@ -140,8 +143,73 @@ def _row_dict(obj: ModelT) -> dict[str, Any]:
         val = getattr(obj, col.key)
         if isinstance(val, uuid.UUID):
             out[col.key] = val
+        elif isinstance(val, enum.Enum):
+            out[col.key] = val.value
         else:
             out[col.key] = val
+    out = _normalize_sqlite_enum_strings(type(obj), out)
+    return out
+
+
+def _normalize_sqlite_enum_strings(model: type[ModelT], row: dict[str, Any]) -> dict[str, Any]:
+    """
+    SQLite хранит имена Enum (USER, CHARACTER); Postgres — значения (user, character).
+    """
+    mapper = inspect(model)
+    for col in mapper.columns:
+        key = col.key
+        if key not in row:
+            continue
+        val = row[key]
+        if not isinstance(val, str):
+            continue
+        enum_cls: type[enum.Enum] | None = None
+        if isinstance(col.type, SAEnum):
+            enum_cls = col.type.enum_class
+        elif hasattr(col.type, "python_type"):
+            pt = col.type.python_type
+            if isinstance(pt, type) and issubclass(pt, enum.Enum):
+                enum_cls = pt
+        if enum_cls is None:
+            continue
+        values = {m.value for m in enum_cls}
+        if val in values:
+            continue
+        if val in enum_cls.__members__:
+            row[key] = enum_cls[val].value
+        elif val.lower() in values:
+            row[key] = val.lower()
+    return row
+
+
+async def _load_id_set(session: AsyncSession, model: type[ModelT]) -> set[uuid.UUID]:
+    pk = inspect(model).primary_key[0]
+    result = await session.execute(select(pk))
+    return set(result.scalars().all())
+
+
+def _sanitize_fk_row(
+    model: type[ModelT],
+    row: dict[str, Any],
+    *,
+    valid_conversation_ids: set[uuid.UUID] | None,
+    valid_message_ids: set[uuid.UUID] | None,
+    valid_media_asset_ids: set[uuid.UUID] | None,
+) -> dict[str, Any]:
+    """Обнулить битые FK (удалённые беседы/сообщения в legacy SQLite)."""
+    out = dict(row)
+    if valid_conversation_ids is not None and "conversation_id" in out:
+        cid = out.get("conversation_id")
+        if cid is not None and cid not in valid_conversation_ids:
+            out["conversation_id"] = None
+    if valid_message_ids is not None and "message_id" in out:
+        mid = out.get("message_id")
+        if mid is not None and mid not in valid_message_ids:
+            out["message_id"] = None
+    if valid_media_asset_ids is not None and "media_asset_id" in out:
+        aid = out.get("media_asset_id")
+        if aid is not None and aid not in valid_media_asset_ids:
+            out["media_asset_id"] = None
     return out
 
 
@@ -151,6 +219,10 @@ async def _copy_table_clean(
     model: type[ModelT],
     *,
     batch_size: int,
+    valid_conversation_ids: set[uuid.UUID] | None = None,
+    valid_message_ids: set[uuid.UUID] | None = None,
+    valid_media_asset_ids: set[uuid.UUID] | None = None,
+    commit_each_batch: bool = False,
 ) -> int:
     """Копия батчами: читаем source, вставляем в target новые объекты."""
     total = 0
@@ -164,8 +236,31 @@ async def _copy_table_clean(
         if not batch:
             break
         rows = [_row_dict(obj) for obj in batch]
+        if valid_conversation_ids is not None and model is Message:
+            rows = [
+                row
+                for row in rows
+                if row.get("conversation_id") in valid_conversation_ids
+            ]
+        else:
+            rows = [
+                _sanitize_fk_row(
+                    model,
+                    row,
+                    valid_conversation_ids=valid_conversation_ids,
+                    valid_message_ids=valid_message_ids,
+                    valid_media_asset_ids=valid_media_asset_ids,
+                )
+                for row in rows
+            ]
+        if not rows:
+            offset += batch_size
+            continue
         await target.execute(insert(model), rows)
-        await target.flush()
+        if commit_each_batch:
+            await target.commit()
+        else:
+            await target.flush()
         for obj in batch:
             source.expunge(obj)
         total += len(batch)
@@ -200,6 +295,8 @@ async def run_etl(options: EtlOptions) -> EtlCounts:
     stats = EtlCounts()
 
     try:
+        if is_sqlite_url(options.source_url):
+            await run_sqlite_migrations(source_engine)
         await _ensure_target_schema(target_engine, options.target_url)
 
         async with SourceSession() as src_sess:
@@ -226,21 +323,43 @@ async def run_etl(options: EtlOptions) -> EtlCounts:
                 await _truncate_target(tgt_sess, options.target_url)
                 await tgt_sess.commit()
 
+            valid_conv_ids = await _load_id_set(src_sess, Conversation)
+            valid_msg_ids: set[uuid.UUID] = set()
+            valid_media_ids: set[uuid.UUID] = set()
+
             for table_name, model in ETL_TABLES:
                 if options.skip_media_assets and model is MediaAsset:
                     logger.info("Пропуск таблицы %s (--skip-media)", table_name)
                     stats.copied[table_name] = 0
                     continue
+                fk_conv = fk_msg = fk_media = None
+                if model in (MediaAsset, Message):
+                    fk_conv = valid_conv_ids
+                elif model is Attachment:
+                    fk_conv = valid_conv_ids
+                    fk_msg = valid_msg_ids
+                    fk_media = valid_media_ids
+                media_batch = min(options.batch_size, 5) if model is MediaAsset else options.batch_size
                 n = await _copy_table_clean(
                     src_sess,
                     tgt_sess,
                     model,
-                    batch_size=options.batch_size,
+                    batch_size=media_batch,
+                    valid_conversation_ids=fk_conv,
+                    valid_message_ids=fk_msg,
+                    valid_media_asset_ids=fk_media,
+                    commit_each_batch=model is MediaAsset,
                 )
+                if model is Conversation:
+                    valid_conv_ids = await _load_id_set(tgt_sess, Conversation)
+                elif model is Message:
+                    valid_msg_ids = await _load_id_set(tgt_sess, Message)
+                elif model is MediaAsset:
+                    valid_media_ids = await _load_id_set(tgt_sess, MediaAsset)
                 stats.copied[table_name] = n
                 logger.info("Скопировано %s: %d строк", table_name, n)
-
-            await tgt_sess.commit()
+                if model is not MediaAsset:
+                    await tgt_sess.commit()
 
         if options.stamp_alembic and is_postgres_url(options.target_url):
             import asyncio

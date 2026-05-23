@@ -35,6 +35,14 @@ class Base(DeclarativeBase):
     """Базовый класс декларативных моделей."""
 
 
+def _str_enum(enum_cls: type[enum.StrEnum]) -> Enum:
+    """StrEnum для Postgres: в БД хранятся .value (user), не имена (USER)."""
+    return Enum(
+        enum_cls,
+        values_callable=lambda members: [m.value for m in members],
+    )
+
+
 class MessageRole(enum.StrEnum):
     """Роль сообщения в диалоге."""
 
@@ -120,7 +128,7 @@ class Message(Base):
         nullable=False,
         index=True,
     )
-    role: Mapped[MessageRole] = mapped_column(Enum(MessageRole), nullable=False)
+    role: Mapped[MessageRole] = mapped_column(_str_enum(MessageRole), nullable=False)
     content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -164,7 +172,7 @@ class PromptMacro(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     category: Mapped[PromptMacroCategory] = mapped_column(
-        Enum(PromptMacroCategory),
+        _str_enum(PromptMacroCategory),
         nullable=False,
         index=True,
     )
