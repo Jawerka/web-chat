@@ -13,11 +13,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas import (
     PromptMacroCreate,
     PromptMacroOut,
+    PromptMacroReindexOut,
+    PromptMacroSearchHit,
     PromptMacroUpdate,
 )
+from app.config import settings
 from app.db.models import PromptMacroCategory
 from app.db.repositories import PromptMacroRepository
 from app.db.session import get_db
+from app.services.macro_search_service import (
+    reindex_all_macro_embeddings,
+    refresh_macro_embedding,
+    search_macros,
+)
 from app.services.prompt_macro_service import CATEGORY_LABELS, validate_alias
 
 router = APIRouter(prefix="/prompt-macros", tags=["prompt-macros"])
@@ -44,6 +52,38 @@ async def list_categories() -> list[dict[str, str]]:
         {"id": cat.value, "label": CATEGORY_LABELS[cat]}
         for cat in PromptMacroCategory
     ]
+
+
+@router.get("/search", response_model=list[PromptMacroSearchHit])
+async def search_macro_catalog(
+    q: str = Query(..., min_length=1, max_length=2000),
+    limit: int | None = Query(None, ge=1, le=50),
+    category: PromptMacroCategory | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> list[PromptMacroSearchHit]:
+    """Semantic/keyword поиск по каталогу @alias (Ф2)."""
+    cap = limit or settings.macro_search_top_k
+    hits = await search_macros(db, q, limit=cap, category=category)
+    return [
+        PromptMacroSearchHit(
+            id=h["macro"].id,
+            alias=h["macro"].alias,
+            label=h["macro"].label,
+            category=h["macro"].category.value,
+            score=float(h["score"]),
+            match=str(h["match"]),
+        )
+        for h in hits
+    ]
+
+
+@router.post("/reindex-embeddings", response_model=PromptMacroReindexOut)
+async def reindex_macro_embeddings(
+    db: AsyncSession = Depends(get_db),
+) -> PromptMacroReindexOut:
+    """Offline: пересчитать embeddings для всех макросов (не в hot path WS)."""
+    stats = await reindex_all_macro_embeddings(db)
+    return PromptMacroReindexOut(**stats)
 
 
 @router.get("", response_model=list[PromptMacroOut])
@@ -85,6 +125,7 @@ async def create_macro(
             status_code=status.HTTP_409_CONFLICT,
             detail="Alias уже занят",
         ) from exc
+    await refresh_macro_embedding(db, macro)
     return _macro_out(macro)
 
 
@@ -130,6 +171,7 @@ async def update_macro(
         )
     except IntegrityError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Alias уже занят") from exc
+    await refresh_macro_embedding(db, macro)
     return _macro_out(macro)
 
 

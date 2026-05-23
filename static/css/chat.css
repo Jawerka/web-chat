@@ -3821,6 +3821,11 @@ body.gallery-lightbox-open {
   background: color-mix(in srgb, var(--primary) 8%, var(--surface));
 }
 
+.macro-context-full-btn.semantic.active {
+  border-color: var(--accent, #7c6cf0);
+  color: var(--accent, #7c6cf0);
+}
+
 .macro-context-full-btn.active {
   color: var(--primary);
   border-color: color-mix(in srgb, var(--primary) 55%, var(--border));

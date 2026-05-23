@@ -124,6 +124,23 @@ class PromptMacroUpdate(BaseModel):
     sort_order: int | None = None
 
 
+class PromptMacroSearchHit(BaseModel):
+    """Результат semantic/keyword поиска по каталогу @alias (Ф2)."""
+
+    id: UUID
+    alias: str
+    label: str | None
+    category: str
+    score: float
+    match: str
+
+
+class PromptMacroReindexOut(BaseModel):
+    updated: int
+    skipped: int
+    total: int
+
+
 class MessageSearchHit(BaseModel):
     """Одно совпадение в поиске по истории."""
 
@@ -174,7 +191,7 @@ class TurnCreate(BaseModel):
     attachment_ids: list[UUID] = Field(default_factory=list)
     macro_context: str | None = Field(
         None,
-        description="selected (по умолчанию) или full — каталог @alias в system",
+        description="selected | full | semantic — контекст @alias для LLM",
     )
     llm_base_url: str | None = Field(None, max_length=512)
     sd_webui_url: str | None = Field(None, max_length=512)

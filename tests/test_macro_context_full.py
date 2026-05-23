@@ -15,6 +15,7 @@ def test_parse_macro_context_mode() -> None:
     assert parse_macro_context_mode("selected") == "selected"
     assert parse_macro_context_mode("full") == "full"
     assert parse_macro_context_mode("FULL") == "full"
+    assert parse_macro_context_mode("semantic") == "semantic"
 
 
 def _macro(alias: str, body: str, *, label: str = "") -> PromptMacro:

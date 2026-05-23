@@ -87,6 +87,7 @@ async def get_llm_context(
     conversation_id: uuid.UUID,
     macro_context: str | None = None,
     max_messages: int | None = None,
+    q: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
@@ -108,6 +109,7 @@ async def get_llm_context(
             conversation_id,
             macro_context=macro_context,
             max_messages=max_messages,
+            semantic_query=q,
         )
     except ValueError as exc:
         raise HTTPException(

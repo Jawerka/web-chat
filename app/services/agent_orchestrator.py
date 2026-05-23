@@ -41,7 +41,6 @@ from app.services.message_builder import (
 )
 from app.services.prompt_macro_service import (
     alias_map_from_macros,
-    append_full_macro_catalog_to_system,
     expand_parts_for_llm,
 )
 from app.api.ws_events import emit_progress
@@ -431,7 +430,7 @@ class AgentOrchestrator:
         """
         Полный ход в беседе: сохранение user/assistant, стриминг WS-событий.
 
-        macro_context: ``selected`` — только @alias в тексте; ``full`` — каталог в system.
+        macro_context: ``selected`` | ``full`` | ``semantic`` (top-K по user_text).
 
         Raises:
             ValueError: Беседа не найдена.
@@ -496,18 +495,23 @@ class AgentOrchestrator:
         macro_repo = PromptMacroRepository(session)
         all_macros = await macro_repo.list_all()
         alias_to_body = alias_map_from_macros(all_macros)
+        from app.services.macro_search_service import apply_macro_context_to_system
+
+        system_prompt = await apply_macro_context_to_system(
+            session,
+            system_prompt,
+            macro_context,
+            user_text=user_text,
+            all_macros=all_macros,
+        )
         if macro_context == "full":
-            system_prompt = append_full_macro_catalog_to_system(
-                system_prompt,
-                all_macros,
-                max_chars=settings.macro_context_full_max_chars,
-                max_macros=settings.macro_context_full_max_macros,
-            )
             logger.info(
                 "macro_context=full: каталог %d макросов в system (лимит %d симв.)",
                 len(all_macros),
                 settings.macro_context_full_max_chars,
             )
+        elif macro_context == "semantic":
+            logger.info("macro_context=semantic: top-K по запросу пользователя")
 
         history = await msg_repo.list_for_llm(
             conversation_id,
@@ -719,13 +723,23 @@ class AgentOrchestrator:
         macro_repo = PromptMacroRepository(session)
         all_macros = await macro_repo.list_all()
         alias_to_body = alias_map_from_macros(all_macros)
-        if macro_context == "full":
-            system_prompt = append_full_macro_catalog_to_system(
-                system_prompt,
-                all_macros,
-                max_chars=settings.macro_context_full_max_chars,
-                max_macros=settings.macro_context_full_max_macros,
+        regen_query = user_message.content_text or ""
+        if not regen_query.strip() and isinstance(user_parts, list):
+            regen_query = " ".join(
+                p.get("text", "")
+                for p in user_parts
+                if isinstance(p, dict) and p.get("type") == "text"
             )
+        from app.services.macro_search_service import apply_macro_context_to_system
+
+        system_prompt = await apply_macro_context_to_system(
+            session,
+            system_prompt,
+            macro_context,
+            user_text=regen_query,
+            all_macros=all_macros,
+        )
+        if macro_context == "full":
             logger.info(
                 "macro_context=full (regenerate): каталог %d макросов в system",
                 len(all_macros),

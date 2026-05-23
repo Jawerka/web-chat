@@ -342,7 +342,9 @@ sudo systemctl status web-chat
 
 CRUD макросов: категории (персонаж, стиль, сцена…), alias, тело текста, порядок сортировки.
 
-REST: `/api/prompt-macros`.
+REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/prompt-macros/reindex-embeddings`.
+
+Кнопка каталога в composer (цикл): только `@` из текста → полный каталог → **semantic** top-K по запросу (`macro_context` в WS). Векторы: `EMBEDDING_MODEL` в `.env`, offline reindex.
 
 ---
 

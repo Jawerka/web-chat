@@ -30,6 +30,14 @@ async def run_sqlite_migrations(engine: AsyncEngine) -> None:
             )
             logger.info("Миграция: attachments.media_asset_id")
 
+        result = await conn.execute(text("PRAGMA table_info(prompt_macros)"))
+        macro_cols = {row[1] for row in result.fetchall()}
+        if "embedding_json" not in macro_cols:
+            await conn.execute(
+                text("ALTER TABLE prompt_macros ADD COLUMN embedding_json TEXT"),
+            )
+            logger.info("Миграция: prompt_macros.embedding_json")
+
         await _migrate_preset_prompts(conn)
         await _normalize_dashed_uuid_ids(conn)
 

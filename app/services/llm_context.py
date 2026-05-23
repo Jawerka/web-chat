@@ -18,9 +18,9 @@ from app.db.repositories import (
 )
 from app.integrations.tool_definitions import tools_for_preset_slug
 from app.services.message_builder import history_to_llm_messages
+from app.services.macro_search_service import apply_macro_context_to_system
 from app.services.prompt_macro_service import (
     alias_map_from_macros,
-    append_full_macro_catalog_to_system,
     parse_macro_context_mode,
 )
 
@@ -31,6 +31,7 @@ async def build_conversation_llm_context(
     *,
     macro_context: str | None = None,
     max_messages: int | None = None,
+    semantic_query: str | None = None,
 ) -> dict[str, Any]:
     """
     Восстановить контекст, который уйдёт в LLM при следующем ходе.
@@ -55,13 +56,13 @@ async def build_conversation_llm_context(
 
     all_macros = await macro_repo.list_all()
     alias_to_body = alias_map_from_macros(all_macros)
-    if mode == "full":
-        system_prompt = append_full_macro_catalog_to_system(
-            system_prompt,
-            all_macros,
-            max_chars=settings.macro_context_full_max_chars,
-            max_macros=settings.macro_context_full_max_macros,
-        )
+    system_prompt = await apply_macro_context_to_system(
+        session,
+        system_prompt,
+        mode,
+        user_text=semantic_query or "",
+        all_macros=all_macros,
+    )
 
     cap = max_messages or settings.max_history_messages
     history = await msg_repo.list_for_llm(conversation_id, cap)

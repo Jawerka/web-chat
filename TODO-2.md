@@ -271,12 +271,14 @@
 
 **Задачи:**
 
-- [ ] Spike: локальная embedding-модель (LAN), хранение векторов (SQLite JSON / отдельная таблица / sqlite-vec)
-- [ ] API: `GET /api/prompt-macros/search?q=` с semantic rank
-- [ ] Лимит K (например 3–5) и max tokens в системный контекст
-- [ ] Не дублировать [TODO.md §17 RAG](TODO.md#17-дорожная-карта-v2) по документам — только макросы
+- [x] Spike: локальная embedding-модель (LAN), хранение векторов (`prompt_macros.embedding_json`)
+- [x] API: `GET /api/prompt-macros/search?q=` с semantic rank (+ keyword fallback)
+- [x] `POST /api/prompt-macros/reindex-embeddings` — offline индексация
+- [x] Лимит K (`MACRO_SEARCH_TOP_K`, default 5) и лимит символов как у Ф1
+- [x] `macro_context=semantic` в WS/REST — top-K по тексту запроса; UI: цикл selected→full→semantic
+- [x] Только макросы — не RAG по документам
 
-**Приоритет:** P2 / опционально P1 после Ф1.
+**Приоритет:** P2 / опционально P1 после Ф1 — **закрыто (пилот)**.
 
 ---
 

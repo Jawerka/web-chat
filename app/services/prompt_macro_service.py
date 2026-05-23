@@ -68,12 +68,18 @@ CATEGORY_LABELS: dict[PromptMacroCategory, str] = {
 
 _MACRO_CONTEXT_SELECTED = "selected"
 _MACRO_CONTEXT_FULL = "full"
+_MACRO_CONTEXT_SEMANTIC = "semantic"
 
 
 def parse_macro_context_mode(raw: str | None) -> str:
-    """Режим макросов с WS: selected (только @ в тексте) или full (каталог в system)."""
-    if raw is not None and str(raw).strip().lower() == _MACRO_CONTEXT_FULL:
+    """Режим макросов: selected | full | semantic (Ф2, top-K по запросу)."""
+    if raw is None:
+        return _MACRO_CONTEXT_SELECTED
+    mode = str(raw).strip().lower()
+    if mode == _MACRO_CONTEXT_FULL:
         return _MACRO_CONTEXT_FULL
+    if mode == _MACRO_CONTEXT_SEMANTIC:
+        return _MACRO_CONTEXT_SEMANTIC
     return _MACRO_CONTEXT_SELECTED
 
 

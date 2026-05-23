@@ -122,8 +122,9 @@ function imageUrlKey(url) {
   }
 }
 
-/** sessionStorage: «1» = macro_context full (Ф1) */
-const MACRO_CONTEXT_FULL_KEY = 'webchat_macro_context_full';
+/** sessionStorage: selected | full | semantic (Ф1/Ф2) */
+const MACRO_CONTEXT_MODE_KEY = 'webchat_macro_context_mode';
+const MACRO_CONTEXT_FULL_LEGACY = 'webchat_macro_context_full';
 
 const MSG_ICONS = {
   copy: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
@@ -4106,8 +4107,21 @@ class ChatApp {
     }
   }
 
-  isMacroContextFull() {
-    return sessionStorage.getItem(MACRO_CONTEXT_FULL_KEY) === '1';
+  getMacroContextMode() {
+    let mode = sessionStorage.getItem(MACRO_CONTEXT_MODE_KEY);
+    if (!mode && sessionStorage.getItem(MACRO_CONTEXT_FULL_LEGACY) === '1') {
+      mode = 'full';
+      sessionStorage.setItem(MACRO_CONTEXT_MODE_KEY, mode);
+      sessionStorage.removeItem(MACRO_CONTEXT_FULL_LEGACY);
+    }
+    return mode === 'full' || mode === 'semantic' ? mode : 'selected';
+  }
+
+  _cycleMacroContextMode() {
+    const order = ['selected', 'full', 'semantic'];
+    const cur = this.getMacroContextMode();
+    const idx = order.indexOf(cur);
+    return order[(idx + 1) % order.length];
   }
 
   _initMacroContextToggle() {
@@ -4115,25 +4129,35 @@ class ChatApp {
     if (!btn) return;
     this._updateMacroContextToggleUi();
     btn.addEventListener('click', () => {
-      const next = !this.isMacroContextFull();
-      sessionStorage.setItem(MACRO_CONTEXT_FULL_KEY, next ? '1' : '0');
+      const next = this._cycleMacroContextMode();
+      if (next === 'selected') {
+        sessionStorage.removeItem(MACRO_CONTEXT_MODE_KEY);
+      } else {
+        sessionStorage.setItem(MACRO_CONTEXT_MODE_KEY, next);
+      }
       this._updateMacroContextToggleUi();
-      this.log?.info(
-        'macro',
-        next ? 'Каталог @alias в контексте модели включён' : 'Только @alias из текста',
-      );
+      const labels = {
+        selected: 'Только @alias из текста',
+        full: 'Полный каталог @alias в контексте модели',
+        semantic: 'Top-K @alias по смыслу запроса (semantic)',
+      };
+      this.log?.info('macro', labels[next] || next);
     });
   }
 
   _updateMacroContextToggleUi() {
     const btn = this.$.macroContextFullBtn;
     if (!btn) return;
-    const on = this.isMacroContextFull();
-    btn.classList.toggle('active', on);
-    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    btn.title = on
-      ? 'Каталог @alias в контексте модели: вкл (нажмите, чтобы выкл.)'
-      : 'Каталог @alias в контексте модели: выкл';
+    const mode = this.getMacroContextMode();
+    btn.classList.toggle('active', mode !== 'selected');
+    btn.classList.toggle('semantic', mode === 'semantic');
+    btn.setAttribute('aria-pressed', mode !== 'selected' ? 'true' : 'false');
+    const titles = {
+      selected: 'Контекст @alias: только из текста (нажмите — полный каталог)',
+      full: 'Контекст @alias: полный каталог (нажмите — semantic top-K)',
+      semantic: 'Контекст @alias: semantic top-K (нажмите — выкл.)',
+    };
+    btn.title = titles[mode] || titles.selected;
   }
 
   getWsIntegrationPayload() {
@@ -4144,7 +4168,8 @@ class ChatApp {
     if (sdUrl) payload.sd_webui_url = sdUrl;
     const model = this.getActiveLlmModel();
     if (model) payload.model = model;
-    if (this.isMacroContextFull()) payload.macro_context = 'full';
+    const macroMode = this.getMacroContextMode();
+    if (macroMode !== 'selected') payload.macro_context = macroMode;
     return payload;
   }
 

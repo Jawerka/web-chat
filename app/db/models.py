@@ -185,6 +185,8 @@ class PromptMacro(Base):
         server_default=func.now(),
         nullable=False,
     )
+    # Ф2: вектор для semantic search (offline reindex, не в hot path @alias)
+    embedding_json: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
 
 
 class Attachment(Base):

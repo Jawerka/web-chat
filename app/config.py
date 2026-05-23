@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     # Ф1: снимок каталога @alias в system prompt (macro_context=full)
     macro_context_full_max_chars: int = 12_000
     macro_context_full_max_macros: int = 80
+    # Ф2: embeddings для semantic search по каталогу @alias
+    embedding_model: str = ""
+    macro_search_top_k: int = 5
 
     # Vision: llama-server скачивает image_url по HTTP (лимит ~10 MB на стороне LLM)
     llm_vision_max_bytes: int = 6 * 1024 * 1024
