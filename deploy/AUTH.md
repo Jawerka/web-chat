@@ -50,10 +50,16 @@ python -m app.scripts.assign_conversation_owners --user admin
 | CSRF | `SameSite` + same-origin fetch с credentials |
 | Секрет | `AUTH_SECRET` только в `.env`, не в git |
 
+## Управление пользователями (admin)
+
+- **Настройки чата** → раздел «Пользователи» (виден только `role=admin`).
+- `GET /api/users` — список учётных записей.
+- `POST /api/users` — создать пользователя (`login`, `password`, опционально `display_name`, `role`: `user`|`admin`).
+- **Выйти:** кнопка в разделе «Аккаунт» или `POST /api/auth/logout`.
+
 ## Дальнейшее развитие
 
-- Смена пароля в UI, регистрация пользователей (admin-only API).
-- Роли: `admin` / `user` (поле `users.role` уже в БД).
+- Смена пароля в UI, деактивация пользователей.
 - Опционально: Redis-сессии, 2FA, принудительный logout всех сессий.
 
 См. также [MULTI-USER.md](MULTI-USER.md) (legacy-заголовок).

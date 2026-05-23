@@ -117,3 +117,20 @@ def owner_user_id_for_request(user: RequestUser | None) -> uuid.UUID | None:
     if settings.effective_multi_user:
         return user.id if user is not None else None
     return None
+
+
+async def require_admin(
+    user: RequestUser | None = Depends(get_request_user),
+) -> RequestUser:
+    """Только активный admin (при включённой аутентификации)."""
+    if not settings.auth_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Аутентификация отключена",
+        )
+    if user is None or user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуются права администратора",
+        )
+    return user

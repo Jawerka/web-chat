@@ -47,6 +47,13 @@ class UserRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_all(self) -> list[User]:
+        """Все пользователи (для admin API)."""
+        result = await self._session.execute(
+            select(User).order_by(User.login),
+        )
+        return list(result.scalars().all())
+
     async def create_user(
         self,
         *,

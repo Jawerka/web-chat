@@ -92,3 +92,62 @@ async def test_bootstrap_admin_assigns_conversations(
     convs = await client.get("/api/conversations")
     assert convs.status_code == 200
     assert len(convs.json()) >= 1
+
+
+@pytest.mark.asyncio
+async def test_admin_lists_and_creates_users(
+    client: AsyncClient,
+    auth_settings: None,
+) -> None:
+    from app.db import session as db_session
+    from app.db.models import UserRole
+    from app.db.repositories import UserRepository
+
+    from app.security.passwords import hash_password
+
+    async with db_session.async_session_factory() as session:
+        await UserRepository(session).create_user(
+            login="admin2",
+            slug="admin2",
+            display_name="Admin",
+            password_hash=hash_password("adminpass"),
+            role=UserRole.ADMIN,
+        )
+        await session.commit()
+
+    login = await client.post(
+        "/api/auth/login",
+        json={"login": "admin2", "password": "adminpass"},
+    )
+    assert login.status_code == 200
+
+    listed = await client.get("/api/users")
+    assert listed.status_code == 200
+    logins = {u["login"] for u in listed.json()}
+    assert "admin2" in logins
+
+    created = await client.post(
+        "/api/users",
+        json={"login": "newbie", "password": "secret123", "role": "user"},
+    )
+    assert created.status_code == 201
+    assert created.json()["login"] == "newbie"
+
+    forbidden = await client.post(
+        "/api/auth/login",
+        json={"login": "newbie", "password": "secret123"},
+    )
+    assert forbidden.status_code == 200
+
+    as_user = await client.get("/api/users")
+    assert as_user.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_public_config_includes_auth_enabled(
+    client: AsyncClient,
+    auth_settings: None,
+) -> None:
+    res = await client.get("/api/config")
+    assert res.status_code == 200
+    assert res.json()["auth_enabled"] is True

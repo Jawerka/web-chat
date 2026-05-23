@@ -18,10 +18,12 @@ _PUBLIC_PREFIXES = (
     "/favicon.ico",
     "/login",
     "/api/auth/login",
+    "/api/auth/logout",
 )
 
 _PUBLIC_EXACT = (
     "/api/health",
+    "/api/config",
 )
 
 

@@ -287,6 +287,46 @@
             <p class="form-hint">Automatic1111 / Forge — для инструмента генерации изображений.</p>
           </section>
 
+          <section class="settings-section hidden" id="settings-account-section" aria-label="Аккаунт">
+            <h3 class="settings-section-title">Аккаунт</h3>
+            <div class="settings-account-card">
+              <p class="settings-account-login" id="settings-account-login">—</p>
+              <p class="settings-account-meta">
+                <span class="settings-account-role-badge" id="settings-account-role"></span>
+              </p>
+            </div>
+            <button type="button" class="settings-row-btn" id="auth-logout-btn" title="Выйти из системы">
+              <span class="settings-row-btn-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              </span>
+              <span class="settings-row-btn-text">
+                <span class="settings-row-btn-title">Выйти</span>
+                <span class="settings-row-btn-desc">Завершить сессию в браузере</span>
+              </span>
+            </button>
+          </section>
+
+          <section class="settings-section hidden" id="settings-admin-section" aria-label="Управление пользователями">
+            <h3 class="settings-section-title">Пользователи</h3>
+            <p class="form-hint settings-section-lead">Создание учётных записей (только для администратора).</p>
+            <ul class="settings-users-list styled-scrollbar" id="settings-users-list" aria-label="Список пользователей"></ul>
+            <form id="settings-create-user-form" class="settings-create-user-form">
+              <label class="settings-field-label" for="settings-new-login">Логин</label>
+              <input type="text" class="form-input settings-field-input" id="settings-new-login" name="login" required autocomplete="off" spellcheck="false" placeholder="user1" pattern="[a-z0-9][a-z0-9_-]{1,63}">
+              <label class="settings-field-label" for="settings-new-password">Пароль</label>
+              <input type="password" class="form-input settings-field-input" id="settings-new-password" name="password" required autocomplete="new-password" minlength="4">
+              <label class="settings-field-label" for="settings-new-display">Отображаемое имя</label>
+              <input type="text" class="form-input settings-field-input" id="settings-new-display" name="display_name" autocomplete="off" spellcheck="false" placeholder="Необязательно">
+              <label class="settings-field-label" for="settings-new-role">Роль</label>
+              <select class="form-input settings-field-input" id="settings-new-role" name="role" aria-label="Роль пользователя">
+                <option value="user">Пользователь</option>
+                <option value="admin">Администратор</option>
+              </select>
+              <p class="login-error hidden" id="settings-create-user-error" role="alert"></p>
+              <button type="submit" class="settings-inline-btn" id="settings-create-user-btn">Создать пользователя</button>
+            </form>
+          </section>
+
           <section class="settings-section">
             <h3 class="settings-section-title">Интерфейс</h3>
             <label class="settings-field-label" for="font-size">Размер шрифта</label>

@@ -306,6 +306,7 @@ class ChatApp {
     this._uploadToastTimer = null;
     this._pendingImageDeleteKey = null;
     this._pendingImageDeleteBtn = null;
+    this.currentUser = null;
     this.log = window.appLog;
     this.promptMacros = new PromptMacrosUI(this);
 
@@ -378,6 +379,14 @@ class ChatApp {
       fontSizeIncrease: document.getElementById('font-size-increase'),
       logsOutput: document.getElementById('logs-output'),
       logsCount: document.getElementById('logs-count'),
+      accountSection: document.getElementById('settings-account-section'),
+      adminSection: document.getElementById('settings-admin-section'),
+      accountLogin: document.getElementById('settings-account-login'),
+      accountRole: document.getElementById('settings-account-role'),
+      authLogoutBtn: document.getElementById('auth-logout-btn'),
+      usersList: document.getElementById('settings-users-list'),
+      createUserForm: document.getElementById('settings-create-user-form'),
+      createUserError: document.getElementById('settings-create-user-error'),
     };
 
     this.log?.info('app', 'Интерфейс загружен');
@@ -392,21 +401,24 @@ class ChatApp {
 
   async init() {
     try {
-      await this.api('/api/auth/me');
-    } catch (err) {
-      const msg = err?.message || '';
-      if (msg.includes('Требуется вход') || msg.includes('401')) {
-        const next = encodeURIComponent(window.location.pathname + window.location.search);
-        window.location.replace(`/login?next=${next}`);
-        return;
-      }
-    }
-    try {
       const cfg = await this.api('/api/config');
       this.config = { ...this.config, ...cfg };
       WebChatDateTime.applyServerDefault(cfg.display_timezone);
       this._loadIntegrationUrlFields();
     } catch { /* optional */ }
+    if (this.config.auth_enabled) {
+      try {
+        this.currentUser = await this.api('/api/auth/me');
+        this._initAuthUI();
+      } catch (err) {
+        const msg = err?.message || '';
+        if (msg.includes('Требуется вход') || msg.includes('401')) {
+          const next = encodeURIComponent(window.location.pathname + window.location.search);
+          window.location.replace(`/login?next=${next}`);
+          return;
+        }
+      }
+    }
     this.loadLlmModelInfo().catch(() => {});
 
     await Promise.all([this.loadPresets(), this.loadConversations(), this.promptMacros.load()]);
@@ -434,6 +446,11 @@ class ChatApp {
     this._bindSidebarSwipeGestures();
 
     this.$.settingsBtn?.addEventListener('click', () => this.showPanel('settings'));
+    this.$.authLogoutBtn?.addEventListener('click', () => this.logout());
+    this.$.createUserForm?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      void this.createUserFromSettings();
+    });
     this.$.macroInsertBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this.promptMacros.isPickerOpen()) {
@@ -645,6 +662,7 @@ class ChatApp {
       this.$.settingsPanel?.classList.remove('hidden');
       this.syncPresetPromptField();
       this._hideSettingsSaveStatus();
+      void this._refreshAdminUsersList();
       this.closeSidebar();
     } else if (panelName === 'logs') {
       this.$.logsPanel?.classList.remove('hidden');
@@ -887,6 +905,87 @@ class ChatApp {
     }
     if (res.status === 204) return null;
     return res.json();
+  }
+
+  _initAuthUI() {
+    if (!this.config.auth_enabled || !this.currentUser) return;
+    this.$.accountSection?.classList.remove('hidden');
+    const u = this.currentUser;
+    if (this.$.accountLogin) {
+      this.$.accountLogin.textContent = u.display_name || u.login;
+    }
+    if (this.$.accountRole) {
+      const isAdmin = u.role === 'admin';
+      this.$.accountRole.textContent = isAdmin ? 'Администратор' : 'Пользователь';
+      this.$.accountRole.classList.toggle('is-admin', isAdmin);
+    }
+    if (u.role === 'admin') {
+      this.$.adminSection?.classList.remove('hidden');
+      void this._refreshAdminUsersList();
+    }
+  }
+
+  async logout() {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch { /* ignore */ }
+    window.location.replace('/login');
+  }
+
+  async _refreshAdminUsersList() {
+    if (!this.config.auth_enabled || this.currentUser?.role !== 'admin' || !this.$.usersList) {
+      return;
+    }
+    try {
+      const users = await this.api('/api/users');
+      this.$.usersList.replaceChildren();
+      if (!users?.length) {
+        const li = document.createElement('li');
+        li.textContent = 'Нет пользователей';
+        this.$.usersList.appendChild(li);
+        return;
+      }
+      for (const user of users) {
+        const li = document.createElement('li');
+        const login = document.createElement('span');
+        login.className = 'user-login';
+        login.textContent = user.login;
+        const role = document.createElement('span');
+        role.className = 'user-role';
+        role.textContent = user.role === 'admin' ? 'admin' : 'user';
+        li.append(login, role);
+        this.$.usersList.appendChild(li);
+      }
+    } catch (err) {
+      this.log?.warn('auth', 'Не удалось загрузить список пользователей', err?.message);
+    }
+  }
+
+  async createUserFromSettings() {
+    if (!this.$.createUserForm) return;
+    this.$.createUserError?.classList.add('hidden');
+    const login = document.getElementById('settings-new-login')?.value?.trim() || '';
+    const password = document.getElementById('settings-new-password')?.value || '';
+    const display_name = document.getElementById('settings-new-display')?.value?.trim() || undefined;
+    const role = document.getElementById('settings-new-role')?.value || 'user';
+    const btn = document.getElementById('settings-create-user-btn');
+    if (btn) btn.disabled = true;
+    try {
+      await this.api('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, password, display_name, role }),
+      });
+      this.$.createUserForm.reset();
+      await this._refreshAdminUsersList();
+    } catch (err) {
+      if (this.$.createUserError) {
+        this.$.createUserError.textContent = err?.message || 'Ошибка создания';
+        this.$.createUserError.classList.remove('hidden');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   _readPresetDrafts() {

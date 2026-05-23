@@ -625,6 +625,90 @@ body {
   color: var(--text-secondary);
 }
 
+.settings-account-card {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 50%, var(--surface));
+  border: 1px solid var(--border);
+}
+
+.settings-account-login {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.settings-account-meta {
+  margin: 6px 0 0;
+}
+
+.settings-account-role-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+}
+
+.settings-account-role-badge.is-admin {
+  color: var(--accent-violet);
+  background: color-mix(in srgb, var(--accent-violet) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent-violet) 30%, var(--border));
+}
+
+.settings-users-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+.settings-users-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  font-size: 0.875rem;
+}
+
+.settings-users-list li:last-child {
+  border-bottom: none;
+}
+
+.settings-users-list .user-login {
+  font-weight: 600;
+}
+
+.settings-users-list .user-role {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.settings-create-user-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-create-user-form .settings-inline-btn {
+  margin-top: 4px;
+}
+
 .settings-section--preset .form-hint {
   margin-top: 10px;
 }
