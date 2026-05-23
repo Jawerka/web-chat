@@ -17,7 +17,7 @@ def test_normalize_postgres_async() -> None:
 
 def test_alembic_sync_psycopg() -> None:
     url = "postgresql+asyncpg://user:pass@db:5432/web_chat"
-    assert alembic_database_url(url) == "postgresql+psycopg://user:pass@db:5432/web_chat"
+    assert alembic_database_url(url) == "postgresql+psycopg2://user:pass@db:5432/web_chat"
 
 
 def test_alembic_sync_sqlite() -> None:

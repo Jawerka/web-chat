@@ -5,8 +5,9 @@
 [Unit]
 Description=web-chat — LAN-чат с AI-агентом, MCP и Stable Diffusion
 Documentation=file://@@INSTALL_ROOT@@/deploy/DEPLOY.md
-After=network-online.target
+After=network-online.target postgresql.service
 Wants=network-online.target
+# postgresql.service — при DATABASE_URL=postgresql; если Postgres не установлен, unit игнорируется
 
 [Service]
 Type=simple

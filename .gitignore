@@ -23,11 +23,19 @@ deploy/generated/
 
 # Runtime data
 logs/
-data/db/
+data/db/*
+!data/db/.gitkeep
+!data/db/README.md
+data/.pg_migrate_secret
 data/uploads/
 data/generated/
-data/backups/*
+data/backups/**
 !data/backups/.gitkeep
+!data/backups/database/
+# Архивы БД (web-chat-db-*.tar.gz) — не коммитить
+data/backups/database/*
+!data/backups/database/.gitkeep
+data/backups/site/*
 
 # IDE
 .idea/

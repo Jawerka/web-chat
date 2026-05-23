@@ -93,4 +93,29 @@ python -m app.scripts.migrate_sqlite_to_postgres \
 
 После успешного ETL: `DATABASE_URL` в `.env` → Postgres, перезапуск сервиса. На приёмнике выполняется `alembic upgrade head` и `stamp head`.
 
+## Завершение cutover (приложение на Postgres)
+
+1. **Сверка:**  
+   `python -m app.scripts.verify_migration --target "$DATABASE_URL"` → «ИТОГ: миграция согласована».
+2. **`.env`:** `DATABASE_URL=postgresql+asyncpg://…` (см. `.env.example`).
+3. **SQLite не удалять** — оставить `data/db/web_chat.sqlite` для отката (`chmod 444`, см. [data/db/README.md](../data/db/README.md)).
+4. **Сервис:** `systemctl enable postgresql web-chat && systemctl restart web-chat`.
+5. **Проверка:** `curl -s http://127.0.0.1:8090/api/health`.
+
+Откат: в `.env` вернуть SQLite URL и перезапустить сервис (файл SQLite сохранён).
+
+## Резервное копирование и восстановление
+
+См. **[DATABASE-BACKUP.md](DATABASE-BACKUP.md)**.
+
+```bash
+./scripts/backup-database.sh
+./scripts/restore-database.sh --list
+systemctl stop web-chat
+./scripts/restore-database.sh --yes
+systemctl start web-chat
+```
+
+Архивы: `data/backups/database/web-chat-db-*.tar.gz` (не более 3 штук).
+
 Тесты: `tests/test_etl_sqlite_to_postgres.py` (SQLite→SQLite без живого Postgres).

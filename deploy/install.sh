@@ -150,7 +150,20 @@ check_requirements() {
     || die "Python $ver найден, требуется >= 3.11"
 
   command -v curl >/dev/null 2>&1 || warn "curl не найден — проверка health после установки может не сработать"
-  command -v sqlite3 >/dev/null 2>&1 || warn "sqlite3 не найден — backup-data.sh использует копирование файла"
+  command -v sqlite3 >/dev/null 2>&1 || warn "sqlite3 не найден — бэкап legacy SQLite использует копирование файла"
+
+  local db_url
+  db_url="$(read_env_var DATABASE_URL "")"
+  if [[ "$db_url" == postgresql* ]] || [[ "$db_url" == postgres://* ]]; then
+    command -v pg_dump >/dev/null 2>&1 \
+      || warn "postgresql-client (pg_dump) не найден — установите для scripts/backup-postgres.sh"
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl is-active postgresql >/dev/null 2>&1 \
+        || warn "postgresql.service не active — проверьте БД перед запуском web-chat"
+    fi
+  else
+    command -v sqlite3 >/dev/null 2>&1 || true
+  fi
 
   if [[ "$(uname -s)" != "Linux" ]]; then
     warn "скрипт рассчитан на Linux; systemd пропущен на других ОС"
@@ -197,6 +210,17 @@ setup_data_dirs() {
     "${INSTALL_ROOT}/data/generated/thumbs" \
     "${INSTALL_ROOT}/logs"
   chmod 750 "${INSTALL_ROOT}/data" 2>/dev/null || true
+  mkdir -p "${INSTALL_ROOT}/data/backups/database"
+  chmod +x \
+    "${INSTALL_ROOT}/scripts/backup-database.sh" \
+    "${INSTALL_ROOT}/scripts/restore-database.sh" \
+    "${INSTALL_ROOT}/scripts/backup-all.sh" \
+    "${INSTALL_ROOT}/scripts/backup-postgres.sh" \
+    "${INSTALL_ROOT}/deploy/backup-database.sh" \
+    "${INSTALL_ROOT}/deploy/restore-database.sh" \
+    "${INSTALL_ROOT}/deploy/backup-data.sh" \
+    "${INSTALL_ROOT}/deploy/backup-postgres.sh" \
+    2>/dev/null || true
   if [[ "$(id -un)" == "root" && "$RUN_USER" != "root" ]]; then
     chown -R "${RUN_USER}:${RUN_GROUP}" "${INSTALL_ROOT}/data" "${INSTALL_ROOT}/logs"
     info "владелец data/ и logs/: ${RUN_USER}:${RUN_GROUP}"

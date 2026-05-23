@@ -498,7 +498,7 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | Установка | `sudo ./deploy/install.sh` |
 | Перезапуск | `./restart.sh` или `systemctl restart web-chat` |
 | Логи dev | `logs/uvicorn.log` |
-| Backup SQLite | `deploy/backup/` (см. DEPLOY.md) |
+| Backup / restore БД | `scripts/backup-database.sh`, `scripts/restore-database.sh` → [deploy/DATABASE-BACKUP.md](deploy/DATABASE-BACKUP.md) |
 | Очистка файлов | `web-chat-cleanup.timer` |
 | VPN в LXC | [deploy/wireguard/proxmox-lxc.md](deploy/wireguard/proxmox-lxc.md) |
 
@@ -533,8 +533,8 @@ tests/
 
 ### Миграции и данные
 
-- SQLite (по умолчанию): `data/db/web_chat.sqlite` (WAL).
-- PostgreSQL (опционально, P2.1): `DATABASE_URL=postgresql+asyncpg://…`, миграции Alembic — [deploy/POSTGRES.md](deploy/POSTGRES.md).
+- **PostgreSQL** (production): `DATABASE_URL=postgresql+asyncpg://…`, Alembic — [deploy/POSTGRES.md](deploy/POSTGRES.md).
+- **SQLite** (резерв / dev): `data/db/web_chat.sqlite` — не удалять после миграции; бэкап включается в `backup-all.sh`.
 - Первый запуск: seed пресетов из `app/db/seed.py`.
 - Обновление промптов в существующей БД: `app/db/migrate.py`.
 - Legacy user-сообщения без `parts`: `python -m app.scripts.migrate_missing_parts`.

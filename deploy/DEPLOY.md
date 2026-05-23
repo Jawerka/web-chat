@@ -282,40 +282,30 @@ Retention: `UPLOAD_RETENTION_DAYS`, `GENERATED_RETENTION_DAYS` в `.env`.
 
 ## 8. Резервное копирование и логи
 
-### Бэкап SQLite
+**База данных:** каталог `data/backups/database/`, ротация **3** архива, восстановление из последнего.
 
-Рекомендуется `sqlite3` (консистентный `.backup` при работающем сервисе).
+Подробно: **[deploy/DATABASE-BACKUP.md](DATABASE-BACKUP.md)**.
 
-**Ручной запуск** (архив по умолчанию в `data/backups/`, формат ZIP):
-
-```bash
-cd /opt/web-chat
-./scripts/backup-all.sh
-```
-
-**Production** (каталог `/var/backups/web-chat`, tar.gz):
-
-```bash
-WEB_CHAT_ROOT=/opt/web-chat ./deploy/backup-data.sh
-```
-
-Опции через переменные окружения:
+| Скрипт | Назначение |
+|--------|------------|
+| `scripts/backup-database.sh` | Бэкап БД → `data/backups/database/` |
+| `scripts/restore-database.sh` | Восстановление (`--list`, `--index`, `--stamp`) |
+| `scripts/backup-all.sh` | БД + опционально `data/generated`, `data/uploads` |
+| `deploy/backup-database.sh` | Production: бэкап БД |
+| `deploy/restore-database.sh` | Production: восстановление |
 
 ```bash
-# ZIP + сгенерированные файлы и вложения:
-WEB_CHAT_BACKUP_FORMAT=zip \
-WEB_CHAT_BACKUP_GENERATED=1 \
-WEB_CHAT_BACKUP_UPLOADS=1 \
-./scripts/backup-all.sh
-
-# 7z (нужен пакет p7zip-full):
-WEB_CHAT_BACKUP_FORMAT=7z ./scripts/backup-all.sh
+./scripts/backup-database.sh
+./scripts/restore-database.sh --list
+systemctl stop web-chat && ./scripts/restore-database.sh --yes
 ```
 
-Cron:
+**Пакеты:** `postgresql-client` (`pg_dump`, `pg_restore`), `sqlite3` (legacy SQLite).
+
+### Cron
 
 ```cron
-0 3 * * * root cd /opt/web-chat && ./scripts/backup-all.sh
+0 3 * * * root cd /opt/web-chat && ./scripts/backup-database.sh
 ```
 
 ### Логи
@@ -366,7 +356,7 @@ sudo ./deploy/install.sh --skip-tests
 ./restart.sh
 ```
 
-Откат: восстановить `data/db/*.sqlite` из архива, `git checkout <tag>`.
+Откат Postgres: см. [POSTGRES.md](POSTGRES.md). Откат SQLite: восстановить `data/db/*.sqlite` из архива, `DATABASE_URL` на sqlite, `git checkout <tag>`.
 
 **Важно:** не копируйте SQLite при работающем процессе (WAL).
 
