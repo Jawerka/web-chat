@@ -31,14 +31,14 @@ _TOOL_STAGE: dict[str, str] = {
 
 _STAGE_LABEL: dict[str, str] = {
     STAGE_SUBMIT: "Сообщение принято",
-    STAGE_LLM_THINKING: "Модель думает",
-    STAGE_LLM_TYPING: "Модель печатает ответ",
-    STAGE_LLM_TOOLS: "Модель выбирает действия",
-    STAGE_SD_RENDER: "Stable Diffusion рисует",
-    STAGE_SD_UPSCALE: "Увеличение изображения",
-    STAGE_DOC_READ: "Чтение документа",
-    STAGE_GALLERY: "Загрузка галереи",
-    STAGE_SAVE_MEDIA: "Сохранение в чат",
+    STAGE_LLM_THINKING: "Размышление",
+    STAGE_LLM_TYPING: "Печатаю ответ",
+    STAGE_LLM_TOOLS: "Выбираю действие",
+    STAGE_SD_RENDER: "Рисую изображение",
+    STAGE_SD_UPSCALE: "Увеличиваю",
+    STAGE_DOC_READ: "Читаю документ",
+    STAGE_GALLERY: "Галерея",
+    STAGE_SAVE_MEDIA: "Сохраняю",
 }
 
 
@@ -79,9 +79,9 @@ def build_progress(
 def _label_for(stage: str, *, tool: str | None, percent: int | None) -> str:
     base = _STAGE_LABEL.get(stage, "Выполняется")
     if stage == STAGE_SD_RENDER and tool == "img2img":
-        base = "Доработка изображения (img2img)"
+        base = "Дорабатываю изображение"
     elif stage == STAGE_SD_RENDER and tool == "generate_image":
-        base = "Генерация изображения (txt2img)"
+        base = "Рисую изображение"
     if percent is not None and stage in (STAGE_SD_RENDER, STAGE_SD_UPSCALE):
         return f"{base} — {percent}%"
     return base

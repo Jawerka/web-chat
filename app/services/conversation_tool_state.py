@@ -10,13 +10,35 @@ import json
 from typing import Any
 
 from app.config import settings
+from app.integrations.media_utils import parse_asset_id_from_url
 
 SD_TOOL_NAMES = frozenset({"generate_image", "img2img", "upscale_images"})
 
 
+def _normalize_tool_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Свести эквивалентные аргументы (img2img: asset URL vs attachment_id)."""
+    if name != "img2img":
+        return args
+    out = {k: v for k, v in args.items() if k not in ("init_image_url", "attachment_id")}
+    init_ref: str | None = None
+    raw_att = args.get("attachment_id")
+    if raw_att:
+        init_ref = str(raw_att).strip()
+    else:
+        init_url = args.get("init_image_url")
+        if init_url:
+            aid = parse_asset_id_from_url(str(init_url))
+            if aid is not None:
+                init_ref = str(aid)
+    if init_ref:
+        out["_init_ref"] = init_ref
+    return out
+
+
 def tool_call_signature(name: str, args: dict[str, Any]) -> str:
     """Стабильный ключ вызова для сравнения в рамках одного turn."""
-    payload = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    normalized = _normalize_tool_args(name, args)
+    payload = json.dumps(normalized, sort_keys=True, ensure_ascii=False, default=str)
     return f"{name}:{payload}"
 
 

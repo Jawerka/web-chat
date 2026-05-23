@@ -28,14 +28,14 @@ const CHAT_PRESET_SHORT_LABELS = {
 /** Подписи по этапу (согласованы с app/services/user_progress.py). */
 const PROGRESS_STAGE_LABELS = {
   submit: 'Сообщение принято',
-  llm_thinking: 'Модель думает',
-  llm_typing: 'Модель печатает ответ',
-  llm_tools: 'Модель выбирает действия',
-  sd_render: 'Stable Diffusion рисует',
-  sd_upscale: 'Увеличение изображения',
-  doc_read: 'Чтение документа',
-  gallery: 'Загрузка галереи',
-  save_media: 'Сохранение в чат',
+  llm_thinking: 'Размышление',
+  llm_typing: 'Печатаю ответ',
+  llm_tools: 'Выбираю действие',
+  sd_render: 'Рисую изображение',
+  sd_upscale: 'Увеличиваю',
+  doc_read: 'Читаю документ',
+  gallery: 'Галерея',
+  save_media: 'Сохраняю',
 };
 
 const IMG2IMG_PRESET_SLUG = 'img2img';
@@ -59,9 +59,6 @@ const MESSAGE_STATUS_HTML = `
         <span class="message-status-detail"></span>
       </div>
       <span class="message-status-percent" aria-hidden="true"></span>
-    </div>
-    <div class="message-status-bar" aria-hidden="true">
-      <div class="message-status-bar-fill"></div>
     </div>
   </div>`;
 
@@ -2043,7 +2040,7 @@ class ChatApp {
     this.streamRow = row;
     this.streamEl = el;
     this.streamImagesEl = el.querySelector('.message-images');
-    this.showProgress('Ожидание ответа модели…', { stage: 'llm_thinking' });
+    this.showProgress('Размышление', { stage: 'llm_thinking' });
     this.scrollToBottom(true);
   }
 
@@ -2113,7 +2110,7 @@ class ChatApp {
       && !this.streamText
       && !this.streamImagesEl?.children.length
     ) {
-      this.showProgress('Модель думает…', { stage: 'llm_thinking' });
+      this.showProgress('Размышление', { stage: 'llm_thinking' });
     } else if (!this.streamText) {
       this.hideProgress();
     }
@@ -2280,14 +2277,14 @@ class ChatApp {
       return;
     }
     if (hasText && !hasImages && status.in_progress) {
-      this.showProgress('Модель печатает ответ…', { stage: 'llm_typing' });
+      this.showProgress('Печатаю ответ', { stage: 'llm_typing' });
       return;
     }
     if (hasText || hasImages) {
       this.hideProgress();
       return;
     }
-    this.showProgress('Восстановление хода…', { stage: 'llm_thinking' });
+    this.showProgress('Размышление', { stage: 'llm_thinking' });
   }
 
   async _resumeOngoingGeneration(serverMsg = {}) {
@@ -3685,8 +3682,6 @@ class ChatApp {
     const labelEl = this.streamEl.querySelector('.message-status-text');
     const detailEl = this.streamEl.querySelector('.message-status-detail');
     const percentEl = this.streamEl.querySelector('.message-status-percent');
-    const bar = this.streamEl.querySelector('.message-status-bar');
-    const fill = this.streamEl.querySelector('.message-status-bar-fill');
     if (!status || !labelEl) return;
 
     const resolvedLabel = text
@@ -3711,16 +3706,6 @@ class ChatApp {
       }
     }
 
-    if (bar && fill) {
-      bar.classList.remove('hidden');
-      bar.classList.toggle('is-indeterminate', !hasPercent);
-      if (hasPercent) {
-        fill.style.width = `${Math.max(0, Math.min(100, opts.percent))}%`;
-      } else {
-        fill.style.width = '';
-      }
-    }
-
     status.classList.remove('hidden');
     this.streamEl.classList.add('waiting', 'is-busy');
     if (opts.stage) {
@@ -3732,8 +3717,6 @@ class ChatApp {
     if (!this.streamEl) return;
     const status = this.streamEl.querySelector('.message-status');
     status?.classList.add('hidden');
-    const fill = this.streamEl.querySelector('.message-status-bar-fill');
-    if (fill) fill.style.width = '0%';
     this.streamEl.classList.remove('is-busy');
     const hasBody = this.streamEl.classList.contains('has-content')
       || this.streamEl.classList.contains('has-images');

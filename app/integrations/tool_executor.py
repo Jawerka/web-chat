@@ -166,10 +166,17 @@ class ToolExecutor:
                 raise ValueError("Нет сессии БД для чтения /media/asset/…")
             media = MediaService(self._session)
             result = await media.get_bytes(asset_id)
-            if result is None:
-                raise ValueError(f"Изображение asset/{asset_id} не найдено")
-            data, _mime = result
-            return data, f"{asset_id}.png"
+            if result is not None:
+                data, _mime = result
+                return data, f"{asset_id}.png"
+            # LLM часто подставляет UUID вложения в /media/asset/… — пробуем Attachment
+            try:
+                return await self._load_init_image(attachment_id=asset_id)
+            except (ValueError, FileNotFoundError) as exc:
+                raise ValueError(
+                    f"Изображение asset/{asset_id} не найдено "
+                    f"(и как вложение: {exc})",
+                ) from exc
 
         upload = parse_upload_from_url(raw)
         if upload is not None:
@@ -317,8 +324,16 @@ class ToolExecutor:
                     image_urls=[],
                 )
             else:
+                err = load_error or "не удалось загрузить исходник"
+                logger.warning(
+                    "img2img: пропуск SD — %s (url=%r att=%r user=%s)",
+                    err,
+                    init_url,
+                    raw_att,
+                    self._source_user_message_id,
+                )
                 return ToolResult(
-                    content=f"Ошибка img2img: {load_error or 'не удалось загрузить исходник'}",
+                    content=f"Ошибка img2img: {err}",
                     image_urls=[],
                 )
         args["init_image_bytes"] = init_bytes

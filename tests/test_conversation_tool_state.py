@@ -16,6 +16,26 @@ def test_tool_call_signature_stable() -> None:
     assert a == b
 
 
+def test_img2img_asset_url_matches_attachment_id() -> None:
+    """UUID в /media/asset/… и attachment_id — один и тот же init для anti-loop."""
+    uid = "fbe2b769-1687-41b1-adab-35a8ecb073a1"
+    a = tool_call_signature(
+        "img2img",
+        {
+            "prompt": "x",
+            "init_image_url": f"/media/asset/{uid}.png",
+        },
+    )
+    b = tool_call_signature(
+        "img2img",
+        {
+            "prompt": "x",
+            "attachment_id": uid,
+        },
+    )
+    assert a == b
+
+
 def test_duplicate_args_raises() -> None:
     state = ConversationToolState(max_same_tool_per_turn=5)
     args = {"prompt": "same"}
