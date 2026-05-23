@@ -2135,7 +2135,7 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
 .chat-message.assistant .message-status {
   display: block;
   overflow: hidden;
-  max-height: 48px;
+  max-height: 80px;
   opacity: 1;
   transition:
     opacity 0.22s var(--ease),
@@ -2204,6 +2204,88 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   max-width: 100%;
   padding: 7px 12px 7px 10px;
   border-radius: 999px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.message-status-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.message-status-detail {
+  font-size: 11px;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--text-secondary) 88%, var(--primary));
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.message-status-detail.hidden {
+  display: none;
+}
+
+.message-status-percent {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+  min-width: 2.5em;
+  text-align: right;
+}
+
+.message-status-percent.hidden {
+  display: none;
+}
+
+.message-status-bar {
+  margin-top: 8px;
+  height: 4px;
+  width: 100%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 12%, var(--border));
+  overflow: hidden;
+}
+
+.message-status-bar.hidden {
+  display: none;
+}
+
+.message-status-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--primary) 70%, transparent),
+    var(--primary)
+  );
+  transition: width 0.25s var(--ease);
+}
+
+.message-status-bar.is-indeterminate .message-status-bar-fill {
+  width: 38% !important;
+  animation: messageStatusIndeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes messageStatusIndeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(280%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-status-bar.is-indeterminate .message-status-bar-fill {
+    animation: none;
+    width: 55% !important;
+    opacity: 0.65;
+  }
+  .message-status-bar-fill {
+    transition: none;
+  }
 }
 
 .message-status-dots {

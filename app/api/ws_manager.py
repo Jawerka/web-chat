@@ -10,6 +10,7 @@ import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import WebSocket
 
@@ -29,6 +30,7 @@ class ConversationSessionState:
     cancel_event: asyncio.Event | None = None
     active_task: asyncio.Task[None] | None = None
     streaming_message_id: uuid.UUID | None = None
+    last_progress: dict[str, Any] | None = None
     last_activity: float = field(default_factory=time.monotonic)
 
 
@@ -100,6 +102,7 @@ class ConnectionManager:
         state.cancel_event = None
         state.active_task = None
         state.streaming_message_id = None
+        state.last_progress = None
         if conversation_id in self._sessions and not state.websockets:
             del self._sessions[conversation_id]
         logger.debug("WS state очищен (%s): conv=%s", reason, conversation_id)
@@ -173,6 +176,25 @@ class ConnectionManager:
         state = self._sessions.get(conversation_id)
         if state is not None:
             state.streaming_message_id = None
+
+    def set_progress(
+        self,
+        conversation_id: uuid.UUID,
+        payload: dict[str, Any],
+    ) -> None:
+        """Последний статус для resume / generation-status."""
+        self._session(conversation_id).last_progress = dict(payload)
+
+    def get_progress(self, conversation_id: uuid.UUID) -> dict[str, Any] | None:
+        state = self._sessions.get(conversation_id)
+        if state is None or state.last_progress is None:
+            return None
+        return dict(state.last_progress)
+
+    def clear_progress(self, conversation_id: uuid.UUID) -> None:
+        state = self._sessions.get(conversation_id)
+        if state is not None:
+            state.last_progress = None
 
     def cancel_turn(self, conversation_id: uuid.UUID) -> None:
         """Сигнал отмены текущей генерации."""

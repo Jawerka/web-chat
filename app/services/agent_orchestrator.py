@@ -40,8 +40,10 @@ from app.services.message_builder import (
     history_to_llm_messages,
 )
 from app.services.prompt_macro_service import alias_map_from_macros, expand_parts_for_llm
+from app.api.ws_events import emit_progress
 from app.api.ws_manager import manager
 from app.services.conversation_tool_state import ConversationToolState
+from app.services.user_progress import STAGE_LLM_THINKING, STAGE_LLM_TOOLS, build_progress
 from app.services.streaming_draft import AssistantStreamDraft
 from app.services.turn_status import patch_completed
 
@@ -89,6 +91,7 @@ class AgentOrchestrator:
         *,
         source_user_message_id: uuid.UUID | None = None,
         cancel_event: asyncio.Event | None = None,
+        emit_progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> ToolExecutor:
         if self._tools is not None:
             return self._tools
@@ -98,6 +101,7 @@ class AgentOrchestrator:
             sd_webui_url=self._sd_webui_url,
             source_user_message_id=source_user_message_id,
             cancel_event=cancel_event,
+            emit_progress=emit_progress_cb,
         )
 
     @staticmethod
@@ -222,6 +226,7 @@ class AgentOrchestrator:
         }
         if new_title:
             payload["conversation_title"] = new_title
+        manager.clear_progress(conversation_id)
         await emit("done", payload)
 
     async def _complete_after_tool_limit(
@@ -339,6 +344,11 @@ class AgentOrchestrator:
             )
 
         await emit("ack", {"user_message_id": str(user_message.id)})
+
+        async def push_progress(payload: dict[str, Any]) -> None:
+            await emit_progress(conversation_id, payload)
+
+        await push_progress(build_progress(STAGE_LLM_THINKING))
         stale = await msg_repo.settle_stale_streaming_assistant_messages(conversation_id)
         if stale:
             logger.info(
@@ -390,6 +400,9 @@ class AgentOrchestrator:
             if cancel_event.is_set():
                 raise TurnCancelled("Генерация отменена")
 
+            if round_idx > 0:
+                await push_progress(build_progress(STAGE_LLM_THINKING))
+
             async def _on_delta(chunk: str) -> None:
                 await stream_draft.on_delta(chunk)
 
@@ -405,6 +418,7 @@ class AgentOrchestrator:
                 raise TurnCancelled("Генерация отменена")
 
             if completion.tool_calls:
+                await push_progress(build_progress(STAGE_LLM_TOOLS))
                 first_tool = completion.tool_calls[0]["function"]["name"]
                 await stream_draft.enter_tool_round(active_tool=first_tool)
                 llm_messages.append(
@@ -421,6 +435,7 @@ class AgentOrchestrator:
                     conversation_id,
                     source_user_message_id=user_message.id,
                     cancel_event=cancel_event,
+                    emit_progress_cb=push_progress,
                 )
                 for tc in completion.tool_calls:
                     fn = tc["function"]
@@ -561,6 +576,11 @@ class AgentOrchestrator:
             user_parts = user_message.content_text or ""
 
         await emit("ack", {"user_message_id": str(user_message.id)})
+
+        async def push_progress(payload: dict[str, Any]) -> None:
+            await emit_progress(conversation_id, payload)
+
+        await push_progress(build_progress(STAGE_LLM_THINKING))
         stale = await msg_repo.settle_stale_streaming_assistant_messages(conversation_id)
         if stale:
             logger.info(
@@ -635,6 +655,9 @@ class AgentOrchestrator:
             if cancel_event.is_set():
                 raise TurnCancelled("Генерация отменена")
 
+            if round_idx > 0:
+                await push_progress(build_progress(STAGE_LLM_THINKING))
+
             async def _on_delta(chunk: str) -> None:
                 await stream_draft.on_delta(chunk)
 
@@ -650,6 +673,7 @@ class AgentOrchestrator:
                 raise TurnCancelled("Генерация отменена")
 
             if completion.tool_calls:
+                await push_progress(build_progress(STAGE_LLM_TOOLS))
                 first_tool = completion.tool_calls[0]["function"]["name"]
                 await stream_draft.enter_tool_round(active_tool=first_tool)
                 llm_messages.append(
@@ -666,6 +690,7 @@ class AgentOrchestrator:
                     conversation_id,
                     source_user_message_id=user_message.id,
                     cancel_event=cancel_event,
+                    emit_progress_cb=push_progress,
                 )
                 for tc in completion.tool_calls:
                     fn = tc["function"]

@@ -13,6 +13,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,10 +28,20 @@ from app.integrations.media_utils import (
     resolve_trusted_generated_source,
     resolve_upload_file,
 )
+from app.integrations.sd_progress import fetch_sd_progress
 from app.integrations.sd_tools import generate_image, get_gallery, img2img, upscale_images
 from app.services.attachment_service import AttachmentService
 from app.services.job_queue import JobCancelled, heavy_job_queue
 from app.services.media_service import MediaService
+from app.services.user_progress import (
+    STAGE_SAVE_MEDIA,
+    build_progress,
+    is_sd_tool,
+    progress_from_sd_snapshot,
+    stage_for_tool,
+)
+
+ProgressEmit = Callable[[dict[str, Any]], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +72,7 @@ class ToolExecutor:
         sd_webui_url: str | None = None,
         source_user_message_id: uuid.UUID | None = None,
         cancel_event: asyncio.Event | None = None,
+        emit_progress: ProgressEmit | None = None,
     ) -> None:
         """Опциональная async-сессия БД (для оркестратора с открытой транзакцией)."""
         self._session = session
@@ -68,6 +80,7 @@ class ToolExecutor:
         self._sd_webui_url = sd_webui_url
         self._source_user_message_id = source_user_message_id
         self._cancel_event = cancel_event
+        self._emit_progress = emit_progress
         # Закреплённый init из user-сообщения на весь ход (несколько img2img подряд).
         self._pinned_user_init: tuple[bytes, str] | None = None
 
@@ -91,6 +104,7 @@ class ToolExecutor:
         if name == "upscale_images":
             return await self._run_sd_image_tool(upscale_images, arguments, name)
         if name == "get_gallery":
+            await self._emit_tool_progress(name)
             text = await heavy_job_queue.run_sync(
                 get_gallery,
                 limit=int(arguments.get("limit") or 20),
@@ -99,9 +113,17 @@ class ToolExecutor:
             )
             return ToolResult(content=text, image_urls=[])
         if name == "extract_text":
+            await self._emit_tool_progress(name)
             text = await self._extract_text(arguments)
             return ToolResult(content=text, image_urls=[])
         raise ValueError(f"Неизвестный инструмент: {name}")
+
+    async def _emit_tool_progress(self, tool_name: str) -> None:
+        if self._emit_progress is None:
+            return
+        await self._emit_progress(
+            build_progress(stage_for_tool(tool_name), tool=tool_name),
+        )
 
     async def _load_init_image(
         self,
@@ -321,6 +343,12 @@ class ToolExecutor:
         if self._sd_webui_url is not None:
             filtered["sd_webui_url"] = self._sd_webui_url
         t0 = time.monotonic()
+        poll_stop = asyncio.Event()
+        poll_task: asyncio.Task[None] | None = None
+        if is_sd_tool(tool_name) and self._emit_progress is not None:
+            poll_task = asyncio.create_task(
+                self._poll_sd_progress(tool_name, poll_stop),
+            )
         try:
             text = await heavy_job_queue.run_sync(
                 lambda: func(**filtered),
@@ -332,7 +360,19 @@ class ToolExecutor:
                 content="Генерация отменена",
                 image_urls=[],
             )
+        finally:
+            poll_stop.set()
+            if poll_task is not None:
+                poll_task.cancel()
+                try:
+                    await poll_task
+                except asyncio.CancelledError:
+                    pass
         sd_elapsed = time.monotonic() - t0
+        if self._emit_progress is not None and self._session is not None:
+            await self._emit_progress(
+                build_progress(STAGE_SAVE_MEDIA, tool=tool_name),
+            )
         urls = self._parse_urls(text)
         logger.info(
             "%s SD завершён за %.1fs, найдено URL: %d",
@@ -389,6 +429,35 @@ class ToolExecutor:
             image_asset_ids=asset_ids,
             url_rewrites=url_map,
         )
+
+    async def _poll_sd_progress(
+        self,
+        tool_name: str,
+        stop: asyncio.Event,
+    ) -> None:
+        """Опрос SD WebUI progress пока идёт синхронный txt2img/img2img/upscale."""
+        sd_url = self._sd_webui_url
+        emit = self._emit_progress
+        if emit is None:
+            return
+        await emit(build_progress(stage_for_tool(tool_name), tool=tool_name, percent=0))
+        while not stop.is_set():
+            if self._cancel_event is not None and self._cancel_event.is_set():
+                break
+            try:
+                snapshot = await heavy_job_queue.run_sync(
+                    lambda: fetch_sd_progress(sd_url),
+                    operation="sd_progress_poll",
+                )
+            except Exception:
+                snapshot = None
+            if snapshot and snapshot.get("active") and emit is not None:
+                await emit(progress_from_sd_snapshot(tool_name, snapshot))
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=0.35)
+                break
+            except TimeoutError:
+                continue
 
     async def _extract_text(self, arguments: dict[str, Any]) -> str:
         """Извлечь текст вложения (in-process, с кэшем в БД)."""

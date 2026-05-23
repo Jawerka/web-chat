@@ -53,9 +53,17 @@ async def get_generation_state(
         phase = draft.content_json.get("phase")
         active_tool = draft.content_json.get("active_tool")
 
-    return {
+    result: dict[str, bool | str | int | None] = {
         "in_progress": in_progress,
         "streaming_message_id": str(streaming_id) if streaming_id else None,
         "phase": phase,
         "active_tool": active_tool,
     }
+    progress = manager.get_progress(conversation_id)
+    if progress:
+        result["progress_stage"] = progress.get("stage")
+        result["progress_label"] = progress.get("label")
+        result["progress_detail"] = progress.get("detail")
+        if "percent" in progress:
+            result["progress_percent"] = progress.get("percent")
+    return result

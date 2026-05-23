@@ -2002,6 +2002,7 @@ MVP считается готовым после завершения **этап
 | P1 tool anti-loop | [x] | 2026-05-23 | ConversationToolState, MAX_SAME_TOOL_PER_TURN, 162 pytest |
 | P1 upload hardening | [x] | 2026-05-23 | `upload_validation.py`, magic bytes, MAX_UPLOAD_IMAGE_PIXELS, MAX_PDF_PAGES, 167 pytest |
 | P1 job queue + WS | [x] | 2026-05-23 | `job_queue.py`, WS inbox, `generation_update`, health disk/WS metrics, 171 pytest |
+| P0.4 turn_phase + P1.7 tests | [x] | 2026-05-23 | `turn_status.py`, stream flush 2KB, ws_session logs, 182 pytest |
 
 ---
 
@@ -2029,7 +2030,7 @@ MVP считается готовым после завершения **этап
 | Health disk / WS (P1.6) | ✅ частично | `data_free_gb`, `active_turns`, `ws_connections` |
 | Скилл @alias / embeddings | ⏳ | TODO-2 Ф1–Ф2 |
 
-**Тесты:** **171** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
+**Тесты:** **182** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
 
 ---
 

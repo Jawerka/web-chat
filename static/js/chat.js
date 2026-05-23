@@ -25,12 +25,17 @@ const CHAT_PRESET_SHORT_LABELS = {
   document_analysis: 'Docs',
 };
 
-const TOOL_PROGRESS_LABELS = {
-  generate_image: 'Генерация изображения',
-  img2img: 'Доработка изображения',
-  upscale_images: 'Увеличение разрешения',
-  get_gallery: 'Загрузка галереи',
-  extract_text: 'Извлечение текста из документа',
+/** Подписи по этапу (согласованы с app/services/user_progress.py). */
+const PROGRESS_STAGE_LABELS = {
+  submit: 'Сообщение принято',
+  llm_thinking: 'Модель думает',
+  llm_typing: 'Модель печатает ответ',
+  llm_tools: 'Модель выбирает действия',
+  sd_render: 'Stable Diffusion рисует',
+  sd_upscale: 'Увеличение изображения',
+  doc_read: 'Чтение документа',
+  gallery: 'Загрузка галереи',
+  save_media: 'Сохранение в чат',
 };
 
 const IMG2IMG_PRESET_SLUG = 'img2img';
@@ -49,7 +54,14 @@ const MESSAGE_STATUS_HTML = `
       <span class="message-status-dots" aria-hidden="true">
         <span></span><span></span><span></span>
       </span>
-      <span class="message-status-text"></span>
+      <div class="message-status-copy">
+        <span class="message-status-text"></span>
+        <span class="message-status-detail"></span>
+      </div>
+      <span class="message-status-percent" aria-hidden="true"></span>
+    </div>
+    <div class="message-status-bar" aria-hidden="true">
+      <div class="message-status-bar-fill"></div>
     </div>
   </div>`;
 
@@ -223,6 +235,7 @@ class ChatSocket {
       case 'image': h.onImages?.(msg.urls || []); break;
       case 'tool_start': h.onToolStart?.(msg.name, msg.arguments); break;
       case 'tool_done': h.onToolDone?.(msg.name, msg.summary); break;
+      case 'progress': h.onProgress?.(msg); break;
       case 'generation_update': h.onGenerationUpdate?.(msg); break;
       case 'done': h.onDone?.(msg); break;
       case 'error': h.onWsError?.(msg.message, msg.code); break;
@@ -1840,6 +1853,7 @@ class ChatApp {
       onImages: (urls) => this.onImages(urls),
       onToolStart: (name) => this.onToolStart(name),
       onToolDone: () => this.onToolDone(),
+      onProgress: (msg) => this.onProgress(msg),
       onGenerationUpdate: (msg) => this.onGenerationUpdate(msg),
       onAck: (msg) => this.onAck(msg),
       onDone: (msg) => this.onTurnDone(msg),
@@ -2029,7 +2043,7 @@ class ChatApp {
     this.streamRow = row;
     this.streamEl = el;
     this.streamImagesEl = el.querySelector('.message-images');
-    this.showProgress('Обработка запроса');
+    this.showProgress('Ожидание ответа модели…', { stage: 'llm_thinking' });
     this.scrollToBottom(true);
   }
 
@@ -2082,7 +2096,14 @@ class ChatApp {
       this._generationHadImages = true;
     }
     this._ensureStreamTarget();
-    this.showProgress(TOOL_PROGRESS_LABELS[name] || `Выполняется: ${name}`);
+    const stage = name === 'upscale_images' ? 'sd_upscale' : (
+      name === 'generate_image' || name === 'img2img' ? 'sd_render' : (
+        name === 'extract_text' ? 'doc_read' : (
+          name === 'get_gallery' ? 'gallery' : 'llm_tools'
+        )
+      )
+    );
+    this.showProgress(PROGRESS_STAGE_LABELS[stage] || name, { stage, tool: name });
     this._scheduleScrollToBottom();
   }
 
@@ -2092,10 +2113,25 @@ class ChatApp {
       && !this.streamText
       && !this.streamImagesEl?.children.length
     ) {
-      this.showProgress('Формирую ответ');
-    } else {
+      this.showProgress('Модель думает…', { stage: 'llm_thinking' });
+    } else if (!this.streamText) {
       this.hideProgress();
     }
+  }
+
+  onProgress(msg) {
+    if (!msg) return;
+    this._ensureStreamTarget();
+    const label = msg.label
+      || PROGRESS_STAGE_LABELS[msg.stage]
+      || 'Выполняется…';
+    this.showProgress(label, {
+      stage: msg.stage,
+      tool: msg.tool,
+      percent: msg.percent,
+      detail: msg.detail,
+    });
+    this._scheduleScrollToBottom();
   }
 
   onGenerationUpdate(msg) {
@@ -2224,21 +2260,34 @@ class ChatApp {
     if (!this.streamEl) return;
     const hasText = Boolean(stripMarkdownImages(this.streamText || ''));
     const hasImages = Boolean(this.streamImagesEl?.children.length);
+
+    if (status.progress_label || status.progress_stage) {
+      this.showProgress(status.progress_label || PROGRESS_STAGE_LABELS[status.progress_stage], {
+        stage: status.progress_stage,
+        percent: status.progress_percent,
+        detail: status.progress_detail,
+        tool: status.active_tool,
+      });
+      return;
+    }
+
     if (status.phase === 'tool' && status.active_tool) {
-      const label = TOOL_PROGRESS_LABELS[status.active_tool]
-        || `Выполняется: ${status.active_tool}`;
-      this.showProgress(label);
+      const stage = status.active_tool === 'upscale_images' ? 'sd_upscale' : 'sd_render';
+      this.showProgress(PROGRESS_STAGE_LABELS[stage] || status.active_tool, {
+        stage,
+        tool: status.active_tool,
+      });
       return;
     }
     if (hasText && !hasImages && status.in_progress) {
-      this.showProgress('Дописываю ответ');
+      this.showProgress('Модель печатает ответ…', { stage: 'llm_typing' });
       return;
     }
     if (hasText || hasImages) {
       this.hideProgress();
       return;
     }
-    this.showProgress('Продолжается генерация');
+    this.showProgress('Восстановление хода…', { stage: 'llm_thinking' });
   }
 
   async _resumeOngoingGeneration(serverMsg = {}) {
@@ -3630,20 +3679,61 @@ class ChatApp {
     clearTimeout(this._errorTimer);
   }
 
-  showProgress(text) {
+  showProgress(text, opts = {}) {
     if (!this.streamEl) return;
     const status = this.streamEl.querySelector('.message-status');
-    const label = this.streamEl.querySelector('.message-status-text');
-    if (!status || !label) return;
-    label.textContent = text;
+    const labelEl = this.streamEl.querySelector('.message-status-text');
+    const detailEl = this.streamEl.querySelector('.message-status-detail');
+    const percentEl = this.streamEl.querySelector('.message-status-percent');
+    const bar = this.streamEl.querySelector('.message-status-bar');
+    const fill = this.streamEl.querySelector('.message-status-bar-fill');
+    if (!status || !labelEl) return;
+
+    const resolvedLabel = text
+      || PROGRESS_STAGE_LABELS[opts.stage]
+      || 'Выполняется…';
+    labelEl.textContent = resolvedLabel;
+
+    const detail = (opts.detail || '').trim();
+    if (detailEl) {
+      detailEl.textContent = detail;
+      detailEl.classList.toggle('hidden', !detail);
+    }
+
+    const hasPercent = typeof opts.percent === 'number' && !Number.isNaN(opts.percent);
+    if (percentEl) {
+      if (hasPercent) {
+        percentEl.textContent = `${Math.round(opts.percent)}%`;
+        percentEl.classList.remove('hidden');
+      } else {
+        percentEl.textContent = '';
+        percentEl.classList.add('hidden');
+      }
+    }
+
+    if (bar && fill) {
+      bar.classList.remove('hidden');
+      bar.classList.toggle('is-indeterminate', !hasPercent);
+      if (hasPercent) {
+        fill.style.width = `${Math.max(0, Math.min(100, opts.percent))}%`;
+      } else {
+        fill.style.width = '';
+      }
+    }
+
     status.classList.remove('hidden');
     this.streamEl.classList.add('waiting', 'is-busy');
+    if (opts.stage) {
+      status.dataset.stage = opts.stage;
+    }
   }
 
   hideProgress() {
     if (!this.streamEl) return;
     const status = this.streamEl.querySelector('.message-status');
     status?.classList.add('hidden');
+    const fill = this.streamEl.querySelector('.message-status-bar-fill');
+    if (fill) fill.style.width = '0%';
     this.streamEl.classList.remove('is-busy');
     const hasBody = this.streamEl.classList.contains('has-content')
       || this.streamEl.classList.contains('has-images');
