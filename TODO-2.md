@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **203+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — WS events, anti-loop (тихий), job queue, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **229+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — WS events, anti-loop (тихий), job queue, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -241,14 +241,14 @@
 - [x] `POST /api/gallery/cleanup-orphans` (`dry_run`, `min_age_hours`)
 - [x] Интеграция в `run_full_cleanup` (retention timer)
 - [x] `ORPHAN_GENERATED_MIN_AGE_HOURS` в config
-- [ ] Dedup DB assets / orphan rows в MediaAsset
-- [ ] UI-кнопка на `/gallery` (опционально)
+- [x] Dedup DB assets / orphan rows в MediaAsset (`cleanup_orphan_media_assets`, `media_reference_index`)
+- [x] UI-кнопка «Очистить сироты» на `/gallery`
 
 ## P2.5 — localStorage migrations (v1)
 
-- [x] `static/js/storage-migrate.js`, `webchat_storage_schema_v`
+- [x] `static/js/storage-migrate.js`, `webchat_storage_schema_v` (v2)
 - [x] Миграция `webchat_macro_context_full` → `webchat_macro_context_mode`
-- [ ] Миграции composer drafts / preset drafts при смене схемы
+- [x] Нормализация composer / preset drafts (`migrateToV2`)
 
 ---
 

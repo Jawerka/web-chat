@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     generated_retention_days: int = 30
     # P2.4: удалять orphan-файлы в data/generated/ (не в БД по original_name), старше N часов
     orphan_generated_min_age_hours: float = 24.0
+    orphan_media_min_age_hours: float = 24.0
 
     # Журнал: файл + уровень (консоль systemd/journal всегда дублируется)
     log_file: str = "logs/web-chat.log"

@@ -8,6 +8,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import Message
 from app.db.repositories import GalleryAssetMeta, MessageRepository
+from app.services.media_reference_index import collect_referenced_asset_ids
 from app.services.media_registry import MediaRegistry
 from app.integrations.media_utils import asset_media_url, generated_media_url
 from app.services.message_builder import strip_markdown_images
@@ -266,6 +268,164 @@ async def delete_gallery_asset(session: AsyncSession, asset_id: uuid.UUID) -> No
     await registry.delete_asset(asset_id)
 
 
+async def cleanup_gallery_orphans(
+    session: AsyncSession,
+    *,
+    dry_run: bool = False,
+    min_age_hours: float | None = None,
+    purge_messages: bool = False,
+    dedup_db: bool = True,
+) -> dict[str, Any]:
+    """Очистка orphan на диске и в MediaAsset (неиспользуемые + дедуп)."""
+    disk = await cleanup_orphan_generated_on_disk(
+        session,
+        dry_run=dry_run,
+        min_age_hours=min_age_hours,
+    )
+    db = await cleanup_orphan_media_assets(
+        session,
+        dry_run=dry_run,
+        min_age_hours=min_age_hours,
+        purge_messages=purge_messages,
+        dedup=dedup_db,
+    )
+    return {"dry_run": dry_run, "disk": disk, "db": db}
+
+
+async def cleanup_orphan_media_assets(
+    session: AsyncSession,
+    *,
+    dry_run: bool = False,
+    min_age_hours: float | None = None,
+    purge_messages: bool = False,
+    dedup: bool = True,
+) -> dict[str, Any]:
+    """
+    Удалить MediaAsset без ссылок в messages/attachments и дубликаты по имени+размеру.
+
+    Дубликаты: при одинаковых ``original_name`` и ``size_bytes`` остаётся самый новый
+    или тот, на который есть ссылки.
+    """
+    age_h = min_age_hours if min_age_hours is not None else settings.orphan_media_min_age_hours
+    cutoff_dt = datetime.now(UTC) - timedelta(hours=max(0.0, age_h))
+
+    def _asset_age_ok(created_at: datetime) -> bool:
+        """True если asset старше min_age (сравнение в UTC)."""
+        ts = created_at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        else:
+            ts = ts.astimezone(UTC)
+        return ts < cutoff_dt
+
+    registry = MediaRegistry(session)
+    metas = await registry.list_gallery_metadata(limit=GALLERY_MAX_LIMIT * 2)
+    referenced = await collect_referenced_asset_ids(session)
+
+    group_sizes: dict[tuple[str, int], int] = {}
+    for meta in metas:
+        name_key = (meta.original_name or "").strip().lower()
+        if not name_key:
+            continue
+        key = (name_key, meta.size_bytes)
+        group_sizes[key] = group_sizes.get(key, 0) + 1
+
+    newest_by_key: dict[tuple[str, int], uuid.UUID] = {}
+    for meta in metas:
+        name_key = (meta.original_name or "").strip().lower()
+        if not name_key:
+            continue
+        key = (name_key, meta.size_bytes)
+        if group_sizes.get(key, 0) < 2:
+            continue
+        prev_id = newest_by_key.get(key)
+        if prev_id is None:
+            newest_by_key[key] = meta.id
+            continue
+        prev = next(m for m in metas if m.id == prev_id)
+        if meta.created_at > prev.created_at:
+            newest_by_key[key] = meta.id
+
+    to_delete_set: set[uuid.UUID] = set()
+    deduped_ids: list[uuid.UUID] = []
+    dedup_keepers: set[uuid.UUID] = set()
+
+    if dedup:
+        groups: dict[tuple[str, int], list[GalleryAssetMeta]] = {}
+        for meta in metas:
+            name_key = (meta.original_name or "").strip().lower()
+            if not name_key:
+                continue
+            groups.setdefault((name_key, meta.size_bytes), []).append(meta)
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            ordered = sorted(group, key=lambda m: m.created_at, reverse=True)
+            keeper = next((m for m in ordered if m.id in referenced), ordered[0])
+            dedup_keepers.add(keeper.id)
+            for meta in ordered:
+                if meta.id == keeper.id:
+                    continue
+                if meta.id in referenced:
+                    continue
+                if not _asset_age_ok(meta.created_at):
+                    continue
+                to_delete_set.add(meta.id)
+                deduped_ids.append(meta.id)
+
+    for meta in metas:
+        if meta.id in referenced:
+            continue
+        if meta.id in dedup_keepers:
+            continue
+        name_key = (meta.original_name or "").strip().lower()
+        if name_key and group_sizes.get((name_key, meta.size_bytes), 0) >= 2:
+            if newest_by_key.get((name_key, meta.size_bytes)) == meta.id:
+                continue
+        if meta.id in to_delete_set:
+            continue
+        if not _asset_age_ok(meta.created_at):
+            continue
+        to_delete_set.add(meta.id)
+
+    to_delete = list(to_delete_set)
+    candidate_ids = [str(aid) for aid in to_delete]
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "candidates": candidate_ids,
+            "would_delete": len(candidate_ids),
+            "dedup_candidates": [str(aid) for aid in deduped_ids],
+        }
+
+    deleted = 0
+    messages_purged = 0
+    for asset_id in to_delete:
+        if purge_messages:
+            messages_purged += await purge_asset_from_messages(session, asset_id)
+        try:
+            await delete_gallery_asset(session, asset_id)
+            deleted += 1
+        except FileNotFoundError:
+            continue
+
+    if deleted:
+        logger.info(
+            "orphan cleanup DB: удалено %d assets (dedup=%d, min_age=%.1f ч)",
+            deleted,
+            len(deduped_ids),
+            age_h,
+        )
+    return {
+        "dry_run": False,
+        "deleted": deleted,
+        "deduped": len(deduped_ids),
+        "candidates": candidate_ids,
+        "messages_purged": messages_purged,
+    }
+
+
 async def cleanup_orphan_generated_on_disk(
     session: AsyncSession,
     *,
@@ -293,6 +453,7 @@ async def cleanup_orphan_generated_on_disk(
             "dry_run": True,
             "candidates": candidates,
             "would_delete": len(candidates),
+            "deleted": 0,
         }
 
     deleted = 0

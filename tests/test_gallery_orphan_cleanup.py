@@ -83,12 +83,13 @@ async def test_orphan_cleanup_api(client: AsyncClient, isolated_generated: Path)
 
     preview = await client.post("/api/gallery/cleanup-orphans", params={"dry_run": True})
     assert preview.status_code == 200
-    assert "api_orphan.png" in preview.json()["candidates"]
+    body = preview.json()
+    assert "api_orphan.png" in body["disk"]["candidates"]
 
     done = await client.post(
         "/api/gallery/cleanup-orphans",
         params={"dry_run": False, "min_age_hours": 1},
     )
     assert done.status_code == 200
-    assert done.json()["deleted"] >= 1
+    assert done.json()["disk"]["deleted"] >= 1
     assert not old.exists()

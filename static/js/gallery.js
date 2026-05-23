@@ -84,6 +84,9 @@ class GalleryApp {
   }
 
   bindEvents() {
+    const cleanupOrphansBtn = document.getElementById('gallery-cleanup-orphans');
+    cleanupOrphansBtn?.addEventListener('click', () => void this.cleanupOrphans(cleanupOrphansBtn));
+
     const purgeAllBtn = document.getElementById('gallery-purge-all');
     purgeAllBtn?.addEventListener('click', () => void this.purgeAllGallery(purgeAllBtn));
 
@@ -451,6 +454,54 @@ class GalleryApp {
       this.flashStatus('Сохранено');
     } catch (err) {
       this.flashStatus(err.message, true);
+    }
+  }
+
+  async cleanupOrphans(btn) {
+    const prevText = btn?.textContent;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Проверка…';
+    }
+    try {
+      const previewRes = await fetch('/api/gallery/cleanup-orphans?dry_run=true');
+      if (!previewRes.ok) {
+        const body = await previewRes.json().catch(() => ({}));
+        throw new Error(body.detail || previewRes.statusText);
+      }
+      const preview = await previewRes.json();
+      const diskN = preview.disk?.would_delete ?? preview.disk?.candidates?.length ?? 0;
+      const dbN = preview.db?.would_delete ?? preview.db?.candidates?.length ?? 0;
+      const total = diskN + dbN;
+      if (total === 0) {
+        this.flashStatus('Сирот не найдено');
+        return;
+      }
+      const ok = confirm(
+        `Удалить сироты?\n\n`
+        + `Файлы на диске: ${diskN}\n`
+        + `Записи в БД (без ссылок в чате): ${dbN}\n\n`
+        + 'Изображения, используемые в сообщениях, не затрагиваются.',
+      );
+      if (!ok) return;
+
+      if (btn) btn.textContent = 'Очистка…';
+      const res = await fetch('/api/gallery/cleanup-orphans?dedup_db=true', { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+      const data = await res.json();
+      const removed = (data.disk?.deleted ?? 0) + (data.db?.deleted ?? 0);
+      await this.refresh(true);
+      this.flashStatus(`Удалено сирот: ${removed}`);
+    } catch (err) {
+      this.flashStatus(err.message || 'Ошибка', true);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = prevText || 'Очистить сироты';
+      }
     }
   }
 
