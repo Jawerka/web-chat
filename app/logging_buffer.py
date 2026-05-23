@@ -40,7 +40,8 @@ def install_log_buffer(
     handler.setFormatter(
         formatter
         or logging.Formatter(
-            "%(asctime)s %(levelname)s [%(name)s] conv=%(conv_id)s turn=%(turn)s %(message)s",
+            "%(asctime)s %(levelname)s [%(name)s] conv=%(conv_id)s turn=%(turn)s "
+            "ws=%(ws_session)s %(message)s",
         ),
     )
     if ctx_filter is not None:

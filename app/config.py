@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     extract_timeout_sec: int = 120
     # Параллельные потоки для SD / extract (P1.2)
     job_queue_workers: int = 2
+    # Сброс буфера стрима в БД при накоплении N байт (дополнение к debounce 350 ms)
+    stream_flush_min_bytes: int = 2048
     max_files_per_message: int = 10
     max_tool_rounds: int = 10
     # Повтор одного SD-tool (generate_image/img2img/upscale) в одном ходе

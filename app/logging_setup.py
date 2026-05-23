@@ -15,7 +15,8 @@ from app.log_context import LogContextFilter
 from app.logging_buffer import install_log_buffer
 
 _LOG_FORMAT = (
-    "%(asctime)s %(levelname)s [%(name)s] conv=%(conv_id)s turn=%(turn)s %(message)s"
+    "%(asctime)s %(levelname)s [%(name)s] conv=%(conv_id)s turn=%(turn)s "
+    "ws=%(ws_session)s %(message)s"
 )
 _CONFIGURED = False
 

@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **171+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **179+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -108,7 +108,7 @@
 
 **Задачи:**
 
-- [ ] Явная модель статусов turn: `queued → streaming → tool_running → partial → completed | cancelled | failed` (частично: `turn_status` в content_json)
+- [x] Явная модель статусов turn: `turn_phase` в content_json — [`turn_status.py`](app/services/turn_status.py) (`streaming` / `tool_running` / `completed` / `cancelled` / `failed`)
 - [x] При ошибке: **не** удалять черновик с контентом — [`turn_recovery.py`](app/services/turn_recovery.py)
 - [x] User-message всегда остаётся закоммиченным — `tests/test_turn_user_commit.py`
 - [x] WS `error` с `code`; commit вместо rollback для LLM/tool/cancel/internal
@@ -139,7 +139,7 @@
 
 - [x] Тесты конкурентных записей — `tests/test_sqlite_concurrent_writes.py` (12× `run_write` параллельно)
 - [x] Метрика/лог при срабатывании retry `database is locked` — `sqlite_busy_retries_total`, health `/api/health`
-- [ ] Опционально: батч по размеру буфера (2 KB), не только по таймеру — снизить write amplification на длинных ответах
+- [x] Батч по размеру буфера (`STREAM_FLUSH_MIN_BYTES=2048`) + debounce 350 ms — [`streaming_draft.py`](app/services/streaming_draft.py)
 - [ ] Подготовка DAO-слоя под Postgres ([TODO.md §17](TODO.md#17-дорожная-карта-v2)) — без миграции данных пока
 
 ---
@@ -202,7 +202,8 @@
 
 ## P1.6 — Наблюдаемость и ошибки
 
-- [ ] Структурированные логи (JSON опционально), correlation id на WS-сессию
+- [ ] Структурированные логи (JSON опционально)
+- [x] Correlation id WS-сессии в логах (`ws=` в формате, `log_ws_session`)
 - [ ] Канонические коды [`AppError`](audit.md) → [§13](TODO.md#13-обработка-ошибок)
 - [x] Health: свободное место `data/`, WAL, `active_turns` / `ws_connections` в probe app
 - [ ] Разделить `except Exception` в WS: бизнес (warning) vs internal (error + log)
@@ -213,11 +214,13 @@
 
 - [x] Починить `tests/test_tool_limit_draft.py` (`streaming: None` в финальном сообщении)
 - [x] Tool loop integration — `tests/test_tool_loop_integration.py`
-- [ ] WS reconnect + resume; concurrent tabs; cancel mid-tool
+- [x] WS reconnect / cancel event — `tests/test_ws_manager_lifecycle.py`
+- [ ] WS resume E2E; concurrent tabs E2E; cancel mid-tool E2E
 - [x] Security: SSRF URL / trusted media — `tests/test_security_urls.py`
-- [ ] Security: path traversal upload, XSS payload в markdown
+- [x] Security: path traversal upload — `test_upload.py`, `test_media_blocks_traversal`
+- [x] Security: XSS payload в markdown — `tests/test_markdown_sanitize.py`
 - [x] Синхронизировать счётчик тестов: README / TODO.md / факт (`pytest -q`)
-- [ ] Load smoke: 5–10 параллельных «лёгких» чатов без deadlock
+- [x] Load smoke: 8 параллельных созданий бесед — `tests/test_load_smoke.py`
 
 ---
 

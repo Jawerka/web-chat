@@ -43,6 +43,7 @@ from app.services.prompt_macro_service import alias_map_from_macros, expand_part
 from app.api.ws_manager import manager
 from app.services.conversation_tool_state import ConversationToolState
 from app.services.streaming_draft import AssistantStreamDraft
+from app.services.turn_status import patch_completed
 
 logger = logging.getLogger(__name__)
 
@@ -173,15 +174,14 @@ class AgentOrchestrator:
         if overflow_note:
             body = f"{overflow_note}\n\n{body}".strip() if body else overflow_note
         text = self._finalize_assistant_text(body, media_url_rewrites)
-        content_json = {
-            "images": all_image_urls,
-            "image_asset_ids": all_image_asset_ids,
-            "tool_calls": tool_calls_meta,
-            "reasoning": None,
-            "streaming": None,
-            "phase": None,
-            "active_tool": None,
-        }
+        content_json = patch_completed(
+            {
+                "images": all_image_urls,
+                "image_asset_ids": all_image_asset_ids,
+                "tool_calls": tool_calls_meta,
+                "reasoning": None,
+            },
+        )
         if existing_message is not None:
             await msg_repo.update_content(
                 existing_message,

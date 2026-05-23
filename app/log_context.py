@@ -12,6 +12,7 @@ from uuid import UUID
 
 _conv_id: ContextVar[str | None] = ContextVar("log_conv_id", default=None)
 _turn_kind: ContextVar[str | None] = ContextVar("log_turn_kind", default=None)
+_ws_session_id: ContextVar[str | None] = ContextVar("log_ws_session_id", default=None)
 
 
 class LogContextFilter(logging.Filter):
@@ -20,7 +21,18 @@ class LogContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.conv_id = _conv_id.get() or "-"
         record.turn = _turn_kind.get() or "-"
+        record.ws_session = _ws_session_id.get() or "-"
         return True
+
+
+@contextmanager
+def log_ws_session(ws_session_id: str | None) -> Iterator[None]:
+    """Correlation id WebSocket-сессии (вкладка ↔ сервер)."""
+    token = _ws_session_id.set(ws_session_id)
+    try:
+        yield
+    finally:
+        _ws_session_id.reset(token)
 
 
 @contextmanager

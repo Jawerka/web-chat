@@ -11,8 +11,10 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.ws_manager import manager
+from app.config import settings
 from app.db.models import Conversation, Message, MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository
+from app.services.turn_status import STREAMING, TOOL_RUNNING, patch_active_turn_phase
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ class AssistantStreamDraft:
         self._buffer = ""
         self._flush_lock = asyncio.Lock()
         self._pending_flush = False
+        self._last_flushed_len = 0
 
     @property
     def message(self) -> Message | None:
@@ -72,12 +75,15 @@ class AssistantStreamDraft:
                 stale,
                 self._conversation.id,
             )
-        initial_json = {
-            "images": [],
-            "image_asset_ids": [],
-            "streaming": True,
-            "phase": "text",
-        }
+        initial_json = patch_active_turn_phase(
+            {
+                "images": [],
+                "image_asset_ids": [],
+                "streaming": True,
+            },
+            turn_phase=STREAMING,
+            legacy_phase="text",
+        )
         self._json_cache = dict(initial_json)
         self._message = await self._msg_repo.create(
             conversation_id=self._conversation.id,
@@ -116,10 +122,18 @@ class AssistantStreamDraft:
         if self._message is None:
             await self._ensure_message()
         elif self._content_json().get("phase") == "tool":
-            await self._update_content_json({"phase": "text", "active_tool": None})
+            await self._update_content_json(
+                patch_active_turn_phase(
+                    {"active_tool": None},
+                    turn_phase=STREAMING,
+                    legacy_phase="text",
+                ),
+            )
         await self._emit("text_delta", {"content": chunk})
         self._pending_flush = True
         asyncio.create_task(self._debounced_flush())
+        if len(self._buffer) - self._last_flushed_len >= settings.stream_flush_min_bytes:
+            asyncio.create_task(self.flush())
 
     async def _debounced_flush(self) -> None:
         await asyncio.sleep(0.35)
@@ -138,6 +152,7 @@ class AssistantStreamDraft:
             )
             await self._conv_repo.touch(self._conversation)
             await self._session.commit()
+            self._last_flushed_len = len(self._buffer)
 
     async def enter_tool_round(self, active_tool: str | None = None) -> None:
         """
@@ -151,14 +166,17 @@ class AssistantStreamDraft:
                 self._message,
                 content_text=self._buffer,
             )
-        patch: dict[str, Any] = {
-            "streaming": True,
-            "phase": "tool",
-            "active_tool": active_tool,
-        }
         cj = self._content_json()
-        patch.setdefault("images", cj.get("images") or [])
-        patch.setdefault("image_asset_ids", cj.get("image_asset_ids") or [])
+        patch = patch_active_turn_phase(
+            {
+                "streaming": True,
+                "active_tool": active_tool,
+                "images": cj.get("images") or [],
+                "image_asset_ids": cj.get("image_asset_ids") or [],
+            },
+            turn_phase=TOOL_RUNNING,
+            legacy_phase="tool",
+        )
         await self._update_content_json(patch)
         manager.set_streaming_message(self._conversation.id, self._message.id)
         # Не очищаем _buffer: текст всех раундов LLM накапливается до финального persist.
@@ -172,7 +190,13 @@ class AssistantStreamDraft:
         """Обновить имя активного инструмента в черновике."""
         if self._message is None:
             return
-        await self._update_content_json({"phase": "tool", "active_tool": name})
+        await self._update_content_json(
+            patch_active_turn_phase(
+                {"active_tool": name},
+                turn_phase=TOOL_RUNNING,
+                legacy_phase="tool",
+            ),
+        )
 
     async def add_images(
         self,

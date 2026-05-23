@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.ws_manager import manager
 from app.db.models import MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository
+from app.services.turn_status import patch_interrupted
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +84,11 @@ async def settle_interrupted_turn(
         )
         return False
 
-    payload["streaming"] = None
-    payload["phase"] = None
-    payload["active_tool"] = None
-    payload["turn_status"] = status_code
-    if status_message:
-        payload["turn_status_message"] = status_message
+    payload = patch_interrupted(
+        payload,
+        status_code=status_code,
+        status_message=status_message,
+    )
 
     text = (target.content_text or "").strip()
     if status_code in ("failed", "tool_loop", "llm_error", "internal") and status_message:
