@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **157** автотестов (`pytest -q`). **В работе:** P0 почти закрыт; далее P1. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **162** автотестов (`pytest -q`). **P0 закрыт**; в работе **P1** (tool anti-loop, SQLite metrics). Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -138,7 +138,7 @@
 **Уже есть:** WAL, retry, debounce flush. **Добавить:**
 
 - [ ] Тесты конкурентных записей (2+ вкладки, одна беседа)
-- [ ] Метрика/лог при срабатывании retry `database is locked`
+- [x] Метрика/лог при срабатывании retry `database is locked` — `sqlite_busy_retries_total`, health `/api/health`
 - [ ] Опционально: батч по размеру буфера (2 KB), не только по таймеру — снизить write amplification на длинных ответах
 - [ ] Подготовка DAO-слоя под Postgres ([TODO.md §17](TODO.md#17-дорожная-карта-v2)) — без миграции данных пока
 
@@ -178,9 +178,9 @@
 
 **Задачи:**
 
-- [ ] `ConversationToolState`: хеши вызовов, последний init, цепочка generation
-- [ ] Детект дубликата tool(args) в одном turn
-- [ ] Проверка `cancel_event` перед каждым долгим tool (аудит: гонка после cancel)
+- [x] `ConversationToolState`: хеши вызовов, лимит SD-tools — [`conversation_tool_state.py`](app/services/conversation_tool_state.py)
+- [x] Детект дубликата tool(args) в одном turn
+- [x] Проверка `cancel_event` перед каждым tool (`before_tool`)
 - [x] Валидация `attachment_ids` с WS-ошибкой вместо silent `pass` ([websocket.py](app/api/websocket.py))
 
 **Критерии готовности:** тест «модель зовёт img2img 5 раз подряд → остановка с понятной ошибкой».
@@ -211,6 +211,7 @@
 ## P1.7 — Тесты и документация
 
 - [x] Починить `tests/test_tool_limit_draft.py` (`streaming: None` в финальном сообщении)
+- [x] Tool loop integration — `tests/test_tool_loop_integration.py`
 - [ ] WS reconnect + resume; concurrent tabs; cancel mid-tool
 - [x] Security: SSRF URL / trusted media — `tests/test_security_urls.py`
 - [ ] Security: path traversal upload, XSS payload в markdown

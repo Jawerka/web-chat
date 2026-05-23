@@ -231,20 +231,46 @@ async def _probe_sd() -> ServiceProbe:
         )
 
 
+def _sqlite_db_extra() -> dict[str, Any]:
+    """Размер WAL и счётчик retry busy (P1.1)."""
+    from pathlib import Path
+
+    from app.db.sqlite import sqlite_busy_retries_total
+
+    extra: dict[str, Any] = {"sqlite_busy_retries": sqlite_busy_retries_total()}
+    url = settings.database_url
+    if "sqlite" in url:
+        part = url.split("///", 1)[-1]
+        path = Path(part[2:]) if part.startswith("./") else Path(part)
+        if path.is_file():
+            extra["db_size_mb"] = round(path.stat().st_size / (1024 * 1024), 2)
+        wal = path.with_suffix(path.suffix + "-wal")
+        if wal.is_file():
+            extra["wal_size_mb"] = round(wal.stat().st_size / (1024 * 1024), 2)
+    return extra
+
+
 async def _probe_database() -> ServiceProbe:
     t0 = time.perf_counter()
     try:
         async with db_session.async_session_factory() as session:
             await session.execute(text("SELECT 1"))
         latency = (time.perf_counter() - t0) * 1000
+        extra = _sqlite_db_extra()
+        detail_parts = ["SQLite"]
+        if extra.get("wal_size_mb") is not None:
+            detail_parts.append(f"WAL {extra['wal_size_mb']} MB")
+        if extra.get("sqlite_busy_retries"):
+            detail_parts.append(f"busy retries: {extra['sqlite_busy_retries']}")
         return ServiceProbe(
             id="database",
             name="База данных",
             status="ok",
             latency_ms=round(latency, 1),
-            detail="SQLite",
+            detail=", ".join(detail_parts),
             url="local",
             load_percent=_latency_load(latency, good=50, warn=500),
+            extra=extra,
         )
     except Exception as exc:
         latency = (time.perf_counter() - t0) * 1000

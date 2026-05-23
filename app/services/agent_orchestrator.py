@@ -41,6 +41,7 @@ from app.services.message_builder import (
 )
 from app.services.prompt_macro_service import alias_map_from_macros, expand_parts_for_llm
 from app.api.ws_manager import manager
+from app.services.conversation_tool_state import ConversationToolState
 from app.services.streaming_draft import AssistantStreamDraft
 
 logger = logging.getLogger(__name__)
@@ -374,7 +375,7 @@ class AgentOrchestrator:
         all_image_asset_ids: list[str] = []
         media_url_rewrites: dict[str, str] = {}
         tool_calls_meta: list[dict[str, Any]] = []
-        sd_tool_counts: dict[str, int] = {}
+        tool_state = ConversationToolState()
         stream_draft = AssistantStreamDraft(
             session,
             msg_repo,
@@ -423,25 +424,10 @@ class AgentOrchestrator:
                     name = fn["name"]
                     args = self._llm.parse_tool_arguments(fn["arguments"])
 
+                    tool_state.before_tool(name, args, cancel_event=cancel_event)
                     await stream_draft.set_active_tool(name)
                     await emit("tool_start", {"name": name, "arguments": args})
-                    if name in ("generate_image", "img2img", "upscale_images"):
-                        sd_tool_counts[name] = sd_tool_counts.get(name, 0) + 1
-                        n = sd_tool_counts[name]
-                        logger.info(
-                            "tool_start: %s (вызов #%d в ходе, round=%d)",
-                            name,
-                            n,
-                            round_idx + 1,
-                        )
-                        if n > 1:
-                            logger.warning(
-                                "Повторный %s в том же ходе (#%d) — очередь SD/WebUI",
-                                name,
-                                n,
-                            )
-                    else:
-                        logger.info("tool_start: %s", name)
+                    logger.info("tool_start: %s (round=%d)", name, round_idx + 1)
 
                     try:
                         result = await turn_executor.run(name, args)
@@ -633,7 +619,7 @@ class AgentOrchestrator:
         all_image_asset_ids: list[str] = []
         media_url_rewrites: dict[str, str] = {}
         tool_calls_meta: list[dict[str, Any]] = []
-        sd_tool_counts: dict[str, int] = {}
+        tool_state = ConversationToolState()
         stream_draft = AssistantStreamDraft(
             session,
             msg_repo,
@@ -681,25 +667,10 @@ class AgentOrchestrator:
                     fn = tc["function"]
                     name = fn["name"]
                     args = self._llm.parse_tool_arguments(fn["arguments"])
+                    tool_state.before_tool(name, args, cancel_event=cancel_event)
                     await stream_draft.set_active_tool(name)
                     await emit("tool_start", {"name": name, "arguments": args})
-                    if name in ("generate_image", "img2img", "upscale_images"):
-                        sd_tool_counts[name] = sd_tool_counts.get(name, 0) + 1
-                        n = sd_tool_counts[name]
-                        logger.info(
-                            "tool_start: %s (вызов #%d в ходе, round=%d)",
-                            name,
-                            n,
-                            round_idx + 1,
-                        )
-                        if n > 1:
-                            logger.warning(
-                                "Повторный %s в том же ходе (#%d) — очередь SD/WebUI",
-                                name,
-                                n,
-                            )
-                    else:
-                        logger.info("tool_start: %s", name)
+                    logger.info("tool_start: %s (round=%d)", name, round_idx + 1)
                     try:
                         result = await turn_executor.run(name, args)
                         result_content = result.content

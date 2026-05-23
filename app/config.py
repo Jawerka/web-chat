@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     max_upload_mb: int = 25
     max_files_per_message: int = 10
     max_tool_rounds: int = 10
+    # Повтор одного SD-tool (generate_image/img2img/upscale) в одном ходе
+    max_same_tool_per_turn: int = 3
     max_history_messages: int = 60
     max_extract_chars: int = 50000
 

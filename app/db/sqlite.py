@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 # Одна очередь на запись — избегает database is locked при WS + ingest.
 _sqlite_write_lock = asyncio.Lock()
+_sqlite_busy_retries_total: int = 0
+
+
+def sqlite_busy_retries_total() -> int:
+    """Сколько раз сработал retry при database is locked (метрика P1.1)."""
+    return _sqlite_busy_retries_total
 
 
 def configure_sqlite_engine(engine: AsyncEngine) -> None:
@@ -68,6 +74,8 @@ async def run_write(
                         exc,
                     )
                     raise
+                global _sqlite_busy_retries_total
+                _sqlite_busy_retries_total += 1
                 delay = min(2.0, 0.08 * (2**attempt))
                 logger.warning(
                     "SQLite busy [%s] (попытка %d/%d), повтор через %.2fs: %s",
