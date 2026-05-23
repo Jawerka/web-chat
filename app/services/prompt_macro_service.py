@@ -65,3 +65,88 @@ CATEGORY_LABELS: dict[PromptMacroCategory, str] = {
     PromptMacroCategory.SITUATION: "Ситуации",
     PromptMacroCategory.OTHER: "Прочее",
 }
+
+_MACRO_CONTEXT_SELECTED = "selected"
+_MACRO_CONTEXT_FULL = "full"
+
+
+def parse_macro_context_mode(raw: str | None) -> str:
+    """Режим макросов с WS: selected (только @ в тексте) или full (каталог в system)."""
+    if raw is not None and str(raw).strip().lower() == _MACRO_CONTEXT_FULL:
+        return _MACRO_CONTEXT_FULL
+    return _MACRO_CONTEXT_SELECTED
+
+
+def build_full_macro_catalog_block(
+    macros: list[PromptMacro],
+    *,
+    max_chars: int,
+    max_macros: int,
+) -> str:
+    """
+    Ограниченный снимок каталога для LLM (Ф1).
+
+    Не отдаёт всю БД без лимита — обрезка по числу макросов и суммарной длине.
+    """
+    if not macros or max_macros < 1 or max_chars < 1:
+        return ""
+
+    header = (
+        "## Каталог быстрых промптов (@alias)\n"
+        "Пользователь может ссылаться на @alias в сообщении; ниже полные тексты "
+        "доступных макросов. Не выдумывай alias, которых нет в списке.\n"
+    )
+    parts: list[str] = [header]
+    used = len(header)
+    included = 0
+    truncated_macros = False
+    truncated_chars = False
+
+    for macro in macros:
+        if included >= max_macros:
+            truncated_macros = True
+            break
+        cat = CATEGORY_LABELS.get(macro.category, str(macro.category))
+        label = f" ({macro.label})" if macro.label else ""
+        entry_header = f"\n### {cat} · @{macro.alias}{label}\n"
+        body = (macro.body or "").strip()
+        entry = f"{entry_header}{body}\n"
+        if used + len(entry) > max_chars:
+            truncated_chars = True
+            remain = max_chars - used - len(entry_header) - 20
+            if remain > 80:
+                parts.append(entry_header)
+                parts.append(body[:remain].rstrip())
+                parts.append("…\n")
+                used = max_chars
+            break
+        parts.append(entry)
+        used += len(entry)
+        included += 1
+
+    if truncated_macros or truncated_chars:
+        parts.append(
+            "\n_(Каталог обрезан по лимиту; для полного списка см. страницу «Быстрые промпты».)_\n",
+        )
+    return "".join(parts).strip()
+
+
+def append_full_macro_catalog_to_system(
+    system_prompt: str,
+    macros: list[PromptMacro],
+    *,
+    max_chars: int,
+    max_macros: int,
+) -> str:
+    """Добавить снимок каталога к system prompt при macro_context=full."""
+    block = build_full_macro_catalog_block(
+        macros,
+        max_chars=max_chars,
+        max_macros=max_macros,
+    )
+    if not block:
+        return system_prompt
+    base = (system_prompt or "").strip()
+    if base:
+        return f"{base}\n\n{block}"
+    return block

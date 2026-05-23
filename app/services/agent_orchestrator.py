@@ -39,7 +39,11 @@ from app.services.message_builder import (
     finalize_assistant_text,
     history_to_llm_messages,
 )
-from app.services.prompt_macro_service import alias_map_from_macros, expand_parts_for_llm
+from app.services.prompt_macro_service import (
+    alias_map_from_macros,
+    append_full_macro_catalog_to_system,
+    expand_parts_for_llm,
+)
 from app.api.ws_events import emit_progress
 from app.api.ws_manager import manager
 from app.services.conversation_tool_state import ConversationToolState
@@ -422,9 +426,12 @@ class AgentOrchestrator:
         cancel_event: asyncio.Event,
         *,
         llm_model: str | None = None,
+        macro_context: str = "selected",
     ) -> AgentTurnResult:
         """
         Полный ход в беседе: сохранение user/assistant, стриминг WS-событий.
+
+        macro_context: ``selected`` — только @alias в тексте; ``full`` — каталог в system.
 
         Raises:
             ValueError: Беседа не найдена.
@@ -487,7 +494,20 @@ class AgentOrchestrator:
         )
 
         macro_repo = PromptMacroRepository(session)
-        alias_to_body = alias_map_from_macros(await macro_repo.list_all())
+        all_macros = await macro_repo.list_all()
+        alias_to_body = alias_map_from_macros(all_macros)
+        if macro_context == "full":
+            system_prompt = append_full_macro_catalog_to_system(
+                system_prompt,
+                all_macros,
+                max_chars=settings.macro_context_full_max_chars,
+                max_macros=settings.macro_context_full_max_macros,
+            )
+            logger.info(
+                "macro_context=full: каталог %d макросов в system (лимит %d симв.)",
+                len(all_macros),
+                settings.macro_context_full_max_chars,
+            )
 
         history = await msg_repo.list_for_llm(
             conversation_id,
@@ -646,6 +666,7 @@ class AgentOrchestrator:
         cancel_event: asyncio.Event,
         *,
         llm_model: str | None = None,
+        macro_context: str = "selected",
     ) -> AgentTurnResult:
         """Перегенерировать ответ на существующее user-сообщение (без нового user)."""
         conv_repo = ConversationRepository(session)
@@ -696,7 +717,19 @@ class AgentOrchestrator:
         )
 
         macro_repo = PromptMacroRepository(session)
-        alias_to_body = alias_map_from_macros(await macro_repo.list_all())
+        all_macros = await macro_repo.list_all()
+        alias_to_body = alias_map_from_macros(all_macros)
+        if macro_context == "full":
+            system_prompt = append_full_macro_catalog_to_system(
+                system_prompt,
+                all_macros,
+                max_chars=settings.macro_context_full_max_chars,
+                max_macros=settings.macro_context_full_max_macros,
+            )
+            logger.info(
+                "macro_context=full (regenerate): каталог %d макросов в system",
+                len(all_macros),
+            )
 
         history = await msg_repo.list_for_llm(
             conversation_id,

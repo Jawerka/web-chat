@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import settings
+from app.services.prompt_macro_service import parse_macro_context_mode
 
 _MAX_URL_LEN = 512
 
@@ -17,6 +18,7 @@ class IntegrationOverrides:
     llm_model: str | None = None
     llm_base_url: str | None = None
     sd_webui_url: str | None = None
+    macro_context: str = "selected"
 
 
 def resolve_llm_base_url(override: str | None = None) -> str:
@@ -56,4 +58,5 @@ def parse_integration_overrides(data: dict[str, Any]) -> IntegrationOverrides:
         llm_model=llm_model,
         llm_base_url=parse_optional_url(data.get("llm_base_url")),
         sd_webui_url=parse_optional_url(data.get("sd_webui_url")),
+        macro_context=parse_macro_context_mode(data.get("macro_context")),
     )

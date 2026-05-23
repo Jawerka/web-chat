@@ -3799,6 +3799,39 @@ body.gallery-lightbox-open {
   cursor: not-allowed;
 }
 
+.macro-context-full-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.macro-context-full-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+.macro-context-full-btn.active {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 14%, var(--surface));
+}
+
+.macro-context-full-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .macro-mention-list {
   position: absolute;
   left: 0;

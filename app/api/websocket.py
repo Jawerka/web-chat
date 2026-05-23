@@ -109,6 +109,7 @@ async def _run_turn_task(
             sd_webui_url=integration.sd_webui_url if integration else None,
         )
         try:
+            macro_ctx = integration.macro_context if integration else "selected"
             await orchestrator.run_conversation_turn(
                 session,
                 conversation_id,
@@ -117,6 +118,7 @@ async def _run_turn_task(
                 emit,
                 cancel_event,
                 llm_model=integration.llm_model if integration else None,
+                macro_context=macro_ctx,
             )
             await session.commit()
         except TurnCancelled:
@@ -244,6 +246,7 @@ async def _run_regenerate_task(
             sd_webui_url=integration.sd_webui_url if integration else None,
         )
         try:
+            macro_ctx = integration.macro_context if integration else "selected"
             await orchestrator.run_regenerate_turn(
                 session,
                 conversation_id,
@@ -251,6 +254,7 @@ async def _run_regenerate_task(
                 emit,
                 cancel_event,
                 llm_model=integration.llm_model if integration else None,
+                macro_context=macro_ctx,
             )
             await session.commit()
         except TurnCancelled:

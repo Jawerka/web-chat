@@ -487,7 +487,7 @@ REST: `/api/prompt-macros`.
 ```bash
 source .venv/bin/activate
 ruff check app tests
-pytest -q          # 203 теста
+pytest -q          # 207 тестов
 ```
 
 ### Структура репозитория

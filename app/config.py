@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     max_same_tool_per_turn: int = 3
     max_history_messages: int = 60
     max_extract_chars: int = 50000
+    # Ф1: снимок каталога @alias в system prompt (macro_context=full)
+    macro_context_full_max_chars: int = 12_000
+    macro_context_full_max_macros: int = 80
 
     # Vision: llama-server скачивает image_url по HTTP (лимит ~10 MB на стороне LLM)
     llm_vision_max_bytes: int = 6 * 1024 * 1024

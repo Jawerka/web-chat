@@ -248,10 +248,10 @@
 
 **Задачи:**
 
-- [ ] UI: toggle в composer / toolbar, состояние в `sessionStorage` или settings
-- [ ] Backend: флаг в WS `user_message` → режим `macro_context=full|selected`
-- [ ] При `full`: ограниченный снимок каталога (лимит символов/число макросов), не безлимитный дамп БД
-- [ ] Документация риска: раздувание контекста, утечка всех промптов в LLM
+- [x] UI: toggle в composer (`macro-context-full-btn`), состояние в `sessionStorage`
+- [x] Backend: `macro_context` в WS `user_message` / regenerate → `full|selected`
+- [x] При `full`: снимок каталога — `MACRO_CONTEXT_FULL_MAX_CHARS` / `MAX_MACROS` в config
+- [x] Документация риска — подпись на [`macros.html`](templates/macros.html), tooltips в чате
 
 **Приоритет:** P1 (фича), зависит от P0.4 (предсказуемый turn).
 
@@ -301,7 +301,7 @@
 
 ```text
 M1 — Secure LAN          P0.* + Ф3 + документация деплоя
-M2 — Stable runtime      P1.1–P1.4, P1.7, Ф1
+M2 — Stable runtime      P1.* + Ф1 (закрыто)
 M3 — Platform v2         P2.*, Ф2, Postgres, multi-user
 ```
 

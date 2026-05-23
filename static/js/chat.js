@@ -122,6 +122,9 @@ function imageUrlKey(url) {
   }
 }
 
+/** sessionStorage: «1» = macro_context full (Ф1) */
+const MACRO_CONTEXT_FULL_KEY = 'webchat_macro_context_full';
+
 const MSG_ICONS = {
   copy: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   check: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>',
@@ -313,6 +316,7 @@ class ChatApp {
       settingsPanel: document.getElementById('settings-panel'),
       logsPanel: document.getElementById('logs-panel'),
       macroInsertBtn: document.getElementById('macro-insert-btn'),
+      macroContextFullBtn: document.getElementById('macro-context-full-btn'),
       settingsChatTitle: document.getElementById('settings-chat-title'),
       exportConversationBtn: document.getElementById('export-conversation-btn'),
       convPresetSelect: document.getElementById('conv-preset-select'),
@@ -418,6 +422,7 @@ class ChatApp {
         this.promptMacros.openPicker();
       }
     });
+    this._initMacroContextToggle();
     document.addEventListener('click', (e) => {
       const pop = document.getElementById('macro-picker-popover');
       if (!pop || pop.classList.contains('hidden')) return;
@@ -1640,6 +1645,7 @@ class ChatApp {
     this.$.userInput.disabled = true;
     this.$.sendBtn.disabled = true;
     if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = true;
+    if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = true;
     if (this.streaming) this.endStreaming();
   }
 
@@ -1698,6 +1704,7 @@ class ChatApp {
       this.$.userInput.disabled = false;
       this.$.sendBtn.disabled = false;
       if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = false;
+      if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = false;
 
       this._resetComposerUi();
       this._scrollStuckToBottom = true;
@@ -4099,6 +4106,36 @@ class ChatApp {
     }
   }
 
+  isMacroContextFull() {
+    return sessionStorage.getItem(MACRO_CONTEXT_FULL_KEY) === '1';
+  }
+
+  _initMacroContextToggle() {
+    const btn = this.$.macroContextFullBtn;
+    if (!btn) return;
+    this._updateMacroContextToggleUi();
+    btn.addEventListener('click', () => {
+      const next = !this.isMacroContextFull();
+      sessionStorage.setItem(MACRO_CONTEXT_FULL_KEY, next ? '1' : '0');
+      this._updateMacroContextToggleUi();
+      this.log?.info(
+        'macro',
+        next ? 'Каталог @alias в контексте модели включён' : 'Только @alias из текста',
+      );
+    });
+  }
+
+  _updateMacroContextToggleUi() {
+    const btn = this.$.macroContextFullBtn;
+    if (!btn) return;
+    const on = this.isMacroContextFull();
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.title = on
+      ? 'Каталог @alias в контексте модели: вкл (нажмите, чтобы выкл.)'
+      : 'Каталог @alias в контексте модели: выкл';
+  }
+
   getWsIntegrationPayload() {
     const payload = {};
     const llmUrl = this._normalizeServiceUrl(this.$.llmBaseUrlInput?.value);
@@ -4107,6 +4144,7 @@ class ChatApp {
     if (sdUrl) payload.sd_webui_url = sdUrl;
     const model = this.getActiveLlmModel();
     if (model) payload.model = model;
+    if (this.isMacroContextFull()) payload.macro_context = 'full';
     return payload;
   }
 
