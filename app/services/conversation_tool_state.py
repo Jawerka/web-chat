@@ -43,7 +43,7 @@ def tool_call_signature(name: str, args: dict[str, Any]) -> str:
 
 
 class ConversationToolState:
-    """Учёт tool-вызовов в одном turn; выбрасывает TurnCancelled / ToolLoopExceeded."""
+    """Учёт tool-вызовов в одном turn; выбрасывает TurnCancelled / ToolAntiLoopExceeded."""
 
     def __init__(self, *, max_same_tool_per_turn: int | None = None) -> None:
         self._max_same = max_same_tool_per_turn or settings.max_same_tool_per_turn
@@ -58,22 +58,24 @@ class ConversationToolState:
         cancel_event,
     ) -> None:
         """Проверить cancel и лимиты перед запуском tool."""
-        from app.services.agent_orchestrator import ToolLoopExceeded, TurnCancelled
+        from app.services.agent_orchestrator import ToolAntiLoopExceeded, TurnCancelled
 
         if cancel_event.is_set():
             raise TurnCancelled("Генерация отменена")
 
         sig = tool_call_signature(name, args)
         if sig in self._signatures:
-            raise ToolLoopExceeded(
+            raise ToolAntiLoopExceeded(
                 f"Повторный вызов {name} с теми же аргументами в одном ходе",
+                kind="duplicate",
             )
         self._signatures.add(sig)
 
         self._counts_by_name[name] = self._counts_by_name.get(name, 0) + 1
         count = self._counts_by_name[name]
         if name in SD_TOOL_NAMES and count > self._max_same:
-            raise ToolLoopExceeded(
+            raise ToolAntiLoopExceeded(
                 f"Слишком много вызовов {name} в одном ходе "
                 f"(максимум {self._max_same})",
+                kind="max_same",
             )

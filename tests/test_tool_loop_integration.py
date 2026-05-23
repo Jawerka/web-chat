@@ -10,7 +10,7 @@ import pytest
 
 from app.db import session as db_session
 from app.integrations.llm_client import LLMCompletion
-from app.services.agent_orchestrator import AgentOrchestrator, ToolLoopExceeded
+from app.services.agent_orchestrator import AgentOrchestrator
 from tests.helpers import api_create_conversation
 
 
@@ -62,14 +62,15 @@ async def test_fifth_img2img_in_turn_raises_tool_loop(
     emit = AsyncMock()
 
     async with db_session.async_session_factory() as session:
-        with pytest.raises(ToolLoopExceeded, match="img2img"):
-            await orchestrator.run_conversation_turn(
-                session,
-                conv_id,
-                "нарисуй",
-                [],
-                emit,
-                asyncio.Event(),
-            )
+        result = await orchestrator.run_conversation_turn(
+            session,
+            conv_id,
+            "нарисуй",
+            [],
+            emit,
+            asyncio.Event(),
+        )
 
     assert mock_tools.run.await_count == 3
+    assert result.image_urls == []
+    assert any(c.args[0] == "done" for c in emit.call_args_list)

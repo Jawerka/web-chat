@@ -56,6 +56,14 @@ class ToolLoopExceeded(Exception):
     """Превышен лимит MAX_TOOL_ROUNDS."""
 
 
+class ToolAntiLoopExceeded(ToolLoopExceeded):
+    """P1.4: дубликат вызова или лимит одного SD-tool в ходе (без UI-ошибки)."""
+
+    def __init__(self, message: str, *, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind  # "duplicate" | "max_same"
+
+
 class TurnCancelled(Exception):
     """Генерация отменена пользователем."""
 
@@ -229,6 +237,10 @@ class AgentOrchestrator:
         manager.clear_progress(conversation_id)
         await emit("done", payload)
 
+    _ANTI_LOOP_SKIP_MSG = (
+        "Вызов инструмента пропущен: лимит повторов в этом ходе."
+    )
+
     async def _complete_after_tool_limit(
         self,
         session: AsyncSession,
@@ -245,6 +257,7 @@ class AgentOrchestrator:
         emit: EventEmitter,
         llm_model: str | None = None,
         existing_message: Message | None = None,
+        overflow_note: str | None = None,
     ) -> AgentTurnResult | None:
         """Сохранить частичный ответ, если лимит tools исчерпан, но есть результат."""
         if not all_image_urls and not tool_calls_meta:
@@ -258,7 +271,7 @@ class AgentOrchestrator:
             all_image_asset_ids=all_image_asset_ids,
             media_url_rewrites=media_url_rewrites,
             tool_calls_meta=tool_calls_meta,
-            overflow_note=self._tool_loop_overflow_note(),
+            overflow_note=overflow_note,
             existing_message=existing_message,
         )
         await self._emit_turn_done(
@@ -274,6 +287,118 @@ class AgentOrchestrator:
             user_message=user_message,
             assistant_message=assistant_message,
         )
+
+    async def _run_completion_tool_calls(
+        self,
+        *,
+        completion,
+        tool_state: ConversationToolState,
+        turn_executor: ToolExecutor,
+        stream_draft: AssistantStreamDraft,
+        llm_messages: list[dict[str, Any]],
+        all_image_urls: list[str],
+        all_image_asset_ids: list[str],
+        media_url_rewrites: dict[str, str],
+        emit: EventEmitter,
+        round_idx: int,
+        cancel_event: asyncio.Event,
+        session: AsyncSession,
+        msg_repo: MessageRepository,
+        conv_repo: ConversationRepository,
+        conversation: Conversation,
+        user_message: Message,
+        tool_calls_meta: list[dict[str, Any]],
+        llm_model: str | None,
+    ) -> AgentTurnResult | None:
+        """Выполнить tool_calls; при anti-loop — только лог и мягкое завершение хода."""
+        for tc in completion.tool_calls:
+            fn = tc["function"]
+            name = fn["name"]
+            args = self._llm.parse_tool_arguments(fn["arguments"])
+
+            try:
+                tool_state.before_tool(name, args, cancel_event=cancel_event)
+            except ToolAntiLoopExceeded as exc:
+                logger.warning("anti-loop: %s", exc)
+                await stream_draft.set_active_tool(name)
+                await emit(
+                    "tool_done",
+                    {
+                        "name": name,
+                        "summary": self._ANTI_LOOP_SKIP_MSG[:200],
+                        "skipped": True,
+                    },
+                )
+                llm_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": self._ANTI_LOOP_SKIP_MSG,
+                    }
+                )
+                if exc.kind == "max_same":
+                    partial = await self._complete_after_tool_limit(
+                        session,
+                        msg_repo=msg_repo,
+                        conv_repo=conv_repo,
+                        conversation=conversation,
+                        user_message=user_message,
+                        content_from_llm=None,
+                        all_image_urls=all_image_urls,
+                        all_image_asset_ids=all_image_asset_ids,
+                        media_url_rewrites=media_url_rewrites,
+                        tool_calls_meta=tool_calls_meta,
+                        emit=emit,
+                        llm_model=llm_model,
+                        existing_message=stream_draft.message,
+                        overflow_note=None,
+                    )
+                    if partial is not None:
+                        return partial
+                    break
+                continue
+
+            await stream_draft.set_active_tool(name)
+            await emit("tool_start", {"name": name, "arguments": args})
+            logger.info("tool_start: %s (round=%d)", name, round_idx + 1)
+
+            try:
+                result = await turn_executor.run(name, args)
+                result_content = result.content
+            except Exception as exc:
+                logger.exception("Ошибка инструмента %s", name)
+                result = ToolResult(
+                    content=f"Ошибка инструмента {name}: {exc}",
+                    image_urls=[],
+                )
+                result_content = result.content
+
+            self._collect_tool_images(
+                result,
+                all_image_urls,
+                all_image_asset_ids,
+                media_url_rewrites,
+            )
+            await stream_draft.add_images(
+                result.image_urls,
+                result.image_asset_ids,
+            )
+            for url in result.image_urls:
+                await emit("image", {"urls": [url]})
+
+            await emit(
+                "tool_done",
+                {"name": name, "summary": result_content[:200]},
+            )
+
+            llm_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result_content,
+                }
+            )
+        return None
 
     @staticmethod
     def _llm_user_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -437,52 +562,28 @@ class AgentOrchestrator:
                     cancel_event=cancel_event,
                     emit_progress_cb=push_progress,
                 )
-                for tc in completion.tool_calls:
-                    fn = tc["function"]
-                    name = fn["name"]
-                    args = self._llm.parse_tool_arguments(fn["arguments"])
-
-                    tool_state.before_tool(name, args, cancel_event=cancel_event)
-                    await stream_draft.set_active_tool(name)
-                    await emit("tool_start", {"name": name, "arguments": args})
-                    logger.info("tool_start: %s (round=%d)", name, round_idx + 1)
-
-                    try:
-                        result = await turn_executor.run(name, args)
-                        result_content = result.content
-                    except Exception as exc:
-                        logger.exception("Ошибка инструмента %s", name)
-                        result = ToolResult(
-                            content=f"Ошибка инструмента {name}: {exc}",
-                            image_urls=[],
-                        )
-                        result_content = result.content
-
-                    self._collect_tool_images(
-                        result,
-                        all_image_urls,
-                        all_image_asset_ids,
-                        media_url_rewrites,
-                    )
-                    await stream_draft.add_images(
-                        result.image_urls,
-                        result.image_asset_ids,
-                    )
-                    for url in result.image_urls:
-                        await emit("image", {"urls": [url]})
-
-                    await emit(
-                        "tool_done",
-                        {"name": name, "summary": result_content[:200]},
-                    )
-
-                    llm_messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": result_content,
-                        }
-                    )
+                anti_loop_done = await self._run_completion_tool_calls(
+                    completion=completion,
+                    tool_state=tool_state,
+                    turn_executor=turn_executor,
+                    stream_draft=stream_draft,
+                    llm_messages=llm_messages,
+                    all_image_urls=all_image_urls,
+                    all_image_asset_ids=all_image_asset_ids,
+                    media_url_rewrites=media_url_rewrites,
+                    emit=emit,
+                    round_idx=round_idx,
+                    cancel_event=cancel_event,
+                    session=session,
+                    msg_repo=msg_repo,
+                    conv_repo=conv_repo,
+                    conversation=conversation,
+                    user_message=user_message,
+                    tool_calls_meta=tool_calls_meta,
+                    llm_model=llm_model,
+                )
+                if anti_loop_done is not None:
+                    return anti_loop_done
 
                 logger.info("Раунд tools %d/%d", round_idx + 1, settings.max_tool_rounds)
                 continue
@@ -530,6 +631,7 @@ class AgentOrchestrator:
             emit=emit,
             llm_model=llm_model,
             existing_message=stream_draft.message,
+            overflow_note=self._tool_loop_overflow_note(),
         )
         if partial is not None:
             return partial
@@ -692,47 +794,29 @@ class AgentOrchestrator:
                     cancel_event=cancel_event,
                     emit_progress_cb=push_progress,
                 )
-                for tc in completion.tool_calls:
-                    fn = tc["function"]
-                    name = fn["name"]
-                    args = self._llm.parse_tool_arguments(fn["arguments"])
-                    tool_state.before_tool(name, args, cancel_event=cancel_event)
-                    await stream_draft.set_active_tool(name)
-                    await emit("tool_start", {"name": name, "arguments": args})
-                    logger.info("tool_start: %s (round=%d)", name, round_idx + 1)
-                    try:
-                        result = await turn_executor.run(name, args)
-                        result_content = result.content
-                    except Exception as exc:
-                        logger.exception("Ошибка инструмента %s", name)
-                        result = ToolResult(
-                            content=f"Ошибка инструмента {name}: {exc}",
-                            image_urls=[],
-                        )
-                        result_content = result.content
-                    self._collect_tool_images(
-                        result,
-                        all_image_urls,
-                        all_image_asset_ids,
-                        media_url_rewrites,
-                    )
-                    await stream_draft.add_images(
-                        result.image_urls,
-                        result.image_asset_ids,
-                    )
-                    for url in result.image_urls:
-                        await emit("image", {"urls": [url]})
-                    await emit(
-                        "tool_done",
-                        {"name": name, "summary": result_content[:200]},
-                    )
-                    llm_messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": result_content,
-                        }
-                    )
+                anti_loop_done = await self._run_completion_tool_calls(
+                    completion=completion,
+                    tool_state=tool_state,
+                    turn_executor=turn_executor,
+                    stream_draft=stream_draft,
+                    llm_messages=llm_messages,
+                    all_image_urls=all_image_urls,
+                    all_image_asset_ids=all_image_asset_ids,
+                    media_url_rewrites=media_url_rewrites,
+                    emit=emit,
+                    round_idx=round_idx,
+                    cancel_event=cancel_event,
+                    session=session,
+                    msg_repo=msg_repo,
+                    conv_repo=conv_repo,
+                    conversation=conversation,
+                    user_message=user_message,
+                    tool_calls_meta=tool_calls_meta,
+                    llm_model=llm_model,
+                )
+                if anti_loop_done is not None:
+                    return anti_loop_done
+
                 logger.info("Раунд tools %d/%d", round_idx + 1, settings.max_tool_rounds)
                 continue
 
@@ -779,6 +863,7 @@ class AgentOrchestrator:
             emit=emit,
             llm_model=llm_model,
             existing_message=stream_draft.message,
+            overflow_note=self._tool_loop_overflow_note(),
         )
         if partial is not None:
             return partial

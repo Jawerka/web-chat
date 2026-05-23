@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from app.services.agent_orchestrator import ToolLoopExceeded, TurnCancelled
+from app.services.agent_orchestrator import ToolAntiLoopExceeded, TurnCancelled
 from app.services.conversation_tool_state import ConversationToolState, tool_call_signature
 
 
@@ -40,7 +40,7 @@ def test_duplicate_args_raises() -> None:
     state = ConversationToolState(max_same_tool_per_turn=5)
     args = {"prompt": "same"}
     state.before_tool("img2img", args, cancel_event=asyncio.Event())
-    with pytest.raises(ToolLoopExceeded, match="Повторный вызов"):
+    with pytest.raises(ToolAntiLoopExceeded, match="Повторный вызов"):
         state.before_tool("img2img", args, cancel_event=asyncio.Event())
 
 
@@ -50,7 +50,7 @@ def test_max_same_sd_tool_raises() -> None:
     state.before_tool("img2img", {"n": 1}, cancel_event=ev)
     state.before_tool("img2img", {"n": 2}, cancel_event=ev)
     state.before_tool("img2img", {"n": 3}, cancel_event=ev)
-    with pytest.raises(ToolLoopExceeded, match="Слишком много вызовов img2img"):
+    with pytest.raises(ToolAntiLoopExceeded, match="Слишком много вызовов img2img"):
         state.before_tool("img2img", {"n": 4}, cancel_event=ev)
 
 

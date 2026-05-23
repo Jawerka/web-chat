@@ -75,6 +75,7 @@ async def test_tool_limit_updates_existing_draft(tmp_path, repo_conv_title: str)
             tool_calls_meta=[],
             emit=emit,
             existing_message=draft,
+            overflow_note=orchestrator._tool_loop_overflow_note(),
         )
         await session.commit()
         assert result is not None
