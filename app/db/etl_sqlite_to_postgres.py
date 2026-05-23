@@ -383,14 +383,17 @@ async def run_etl(options: EtlOptions) -> EtlCounts:
 
 
 def _verify_counts(stats: EtlCounts, skip_media: bool) -> None:
-    """Сверка source vs target_after."""
+    """Сверка copied vs target_after (не все строки source переносятся — битые FK)."""
     mismatches: list[str] = []
     for table_name, _ in ETL_TABLES:
         if skip_media and table_name == "media_assets":
             continue
-        src_n = stats.source.get(table_name, 0)
+        expected = stats.copied.get(table_name, stats.source.get(table_name, 0))
         dst_n = stats.target_after.get(table_name, 0)
-        if src_n != dst_n:
-            mismatches.append(f"{table_name}: source={src_n} target={dst_n}")
+        if expected != dst_n:
+            mismatches.append(
+                f"{table_name}: copied={expected} target={dst_n} "
+                f"(source={stats.source.get(table_name, 0)})",
+            )
     if mismatches:
         raise EtlError("Расхождение счётчиков после ETL: " + "; ".join(mismatches))
