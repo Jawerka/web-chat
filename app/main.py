@@ -26,6 +26,7 @@ from app.db.session import init_db
 from app.integrations.mcp_server import start_mcp_background
 from app.logging_setup import setup_logging
 from app.middleware.access_control import AccessControlMiddleware
+from app.middleware.session_auth import SessionAuthMiddleware
 from app.middleware.public_base_url import PublicBaseUrlMiddleware
 from app.public_url import public_base_url_lan, public_base_url_vpn
 from app.services.job_queue import heavy_job_queue
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.add_middleware(PublicBaseUrlMiddleware)
+    app.add_middleware(SessionAuthMiddleware)
     app.add_middleware(AccessControlMiddleware)
     app.include_router(pages_router)
     app.include_router(gallery_router)

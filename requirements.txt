@@ -26,5 +26,7 @@ python-docx>=1.1
 
 # Utils
 python-dotenv>=1.0
+bcrypt>=4.0
+itsdangerous>=2.0
 
 # Dev-зависимости: requirements-dev.txt

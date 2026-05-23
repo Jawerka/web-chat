@@ -16,6 +16,7 @@ class ErrorCode:
     VALIDATION = "validation"
     AUTH = "auth_error"
     RATE_LIMIT = "rate_limit_error"
+    QUOTA_EXCEEDED = "quota_exceeded"
     BUSY = "busy"
     CANCELLED = "cancelled"
     TOOL_LOOP = "tool_loop"

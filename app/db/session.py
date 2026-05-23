@@ -111,6 +111,20 @@ async def init_db() -> None:
             await conn.run_sync(Base.metadata.create_all)
         await run_sqlite_migrations(engine)
     await _sync_seed_presets()
+    await _sync_auth_bootstrap()
+
+
+async def _sync_auth_bootstrap() -> None:
+    """Admin + привязка orphan-бесед при включённой аутентификации."""
+    from app.config import settings
+
+    if not settings.auth_enabled:
+        return
+    from app.services.auth_service import ensure_bootstrap_admin
+
+    async with async_session_factory() as session:
+        await ensure_bootstrap_admin(session)
+        await session.commit()
 
 
 async def _sync_seed_presets() -> None:

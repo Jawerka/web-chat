@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f0f2f5" id="meta-theme-color">
+  <title>{{ title }}</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/chat.css">
+  <script>
+    (function () {
+      var stored = localStorage.getItem('webchat_theme');
+      var dark = stored === 'dark'
+        || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (dark) {
+        document.documentElement.classList.add('login-dark');
+        var meta = document.getElementById('meta-theme-color');
+        if (meta) meta.setAttribute('content', '#0f1419');
+      }
+    })();
+  </script>
+</head>
+<body class="login-page">
+  <script>
+    if (document.documentElement.classList.contains('login-dark')) {
+      document.body.classList.add('dark-theme');
+    }
+  </script>
+
+  <div class="login-shell">
+    <button
+      type="button"
+      class="login-theme-toggle"
+      id="login-theme-toggle"
+      title="Сменить тему"
+      aria-label="Сменить тему оформления"
+    >
+      <svg class="icon-sun" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="5"/>
+        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+      </svg>
+      <svg class="icon-moon hidden" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+      <span class="login-theme-toggle-label" id="login-theme-toggle-label">Светлая</span>
+    </button>
+
+    <main class="login-card" aria-labelledby="login-title">
+      <div class="login-brand">
+        <div class="login-brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.75">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </div>
+        <div>
+          <h1 id="login-title">web-chat</h1>
+          <p class="login-subtitle">Вход в систему</p>
+        </div>
+      </div>
+
+      <form id="login-form" class="login-form" autocomplete="on">
+        <label class="login-field">
+          <span class="login-field-label">Логин</span>
+          <input type="text" id="login-input" name="login" required autocomplete="username" autofocus placeholder="admin">
+        </label>
+        <label class="login-field">
+          <span class="login-field-label">Пароль</span>
+          <input type="password" id="password-input" name="password" required autocomplete="current-password" placeholder="••••••••">
+        </label>
+        <p class="login-error hidden" id="login-error" role="alert"></p>
+        <button type="submit" class="login-submit" id="login-submit">Войти</button>
+      </form>
+    </main>
+  </div>
+
+  <script src="/static/js/login.js"></script>
+</body>
+</html>

@@ -14,6 +14,16 @@ templates = Jinja2Templates(directory=str(_ROOT / "templates"))
 router = APIRouter(tags=["pages"])
 
 
+@router.get("/login", response_class=HTMLResponse, include_in_schema=False)
+async def login_page(request: Request) -> HTMLResponse:
+    """Страница входа."""
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"title": "Вход — web-chat"},
+    )
+
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def chat_page(request: Request) -> HTMLResponse:
     """Главная страница чата."""

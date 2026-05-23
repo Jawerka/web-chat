@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import String, cast, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ from app.db.models import (
     PromptMacro,
     PromptMacroCategory,
     User,
+    UserRole,
 )
 
 
@@ -30,21 +31,69 @@ class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def get_by_id(self, user_id: uuid.UUID) -> User | None:
+        return await self._session.get(User, user_id)
+
+    async def get_by_login(self, login: str) -> User | None:
+        normalized = login.strip().lower()
+        result = await self._session.execute(
+            select(User).where(User.login == normalized).limit(1),
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_slug(self, slug: str) -> User | None:
         result = await self._session.execute(
             select(User).where(User.slug == slug).limit(1),
         )
         return result.scalar_one_or_none()
 
-    async def get_or_create(self, *, slug: str, display_name: str) -> User:
-        existing = await self.get_by_slug(slug)
-        if existing is not None:
-            return existing
-        user = User(slug=slug, display_name=display_name)
+    async def create_user(
+        self,
+        *,
+        login: str,
+        password_hash: str,
+        display_name: str,
+        role: UserRole = UserRole.USER,
+        slug: str | None = None,
+    ) -> User:
+        login_norm = login.strip().lower()
+        slug_val = (slug or login_norm).strip().lower()
+        role_val = role.value if isinstance(role, UserRole) else str(role)
+        user = User(
+            login=login_norm,
+            slug=slug_val,
+            display_name=display_name.strip() or login_norm,
+            password_hash=password_hash,
+            role=role_val,
+            is_active=True,
+        )
         self._session.add(user)
         await self._session.flush()
         await self._session.refresh(user)
         return user
+
+    async def get_or_create_legacy_header_user(
+        self,
+        *,
+        slug: str,
+        display_name: str,
+        password_hash: str,
+    ) -> User:
+        """Только для режима X-Web-Chat-User без сессий (тесты / legacy)."""
+        existing = await self.get_by_slug(slug)
+        if existing is not None:
+            return existing
+        return await self.create_user(
+            login=slug,
+            password_hash=password_hash,
+            display_name=display_name,
+            slug=slug,
+            role=UserRole.USER,
+        )
+
+    async def touch_last_login(self, user: User) -> None:
+        user.last_login_at = datetime.now(UTC)
+        await self._session.flush()
 
 
 class PresetRepository:
@@ -143,6 +192,33 @@ class ConversationRepository:
         if owner_user_id is not None and conversation.owner_user_id != owner_user_id:
             return None
         return conversation
+
+    async def count_by_owner(self, owner_user_id: uuid.UUID) -> int:
+        """Число бесед пользователя."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(Conversation)
+            .where(Conversation.owner_user_id == owner_user_id),
+        )
+        return int(result.scalar() or 0)
+
+    async def count_orphans(self) -> int:
+        """Беседы без owner_user_id."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(Conversation)
+            .where(Conversation.owner_user_id.is_(None)),
+        )
+        return int(result.scalar() or 0)
+
+    async def assign_orphan_conversations(self, owner_user_id: uuid.UUID) -> int:
+        """Назначить владельца всем беседам с owner_user_id IS NULL."""
+        result = await self._session.execute(
+            update(Conversation)
+            .where(Conversation.owner_user_id.is_(None))
+            .values(owner_user_id=owner_user_id),
+        )
+        return int(result.rowcount or 0)
 
     async def create(
         self,
@@ -383,6 +459,24 @@ class AttachmentRepository:
             select(Attachment.id).where(Attachment.message_id == message_id)
         )
         return list(result.scalars().all())
+
+    async def count_uploads_for_owner(
+        self,
+        owner_user_id: uuid.UUID,
+        *,
+        since: datetime,
+    ) -> int:
+        """Число вложений в беседах пользователя с created_at >= since."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(Attachment)
+            .join(Conversation, Attachment.conversation_id == Conversation.id)
+            .where(
+                Conversation.owner_user_id == owner_user_id,
+                Attachment.created_at >= since,
+            ),
+        )
+        return int(result.scalar() or 0)
 
     async def list_for_message(self, message_id: uuid.UUID) -> list[Attachment]:
         """Вложения, привязанные к сообщению."""

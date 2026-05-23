@@ -2032,7 +2032,7 @@ MVP считается готовым после завершения **этап
 | Postgres + ETL | ✅ | P2.1, `DATABASE_URL` production |
 | Multi-user пилот | [~] | P2.2: `User`, `owner_user_id`, заголовок `X-Web-Chat-User` |
 
-**Тесты:** **244** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
+**Тесты:** **246** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
 
 ---
 

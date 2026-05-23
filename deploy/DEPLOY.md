@@ -367,7 +367,7 @@ sudo ./deploy/install.sh --skip-tests
 Для доступа **вне доверенной LAN** не открывайте `8090` напрямую. Используйте HTTPS и аутентификацию на proxy.
 
 Шаблон: **[deploy/nginx-web-chat.conf.template](nginx-web-chat.conf.template)**  
-Документация: **[SECURITY.md](../SECURITY.md)**
+Документация: **[SECURITY.md](../SECURITY.md)** · вход: **[AUTH.md](AUTH.md)** · multi-user: **[MULTI-USER.md](MULTI-USER.md)**
 
 Минимальные шаги:
 

@@ -392,6 +392,16 @@ class ChatApp {
 
   async init() {
     try {
+      await this.api('/api/auth/me');
+    } catch (err) {
+      const msg = err?.message || '';
+      if (msg.includes('Требуется вход') || msg.includes('401')) {
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.replace(`/login?next=${next}`);
+        return;
+      }
+    }
+    try {
       const cfg = await this.api('/api/config');
       this.config = { ...this.config, ...cfg };
       WebChatDateTime.applyServerDefault(cfg.display_timezone);
@@ -861,6 +871,7 @@ class ChatApp {
   async api(path, options = {}) {
     const method = (options.method || 'GET').toUpperCase();
     const res = await fetch(path, {
+      credentials: 'same-origin',
       headers: { Accept: 'application/json', ...(options.headers || {}) },
       ...options,
     });

@@ -12,6 +12,7 @@ from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from pydantic import field_validator
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -117,8 +118,19 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_requests: int = 60
     rate_limit_window_sec: int = 60
-    # P2.2: изоляция бесед по заголовку X-Web-Chat-User (slug)
+    # P2.2: сессии и изоляция данных по пользователю
+    auth_enabled: bool = False
+    auth_secret: str = ""
+    auth_session_max_age_sec: int = 60 * 60 * 24 * 7
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
+    auth_bootstrap_admin_login: str = "admin"
+    auth_bootstrap_admin_password: str = "admin"
+    # Устаревший заголовок; только если auth_enabled=false
     multi_user_enabled: bool = False
+    multi_user_allow_header_fallback: bool = False
+    multi_user_max_conversations: int = 0
+    multi_user_max_uploads_per_day: int = 0
 
     @field_validator("public_base_url", "public_base_url_vpn")
     @classmethod
@@ -165,6 +177,20 @@ class Settings(BaseSettings):
     def effective_mcp_port(self) -> int:
         """Порт MCP (streamable-http); по умолчанию web_port + 1."""
         return self.mcp_port if self.mcp_port > 0 else self.web_port + 1
+
+    @model_validator(mode="after")
+    def validate_auth_settings(self) -> Settings:
+        if self.auth_enabled and len((self.auth_secret or "").strip()) < 32:
+            raise ValueError(
+                "AUTH_SECRET обязателен при AUTH_ENABLED=true (минимум 32 символа, "
+                "случайная строка; не коммитить в git)",
+            )
+        return self
+
+    @property
+    def effective_multi_user(self) -> bool:
+        """Изоляция бесед: явный multi-user или вход по сессии."""
+        return self.multi_user_enabled or self.auth_enabled
 
     def validate_timeouts(self) -> None:
         """

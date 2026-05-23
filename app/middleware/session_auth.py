@@ -1,0 +1,58 @@
+"""
+Middleware: редирект на /login и 401 для API без сессии.
+"""
+
+from __future__ import annotations
+
+from urllib.parse import quote
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, RedirectResponse, Response
+
+from app.config import settings
+from app.services.auth_service import session_user_id_from_request
+
+_PUBLIC_PREFIXES = (
+    "/static/",
+    "/favicon.ico",
+    "/login",
+    "/api/auth/login",
+)
+
+_PUBLIC_EXACT = (
+    "/api/health",
+)
+
+
+def _is_public_path(path: str) -> bool:
+    if path in _PUBLIC_EXACT:
+        return True
+    return any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES)
+
+
+class SessionAuthMiddleware(BaseHTTPMiddleware):
+    """Требовать сессию для HTML и REST (кроме публичных путей)."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        if not settings.auth_enabled:
+            return await call_next(request)
+
+        path = request.url.path
+        if _is_public_path(path):
+            return await call_next(request)
+
+        if session_user_id_from_request(request) is not None:
+            return await call_next(request)
+
+        if path.startswith("/api/"):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Требуется вход", "code": "auth_required"},
+            )
+
+        if path.startswith("/ws/"):
+            return await call_next(request)
+
+        next_url = quote(path)
+        return RedirectResponse(url=f"/login?next={next_url}", status_code=302)

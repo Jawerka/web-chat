@@ -66,11 +66,13 @@ async def test_conversation(
 
 @pytest.fixture(autouse=True)
 def _test_security_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """В тестах по умолчанию без API key и с мягким rate limit."""
+    """В тестах по умолчанию без API key, auth и с мягким rate limit."""
     from app.config import settings
     from app.security.rate_limit import reset_rate_limits_for_tests
 
     monkeypatch.setattr(settings, "api_access_key", "")
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    monkeypatch.setattr(settings, "multi_user_enabled", False)
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
     reset_rate_limits_for_tests()
     yield

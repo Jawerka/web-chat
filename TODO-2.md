@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **244** автотестов (`pytest -q`). **P0 закрыт**; **P1 закрыт**; **P2.1** production Postgres + ETL; **P2.2** пилот multi-user. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **249** автотестов (`pytest -q`). **P0 закрыт**; **P1 закрыт**; **P2.1** production Postgres + ETL; **P2.2** пилот multi-user. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -253,9 +253,10 @@
 - [x] `MULTI_USER_ENABLED` + заголовок `X-Web-Chat-User` (slug)
 - [x] Изоляция REST: список/CRUD бесед, поиск, сообщения
 - [x] Изоляция WS: отказ при чужой `conversation_id`
-- [ ] Назначить `owner_user_id` существующим беседам при включении multi-user (скрипт миграции данных)
-- [ ] Quotas (лимит бесед / upload на пользователя)
-- [ ] Роли (admin / user) и UI выбора пользователя
+- [x] Назначить `owner_user_id` существующим беседам — `python -m app.scripts.assign_conversation_owners`, [deploy/MULTI-USER.md](deploy/MULTI-USER.md)
+- [x] Quotas: `MULTI_USER_MAX_CONVERSATIONS`, `MULTI_USER_MAX_UPLOADS_PER_DAY` — [`user_quotas.py`](app/services/user_quotas.py)
+- [x] Вход login/password, сессия HttpOnly — [`auth.py`](app/api/auth.py), [`AUTH.md`](deploy/AUTH.md), bootstrap admin
+- [x] Роли в БД (`admin` / `user`); UI смены пользователя — [ ] (будущее)
 
 ## P2.4 — Orphan cleanup (пилот)
 
@@ -270,6 +271,7 @@
 - [x] `static/js/storage-migrate.js`, `webchat_storage_schema_v` (v2)
 - [x] Миграция `webchat_macro_context_full` → `webchat_macro_context_mode`
 - [x] Нормализация composer / preset drafts (`migrateToV2`)
+- [x] Позиции прокрутки чата (`webchat_scroll_positions_v1`, schema v3)
 
 ---
 
@@ -353,7 +355,7 @@ M3 — Platform v2         P2.*, Ф2, Postgres, multi-user
 - [x] SD → F5 → статус и сетка без дублей (draft dedupe + `_setGridImages` при resume; полный SD+F5 — smoke вручную при необходимости)
 - [x] img2img regenerate → в логах `init взят из user-сообщения` (`test_regression_checklist`)
 - [x] `@@macro` → один `@` в UI (`test_expand_double_at_alias` + `MACRO_MENTION_RE` / CSS `::before`)
-- [x] `pytest -q` — все зелёные (244 теста, 2026-05-23)
+- [x] `pytest -q` — все зелёные (246 тестов, 2026-05-23)
 - [x] `PUBLIC_BASE_URL` / VPN URL в health совпадают с браузером (`Host` → `public_base_url`, LAN/VPN в config)
 - [x] После обрыва WS нет вечного «генерация…» (`test_ws_disconnect_after_turn_not_busy`, `test_reconnect_manager_not_busy`)
 

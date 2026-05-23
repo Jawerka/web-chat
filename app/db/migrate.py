@@ -40,9 +40,48 @@ async def run_sqlite_migrations(engine: AsyncEngine) -> None:
             logger.info("Миграция: prompt_macros.embedding_json")
 
         await _migrate_users_and_conversation_owner(conn)
+        await _migrate_users_auth(conn)
         await _migrate_preset_prompts(conn)
         await _normalize_dashed_uuid_ids(conn)
         await _normalize_sqlite_enum_names(conn)
+
+
+async def _migrate_users_auth(conn) -> None:
+    """P2.2: login, password_hash, role для users."""
+    tables = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'"),
+    )
+    if tables.fetchone() is None:
+        return
+    result = await conn.execute(text("PRAGMA table_info(users)"))
+    cols = {row[1] for row in result.fetchall()}
+    if "login" not in cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN login VARCHAR(64)"))
+        logger.info("Миграция: users.login")
+    if "password_hash" not in cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
+        logger.info("Миграция: users.password_hash")
+    if "role" not in cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'user'"))
+        logger.info("Миграция: users.role")
+    if "is_active" not in cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL"),
+        )
+        logger.info("Миграция: users.is_active")
+    if "last_login_at" not in cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN last_login_at DATETIME"))
+        logger.info("Миграция: users.last_login_at")
+    await conn.execute(text("UPDATE users SET login = slug WHERE login IS NULL OR login = ''"))
+    await conn.execute(
+        text(
+            "UPDATE users SET password_hash = "
+            "'$2b$12$W3KcBzGgzV0mgVMxeSrWFeU5hq6FumnLBKm2Yp8QRLVyInIMIQ5h.' "
+            "WHERE password_hash IS NULL OR password_hash = ''",
+        ),
+    )
+    await conn.execute(text("UPDATE users SET role = 'user' WHERE role IS NULL OR role = ''"))
+    await conn.execute(text("UPDATE users SET is_active = 1 WHERE is_active IS NULL"))
 
 
 async def _migrate_users_and_conversation_owner(conn) -> None:

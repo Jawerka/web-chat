@@ -52,6 +52,13 @@ class MessageRole(enum.StrEnum):
     TOOL = "tool"
 
 
+class UserRole(enum.StrEnum):
+    """Роль пользователя (P2.2 auth)."""
+
+    ADMIN = "admin"
+    USER = "user"
+
+
 class PromptMacroCategory(enum.StrEnum):
     """Категория быстрого промпта (@alias)."""
 
@@ -62,18 +69,30 @@ class PromptMacroCategory(enum.StrEnum):
 
 
 class User(Base):
-    """Пользователь (P2.2 multi-user, опционально через MULTI_USER_ENABLED)."""
+    """Пользователь (логин, роль, изоляция бесед)."""
 
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    login: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(16),
+        default=UserRole.USER.value,
+        nullable=False,
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utc_now,
         server_default=func.now(),
         nullable=False,
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     conversations: Mapped[list[Conversation]] = relationship(back_populates="owner")

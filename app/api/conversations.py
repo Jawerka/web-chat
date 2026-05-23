@@ -27,6 +27,7 @@ from app.db.session import get_db
 from app.services.conversation_access import get_accessible_conversation
 from app.services.conversation_export_service import build_conversation_markdown
 from app.services.request_user import RequestUser, get_request_user, owner_user_id_for_request
+from app.services.user_quotas import ensure_can_create_conversation
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -74,6 +75,7 @@ async def create_conversation(
             )
 
     title = body.title.strip() if body.title and body.title.strip() else DEFAULT_CONVERSATION_TITLE
+    await ensure_can_create_conversation(db, user)
     conv_repo = ConversationRepository(db)
     conversation = await conv_repo.create(
         title=title,
