@@ -86,3 +86,32 @@ function mediaPreviewUrl(url) {
 
   return resolved;
 }
+
+/**
+ * Цель для галереи/удаления: asset в БД или файл на диске.
+ * @returns {{ source: 'db'|'disk', id: string, filename: string, url: string } | null}
+ */
+function parseMediaGalleryTarget(url) {
+  const full = mediaFullUrl(url);
+  if (!full) return null;
+  const path = _pathname(full);
+  const asset = path.match(/^\/media\/asset\/([0-9a-f-]{36})$/i);
+  if (asset) {
+    return {
+      source: 'db',
+      id: asset[1],
+      filename: `asset-${asset[1].slice(0, 8)}.png`,
+      url: full,
+    };
+  }
+  const gen = path.match(/^\/media\/generated\/([^/]+)$/i);
+  if (gen && !path.includes('/thumbs/')) {
+    return {
+      source: 'disk',
+      id: gen[1],
+      filename: gen[1],
+      url: full,
+    };
+  }
+  return null;
+}

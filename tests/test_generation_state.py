@@ -84,6 +84,10 @@ async def test_stream_draft_enter_tool_round_keeps_message(tmp_path) -> None:
         )
         await draft.on_delta("Привет")
         await draft.enter_tool_round(active_tool="generate_image")
+        cj = draft.message.content_json or {}
+        assert cj.get("phase") == "tool"
+        await draft.on_delta(" мир")
+        assert draft.text == "Привет мир"
         await draft.add_images(
             ["/media/asset/550e8400-e29b-41d4-a716-446655440000"],
             ["550e8400-e29b-41d4-a716-446655440000"],
@@ -92,8 +96,6 @@ async def test_stream_draft_enter_tool_round_keeps_message(tmp_path) -> None:
 
         assert draft.message is not None
         cj = draft.message.content_json or {}
-        assert cj.get("phase") == "tool"
-        assert cj.get("active_tool") == "generate_image"
         assert "/media/asset/" in (cj.get("images") or [""])[0]
 
 

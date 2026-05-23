@@ -13,6 +13,8 @@ const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
 const COMPOSER_DRAFTS_STORAGE_KEY = 'webchat_composer_drafts_v1';
 /** Вложения после перехода из галереи (скрепка → новый чат) */
 const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
+const ACCEPTED_UPLOAD_ACCEPT =
+  'image/jpeg,image/png,image/webp,image/gif,application/pdf,.docx,text/plain,text/csv';
 const PRESET_LAST_EDIT_STORAGE_KEY = 'webchat_preset_last_edit_id';
 
 /** Короткие подписи в плавающем селекте пресета чата */
@@ -30,6 +32,16 @@ const TOOL_PROGRESS_LABELS = {
   get_gallery: 'Загрузка галереи',
   extract_text: 'Извлечение текста из документа',
 };
+
+const IMG2IMG_PRESET_SLUG = 'img2img';
+const DEFAULT_CONV_TITLE = 'Новая беседа';
+
+const MSG_IMAGE_ICON_ATTACH =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+const MSG_IMAGE_ICON_SAVE =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+const MSG_IMAGE_ICON_DELETE =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 
 const MESSAGE_STATUS_HTML = `
   <div class="message-status" role="status" aria-live="polite">
@@ -265,6 +277,11 @@ class ChatApp {
     this._searchDebounceTimer = null;
     this._inlineTitleConvId = null;
     this._composerDraftDebounceTimer = null;
+    this._fileDragDepth = 0;
+    this._uploadInProgress = false;
+    this._uploadToastTimer = null;
+    this._pendingImageDeleteKey = null;
+    this._pendingImageDeleteBtn = null;
     this.log = window.appLog;
     this.promptMacros = new PromptMacrosUI(this);
 
@@ -302,6 +319,10 @@ class ChatApp {
       placeholder: document.getElementById('placeholder'),
       chatHistory: document.getElementById('chat-history'),
       chatMessages: document.getElementById('chat-messages'),
+      chatBody: document.getElementById('chat-body'),
+      chatDropOverlay: document.getElementById('chat-drop-overlay'),
+      chatDropOverlayTitle: document.getElementById('chat-drop-overlay-title'),
+      uploadToast: document.getElementById('upload-toast'),
       chatComposer: document.getElementById('chat-composer'),
       userInput: document.getElementById('user-input'),
       sendBtn: document.getElementById('send-btn'),
@@ -420,9 +441,7 @@ class ChatApp {
       this.autoResizeInput();
       this._scheduleComposerDraftSave();
     });
-    this.$.userInput.addEventListener('paste', () => {
-      requestAnimationFrame(() => this.autoResizeInput());
-    });
+    this.$.userInput.addEventListener('paste', (e) => this._onComposerPaste(e));
     window.addEventListener('resize', () => this.autoResizeInput());
     requestAnimationFrame(() => {
       this.autoResizeInput();
@@ -479,6 +498,7 @@ class ChatApp {
     });
     this._chatHistoryScrollEl()?.addEventListener('scroll', () => this._onChatScroll());
     this.$.scrollBtn.addEventListener('click', () => this.scrollToBottom(true));
+    this._bindMessageImageActions();
 
     let convTooltipResizeTimer;
     window.addEventListener('resize', () => {
@@ -543,19 +563,7 @@ class ChatApp {
       }
     });
 
-    const drop = document.getElementById('drop-zone');
-    drop.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      drop.classList.add('drag-over');
-    });
-    drop.addEventListener('dragleave', (e) => {
-      if (!drop.contains(e.relatedTarget)) drop.classList.remove('drag-over');
-    });
-    drop.addEventListener('drop', (e) => {
-      e.preventDefault();
-      drop.classList.remove('drag-over');
-      if (e.dataTransfer?.files?.length) this.uploadFiles(e.dataTransfer.files);
-    });
+    this._initComposerFileHandlers();
 
     this._onDocumentClickCancelDelete = (e) => {
       if (!this._pendingDeleteConvId) return;
@@ -2023,30 +2031,36 @@ class ChatApp {
     this.scrollToBottom(true);
   }
 
-  onTextDelta(chunk) {
-    if (!this._ensureStreamTarget()) return;
-    this.streamText += chunk;
+  _renderStreamTextToBubble(text) {
+    if (!this.streamEl) return;
+    const body = text ?? this.streamText ?? '';
+    this.streamText = body;
     if (this.streamEl.dataset) {
-      this.streamEl.dataset.rawContent = this.streamText;
+      this.streamEl.dataset.rawContent = body;
     }
-    this.hideProgress();
-    this.streamEl.classList.remove('waiting');
     const bubble = this.streamEl.querySelector('.message-bubble');
-    const displayText = stripMarkdownImages(this.streamText);
-    if (displayText) {
+    const displayText = stripMarkdownImages(body);
+    if (displayText && bubble) {
       this.streamEl.classList.add('has-content');
       bubble.innerHTML = formatMarkdown(displayText);
-    } else {
+    } else if (bubble) {
       this.streamEl.classList.remove('has-content');
       bubble.innerHTML = '';
     }
-    bubble.querySelectorAll('img').forEach((img) => {
+    bubble?.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src');
       if (src) {
         img.dataset.url = mediaFullUrl(src);
         img.src = mediaPreviewUrl(src);
       }
     });
+  }
+
+  onTextDelta(chunk) {
+    if (!this._ensureStreamTarget()) return;
+    this.hideProgress();
+    this.streamEl.classList.remove('waiting');
+    this._renderStreamTextToBubble((this.streamText || '') + chunk);
     this._scheduleScrollToBottom();
   }
 
@@ -2110,13 +2124,8 @@ class ChatApp {
       tempRow.removeAttribute('data-temp');
       tempRow.dataset.messageId = id;
       this._applyStreamUI(tempRow);
-      const bubble = this.streamEl?.querySelector('.message-bubble');
-      if (bubble) bubble.innerHTML = '';
-      if (this.streamImagesEl) this.streamImagesEl.innerHTML = '';
-      if (this.streamEl) {
-        this.streamEl.dataset.rawContent = '';
-        this.streamEl.classList.remove('has-content', 'has-images');
-        this.streamText = '';
+      if (this.streamText) {
+        this._renderStreamTextToBubble(this.streamText);
       }
       this._attachActions(tempRow, 'assistant');
       this._removeExtraStreamRows(id);
@@ -2337,16 +2346,14 @@ class ChatApp {
     if (!this.streamEl) return;
 
     const newText = target.content_text || '';
-    if (newText !== this.streamText) {
-      this.streamText = newText;
-      this.streamEl.dataset.rawContent = newText;
-      const bubble = this.streamEl.querySelector('.message-bubble');
-      if (bubble && newText) {
-        const displayText = stripMarkdownImages(newText);
-        bubble.innerHTML = formatMarkdown(displayText);
-        this.streamEl.classList.add('has-content');
-        this.hideProgress();
-      }
+    const localText = this.streamText || '';
+    const live = this.streaming || this._generationResumeActive;
+    if (
+      newText
+      && (newText.length > localText.length || (!live && newText !== localText))
+    ) {
+      this._renderStreamTextToBubble(newText);
+      this.hideProgress();
     }
 
     const urls = imageUrlsFromMessage(target);
@@ -2435,14 +2442,17 @@ class ChatApp {
     const hadRegenerate = this._regenerating;
 
     if (assistantMessageId && hasLiveStream && !hadRegenerate) {
-      this._finalizeStreamRow(assistantMessageId);
-      this._settleAllStreamRows();
-      void this._messagesFingerprintFromServer()
-        .then((fp) => {
-          this._messagesFingerprint = fp;
-          afterReload();
-        })
-        .catch(() => afterReload());
+      void (async () => {
+        await this._syncFinalAssistantText(assistantMessageId);
+        this._finalizeStreamRow(assistantMessageId);
+        this._settleAllStreamRows();
+        try {
+          this._messagesFingerprint = await this._messagesFingerprintFromServer();
+        } catch {
+          /* fingerprint optional */
+        }
+        afterReload();
+      })();
       return;
     }
 
@@ -2458,6 +2468,28 @@ class ChatApp {
   /**
    * Завершение генерации в UI: финализация черновика или перезагрузка без дублей.
    */
+  async _syncFinalAssistantText(messageId) {
+    if (!this.currentConvId || !messageId) return;
+    try {
+      const messages = await this.api(
+        `/api/conversations/${this.currentConvId}/messages?limit=50`,
+      );
+      const target = messages.find((m) => m.id === messageId);
+      if (!target) return;
+      const serverText = target.content_text || '';
+      if (serverText.length >= (this.streamText || '').length) {
+        this._renderStreamTextToBubble(serverText);
+      }
+      const urls = imageUrlsFromMessage(target);
+      if (urls.length && this.streamImagesEl) {
+        this._setGridImages(this.streamImagesEl, urls);
+        this.streamEl?.classList.add('has-images');
+      }
+    } catch (err) {
+      this.log?.warn('chat', `sync final text: ${err.message}`);
+    }
+  }
+
   async _completeGenerationUi({ preserveScroll = false } = {}) {
     this._generationResumeActive = false;
     const messageId = this.streamRow?.dataset?.messageId;
@@ -2465,6 +2497,7 @@ class ChatApp {
       this.streamRow && (this.streamText || this.streamImagesEl?.children.length),
     );
     if (hasLiveStream && messageId) {
+      await this._syncFinalAssistantText(messageId);
       this._finalizeStreamRow(messageId);
     } else {
       await this.loadMessages({ preserveScroll });
@@ -2912,24 +2945,217 @@ class ChatApp {
   _createImage(url, { scrollOnLoad = true } = {}) {
     const full = mediaFullUrl(url);
     const preview = mediaPreviewUrl(url);
+    const target = parseMediaGalleryTarget(full);
     const frame = document.createElement('div');
     frame.className = 'message-image-frame';
+    frame.dataset.fullUrl = full;
+    if (target) {
+      frame.dataset.mediaKey = `${target.source}:${target.id}`;
+    }
+
     const img = document.createElement('img');
     img.src = preview;
     img.dataset.url = full;
     img.alt = 'Изображение';
     img.loading = 'lazy';
     img.decoding = 'async';
-    img.addEventListener('click', () => this.openLightbox(full));
     if (scrollOnLoad) {
       img.addEventListener('load', () => this._scheduleScrollToBottom(), { once: true });
     }
     frame.appendChild(img);
+
+    const mediaKey = target ? `${target.source}:${target.id}` : '';
+    const deleteBtn = target
+      ? `<button type="button" class="gallery-card-action gallery-card-delete danger message-image-delete" data-media-key="${this.escapeAttr(mediaKey)}" title="Удалить" aria-label="Удалить">${MSG_IMAGE_ICON_DELETE}</button>`
+      : '';
+    frame.insertAdjacentHTML(
+      'beforeend',
+      `<button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl message-image-attach" data-full-url="${this.escapeAttr(full)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${MSG_IMAGE_ICON_ATTACH}</button>
+      <div class="gallery-card-actions">
+        <button type="button" class="gallery-card-action gallery-card-save message-image-save" data-full-url="${this.escapeAttr(full)}" title="Сохранить" aria-label="Сохранить">${MSG_IMAGE_ICON_SAVE}</button>
+        ${deleteBtn}
+      </div>`,
+    );
     return frame;
   }
 
+  _bindMessageImageActions() {
+    if (!this.$.chatMessages || this._messageImageActionsBound) return;
+    this._messageImageActionsBound = true;
+
+    this.$.chatMessages.addEventListener('click', (e) => {
+      const attachBtn = e.target.closest('.message-image-attach');
+      if (attachBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        void this._attachImageToNewChat(attachBtn.dataset.fullUrl, attachBtn);
+        return;
+      }
+      const saveBtn = e.target.closest('.message-image-save');
+      if (saveBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        void this._saveMessageImage(saveBtn.dataset.fullUrl);
+        return;
+      }
+      const deleteBtn = e.target.closest('.message-image-delete');
+      if (deleteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const frame = deleteBtn.closest('.message-image-frame');
+        if (frame) this._onMessageImageDeleteClick(frame, deleteBtn);
+        return;
+      }
+      const img = e.target.closest('.message-image-frame img');
+      if (img) {
+        e.preventDefault();
+        this.openLightbox(img.dataset.url || mediaFullUrl(img.src));
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!this._pendingImageDeleteKey) return;
+      if (e.target.closest('.message-image-delete')) return;
+      this._cancelMessageImageDelete();
+    });
+  }
+
+  _cancelMessageImageDelete() {
+    if (!this._pendingImageDeleteKey) return;
+    this._pendingImageDeleteBtn?.classList.remove('delete-armed');
+    this.$.chatMessages
+      ?.querySelectorAll(`.message-image-frame[data-media-key="${CSS.escape(this._pendingImageDeleteKey)}"]`)
+      .forEach((f) => f.classList.remove('delete-pending'));
+    if (this._pendingImageDeleteBtn) {
+      this._pendingImageDeleteBtn.title = 'Удалить';
+    }
+    this._pendingImageDeleteKey = null;
+    this._pendingImageDeleteBtn = null;
+  }
+
+  _onMessageImageDeleteClick(frame, btn) {
+    const key = frame.dataset.mediaKey;
+    if (!key) return;
+    if (this._pendingImageDeleteKey === key) {
+      void this._executeMessageImageDelete(frame);
+      return;
+    }
+    this._cancelMessageImageDelete();
+    this._pendingImageDeleteKey = key;
+    this._pendingImageDeleteBtn = btn;
+    btn.classList.add('delete-armed');
+    btn.title = 'Нажмите ещё раз для удаления';
+    frame.classList.add('delete-pending');
+  }
+
+  async _executeMessageImageDelete(frame) {
+    const key = frame.dataset.mediaKey;
+    const full = frame.dataset.fullUrl || '';
+    const target = parseMediaGalleryTarget(full);
+    if (!target) return;
+    this._cancelMessageImageDelete();
+    const path = target.source === 'db'
+      ? `/api/gallery/db/${target.id}`
+      : `/api/gallery/disk/${encodeURIComponent(target.filename)}`;
+    try {
+      const res = await fetch(path, { method: 'DELETE' });
+      if (res.status === 404) throw new Error('Уже удалено');
+      if (!res.ok && res.status !== 204) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+      const row = frame.closest('.message-row');
+      frame.remove();
+      const grid = row?.querySelector('.message-images');
+      const msgEl = row?.querySelector('.chat-message');
+      if (grid && !grid.children.length && msgEl) {
+        msgEl.classList.remove('has-images');
+      }
+      if (this.currentConvId) {
+        this._messagesFingerprint = '';
+        await this.loadMessages({ preserveScroll: true });
+      }
+      this.log?.info('chat', `Изображение удалено: ${key}`);
+    } catch (err) {
+      this.showError(err.message || 'Не удалось удалить');
+    }
+  }
+
+  async _saveMessageImage(url) {
+    const full = mediaFullUrl(url);
+    if (!full) return;
+    try {
+      const res = await fetch(full);
+      if (!res.ok) throw new Error('Не удалось загрузить файл');
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = this._filenameFromLightboxUrl(full);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      this.showError(err.message || 'Не удалось скачать');
+    }
+  }
+
+  async _attachImageToNewChat(url, btn) {
+    const full = mediaFullUrl(url);
+    const target = parseMediaGalleryTarget(full);
+    if (!full) return;
+    const prevDisabled = btn?.disabled;
+    if (btn) btn.disabled = true;
+    try {
+      const presetsRes = await fetch('/api/presets');
+      if (!presetsRes.ok) throw new Error('Не удалось загрузить пресеты');
+      const presets = await presetsRes.json();
+      const img2imgPreset = presets.find((p) => p.slug === IMG2IMG_PRESET_SLUG);
+      const convBody = { title: DEFAULT_CONV_TITLE };
+      if (img2imgPreset?.id) convBody.preset_id = img2imgPreset.id;
+      const convRes = await fetch('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(convBody),
+      });
+      if (!convRes.ok) {
+        const errBody = await convRes.json().catch(() => ({}));
+        throw new Error(errBody.detail || convRes.statusText);
+      }
+      const conv = await convRes.json();
+      const imgRes = await fetch(full);
+      if (!imgRes.ok) throw new Error('Не удалось загрузить изображение');
+      const blob = await imgRes.blob();
+      const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
+      const name = target?.filename || this._filenameFromLightboxUrl(full);
+      const file = new File([blob], name, { type: mime });
+      const fd = new FormData();
+      fd.append('files', file);
+      fd.append('conversation_id', conv.id);
+      const upRes = await fetch('/api/upload', { method: 'POST', body: fd });
+      if (!upRes.ok) {
+        const errBody = await upRes.json().catch(() => ({}));
+        throw new Error(errBody.detail || 'Ошибка загрузки вложения');
+      }
+      const uploadData = await upRes.json();
+      sessionStorage.setItem(
+        PENDING_ATTACHMENTS_KEY,
+        JSON.stringify({
+          conversation_id: conv.id,
+          attachments: uploadData.attachments || [],
+        }),
+      );
+      localStorage.setItem('webchat_conv_id', conv.id);
+      window.location.href = '/';
+    } catch (err) {
+      this.showError(err.message || 'Ошибка');
+      if (btn) btn.disabled = prevDisabled ?? false;
+    }
+  }
+
   _bindImageClicks(container) {
-    container.querySelectorAll('img').forEach((img) => {
+    container.querySelectorAll('.message-bubble img, .md-inline-img').forEach((img) => {
       img.addEventListener('click', (e) => {
         e.preventDefault();
         this.openLightbox(img.dataset.url || mediaFullUrl(img.src));
@@ -3035,6 +3261,136 @@ class ChatApp {
     }
   }
 
+  _initComposerFileHandlers() {
+    const body = this.$.chatBody;
+    const dropZone = document.getElementById('drop-zone');
+    if (!body) return;
+
+    const onDragEnter = (e) => {
+      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      this._fileDragDepth += 1;
+      if (this._fileDragDepth === 1) this._setFileDragActive(true);
+    };
+    const onDragOver = (e) => {
+      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      if (!body.classList.contains('is-file-drag')) this._setFileDragActive(true);
+    };
+    const onDragLeave = (e) => {
+      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
+      const leaving = e.currentTarget;
+      const related = e.relatedTarget;
+      if (related && leaving.contains(related)) return;
+      this._fileDragDepth = Math.max(0, this._fileDragDepth - 1);
+      if (this._fileDragDepth === 0) this._setFileDragActive(false);
+    };
+    const onDrop = (e) => {
+      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      this._fileDragDepth = 0;
+      this._setFileDragActive(false);
+      dropZone?.classList.remove('drag-over');
+      const files = this._filesFromDataTransfer(e.dataTransfer);
+      if (files.length) void this.uploadFiles(files);
+    };
+
+    body.addEventListener('dragenter', onDragEnter);
+    body.addEventListener('dragover', onDragOver);
+    body.addEventListener('dragleave', onDragLeave);
+    body.addEventListener('drop', onDrop);
+    document.addEventListener('dragend', () => {
+      this._fileDragDepth = 0;
+      this._setFileDragActive(false);
+      dropZone?.classList.remove('drag-over');
+    });
+
+    if (this.$.fileInput && !this.$.fileInput.accept) {
+      this.$.fileInput.accept = ACCEPTED_UPLOAD_ACCEPT;
+    }
+  }
+
+  _dataTransferHasFiles(dt) {
+    if (!dt?.types) return false;
+    const types = dt.types;
+    if (typeof types.includes === 'function') return types.includes('Files');
+    return Array.from(types).indexOf('Files') >= 0;
+  }
+
+  _filesFromDataTransfer(dt) {
+    if (!dt) return [];
+    if (dt.files?.length) return Array.from(dt.files);
+    const out = [];
+    if (dt.items) {
+      for (const item of dt.items) {
+        if (item.kind === 'file') {
+          const f = item.getAsFile();
+          if (f) out.push(f);
+        }
+      }
+    }
+    return out;
+  }
+
+  _filesFromClipboard(clipboardData) {
+    if (!clipboardData) return [];
+    const fromItems = [];
+    if (clipboardData.items) {
+      for (const item of clipboardData.items) {
+        if (item.kind === 'file') {
+          const f = item.getAsFile();
+          if (f) fromItems.push(f);
+        }
+      }
+    }
+    if (fromItems.length) return fromItems;
+    if (clipboardData.files?.length) return Array.from(clipboardData.files);
+    return [];
+  }
+
+  _onComposerPaste(e) {
+    const files = this._filesFromClipboard(e.clipboardData);
+    if (files.length) {
+      e.preventDefault();
+      void this.uploadFiles(files);
+      return;
+    }
+    requestAnimationFrame(() => this.autoResizeInput());
+  }
+
+  _setFileDragActive(active) {
+    this.$.chatBody?.classList.toggle('is-file-drag', active);
+    this.$.chatDropOverlay?.classList.toggle('hidden', !active);
+    this.$.chatDropOverlay?.setAttribute('aria-hidden', active ? 'false' : 'true');
+    const dropZone = document.getElementById('drop-zone');
+    dropZone?.classList.toggle('drag-over', active);
+    if (active && this.$.chatDropOverlayTitle && !this._uploadInProgress) {
+      this.$.chatDropOverlayTitle.textContent = 'Отпустите для прикрепления';
+    }
+  }
+
+  _setComposerUploading(uploading) {
+    this._uploadInProgress = uploading;
+    this.$.chatDropOverlay?.classList.toggle('is-uploading', uploading);
+    if (uploading && this.$.chatDropOverlayTitle) {
+      this.$.chatDropOverlayTitle.textContent = 'Загрузка…';
+    }
+  }
+
+  showUploadSuccess(message) {
+    const el = this.$.uploadToast;
+    if (!el) return;
+    clearTimeout(this._uploadToastTimer);
+    el.textContent = message;
+    el.classList.remove('hidden');
+    requestAnimationFrame(() => el.classList.add('is-visible'));
+    this._uploadToastTimer = setTimeout(() => {
+      el.classList.remove('is-visible');
+      setTimeout(() => el.classList.add('hidden'), 220);
+    }, 2800);
+  }
+
   async uploadFiles(fileList) {
     if (!this.currentConvId) {
       this.showError('Сначала выберите или создайте беседу');
@@ -3052,6 +3408,7 @@ class ChatApp {
     for (const f of files) fd.append('files', f);
     fd.append('conversation_id', this.currentConvId);
 
+    this._setComposerUploading(true);
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: fd });
       if (!res.ok) {
@@ -3060,21 +3417,33 @@ class ChatApp {
         throw new Error(detail || res.statusText || 'Ошибка загрузки');
       }
       const data = await res.json();
-      for (const att of data.attachments) {
+      const added = data.attachments || [];
+      for (const att of added) {
         this.pendingAttachments.push(att);
-        this.renderAttachmentChip(att);
+        this.renderAttachmentChip(att, { isNew: true });
       }
-      this.$.attachmentStrip.classList.remove('hidden');
-      this._saveComposerDraft(this.currentConvId);
+      if (added.length) {
+        this.$.attachmentStrip.classList.remove('hidden');
+        this._saveComposerDraft(this.currentConvId);
+        const names = added.map((a) => a.original_name).filter(Boolean);
+        if (added.length === 1) {
+          this.showUploadSuccess(`Прикреплён: ${names[0]}`);
+        } else {
+          this.showUploadSuccess(`Прикреплено файлов: ${added.length}`);
+        }
+      }
     } catch (err) {
       this.showError(err.message);
+    } finally {
+      this._setComposerUploading(false);
+      this._setFileDragActive(false);
     }
     if (this.$.fileInput) this.$.fileInput.value = '';
   }
 
-  renderAttachmentChip(att) {
+  renderAttachmentChip(att, { isNew = false } = {}) {
     const chip = document.createElement('div');
-    chip.className = 'attachment-chip';
+    chip.className = 'attachment-chip' + (isNew ? ' is-new' : '');
     chip.dataset.id = att.id;
     const previewUrl = att.preview_url ? mediaPreviewUrl(att.preview_url) : '';
     const preview = previewUrl

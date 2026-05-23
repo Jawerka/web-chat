@@ -284,17 +284,38 @@ Retention: `UPLOAD_RETENTION_DAYS`, `GENERATED_RETENTION_DAYS` в `.env`.
 
 ### Бэкап SQLite
 
+Рекомендуется `sqlite3` (консистентный `.backup` при работающем сервисе).
+
+**Ручной запуск** (архив по умолчанию в `data/backups/`, формат ZIP):
+
+```bash
+cd /opt/web-chat
+./scripts/backup-all.sh
+```
+
+**Production** (каталог `/var/backups/web-chat`, tar.gz):
+
 ```bash
 WEB_CHAT_ROOT=/opt/web-chat ./deploy/backup-data.sh
+```
 
-# С каталогом генераций:
-WEB_CHAT_BACKUP_GENERATED=1 WEB_CHAT_ROOT=/opt/web-chat ./deploy/backup-data.sh
+Опции через переменные окружения:
+
+```bash
+# ZIP + сгенерированные файлы и вложения:
+WEB_CHAT_BACKUP_FORMAT=zip \
+WEB_CHAT_BACKUP_GENERATED=1 \
+WEB_CHAT_BACKUP_UPLOADS=1 \
+./scripts/backup-all.sh
+
+# 7z (нужен пакет p7zip-full):
+WEB_CHAT_BACKUP_FORMAT=7z ./scripts/backup-all.sh
 ```
 
 Cron:
 
 ```cron
-0 3 * * * root WEB_CHAT_ROOT=/opt/web-chat /opt/web-chat/deploy/backup-data.sh
+0 3 * * * root cd /opt/web-chat && ./scripts/backup-all.sh
 ```
 
 ### Логи

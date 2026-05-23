@@ -161,7 +161,7 @@ class AssistantStreamDraft:
         patch.setdefault("image_asset_ids", cj.get("image_asset_ids") or [])
         await self._update_content_json(patch)
         manager.set_streaming_message(self._conversation.id, self._message.id)
-        self._buffer = ""
+        # Не очищаем _buffer: текст всех раундов LLM накапливается до финального persist.
         logger.info(
             "Черновик %s: фаза tool (%s)",
             self._message.id,

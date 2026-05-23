@@ -44,17 +44,27 @@ async def api_delete_gallery_asset(
 ) -> None:
     """Удалить изображение из БД."""
     try:
+        from app.services.gallery_service import purge_asset_from_messages
+
         await delete_gallery_asset(db, asset_id)
+        await purge_asset_from_messages(db, asset_id)
         await db.commit()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Не найдено") from exc
 
 
 @router.delete("/api/gallery/disk/{filename}", status_code=status.HTTP_204_NO_CONTENT)
-async def api_delete_gallery_disk(filename: str) -> None:
+async def api_delete_gallery_disk(
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+) -> None:
     """Удалить локальный файл из data/generated/."""
     try:
         delete_gallery_disk_file(filename)
+        from app.services.gallery_service import purge_generated_from_messages
+
+        await purge_generated_from_messages(db, filename)
+        await db.commit()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Не найдено") from exc
     except ValueError as exc:

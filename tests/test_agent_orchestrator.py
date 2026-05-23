@@ -67,3 +67,13 @@ async def test_run_turn_with_tool_call() -> None:
     assert "кота" in result.assistant_text
     assert len(result.image_urls) == 1
     assert mock_llm.complete.await_count == 2
+
+
+def test_merge_streamed_llm_text() -> None:
+    merge = AgentOrchestrator._merge_streamed_llm_text
+    assert merge("полный текст", "полный текст") == "полный текст"
+    assert merge("до tool", "до tool\n\nпосле") == "до tool\n\nпосле"
+    assert merge("длинный буфер из стрима", "корот") == "длинный буфер из стрима"
+    assert merge("", "только llm") == "только llm"
+    assert merge("только буфер", None) == "только буфер"
+    assert merge("часть A", "часть B") == "часть A\n\nчасть B"

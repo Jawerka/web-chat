@@ -4,13 +4,20 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.repositories import GalleryAssetMeta, MediaAssetRepository
+from app.db.models import Message
+from app.db.repositories import GalleryAssetMeta, MediaAssetRepository, MessageRepository
+from app.integrations.media_utils import asset_media_url, generated_media_url
+from app.services.message_builder import strip_markdown_images
+
+logger = logging.getLogger(__name__)
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     GENERATED_THUMB_ROOT,
@@ -133,6 +140,121 @@ async def list_gallery_images(
 def list_generated_images(limit: int = 50) -> list[GalleryItem]:
     """Только локальные файлы (для sync/MCP без сессии БД)."""
     return _list_local_generated_images(limit=limit)
+
+
+def _url_variants_for_asset(asset_id: uuid.UUID) -> set[str]:
+    """Все варианты URL одного MediaAsset для поиска в сообщениях."""
+    path = asset_media_url(asset_id)
+    aid = str(asset_id)
+    variants = {
+        path,
+        f"/media/asset/{aid}",
+        f"/media/asset/{aid}/thumb",
+        f"/media/asset/{aid}/preview",
+        f"/media/asset/{aid}/llm",
+        aid,
+        aid.replace("-", ""),
+    }
+    return variants
+
+
+def _url_variants_for_generated(filename: str) -> set[str]:
+    safe = filename
+    path = generated_media_url(safe)
+    stem = Path(safe).stem
+    variants = {
+        path,
+        f"/media/generated/{safe}",
+        f"/media/generated/thumbs/{stem}.webp",
+        f"/media/generated/thumbs/{stem}.jpg",
+        safe,
+        stem,
+    }
+    return variants
+
+
+def _strip_urls_from_message(
+    message: Message,
+    needles: set[str],
+) -> bool:
+    """Убрать ссылки на удалённое изображение из content_json и текста."""
+    changed = False
+    cj: dict[str, Any] = dict(message.content_json) if isinstance(message.content_json, dict) else {}
+
+    def _matches(value: str) -> bool:
+        if not value:
+            return False
+        return any(n in value for n in needles)
+
+    images = list(cj.get("images") or [])
+    new_images = [u for u in images if not _matches(str(u))]
+    if new_images != images:
+        cj["images"] = new_images
+        changed = True
+
+    asset_ids = list(cj.get("image_asset_ids") or [])
+    new_aids = [a for a in asset_ids if not _matches(str(a))]
+    if new_aids != asset_ids:
+        cj["image_asset_ids"] = new_aids
+        changed = True
+
+    parts = cj.get("parts")
+    if isinstance(parts, list):
+        new_parts = []
+        for part in parts:
+            p = dict(part)
+            if p.get("type") == "image_url":
+                url = (p.get("image_url") or {}).get("url", "")
+                if _matches(str(url)) or _matches(str(p.get("asset_id", ""))):
+                    changed = True
+                    continue
+            new_parts.append(p)
+        if changed:
+            cj["parts"] = new_parts
+
+    new_text = message.content_text or ""
+    if new_text and _matches(new_text):
+        for needle in sorted(needles, key=len, reverse=True):
+            new_text = new_text.replace(needle, "")
+        new_text = strip_markdown_images(new_text)
+        changed = True
+
+    if changed:
+        message.content_text = new_text
+        message.content_json = cj
+    return changed
+
+
+async def purge_asset_from_messages(session: AsyncSession, asset_id: uuid.UUID) -> int:
+    """Удалить упоминания asset из всех сообщений."""
+    needles = _url_variants_for_asset(asset_id)
+    return await _purge_messages_by_needles(session, needles)
+
+
+async def purge_generated_from_messages(session: AsyncSession, filename: str) -> int:
+    """Удалить упоминания generated-файла из всех сообщений."""
+    needles = _url_variants_for_generated(filename)
+    return await _purge_messages_by_needles(session, needles)
+
+
+async def _purge_messages_by_needles(session: AsyncSession, needles: set[str]) -> int:
+    if not needles:
+        return 0
+    msg_repo = MessageRepository(session)
+    updated = 0
+    fragment = max(needles, key=len)[:80]
+    candidates = await msg_repo.find_messages_containing(fragment, limit=500)
+    for message in candidates:
+        if _strip_urls_from_message(message, needles):
+            await msg_repo.update_content(
+                message,
+                content_text=message.content_text or "",
+                content_json=message.content_json,
+            )
+            updated += 1
+    if updated:
+        logger.info("Очищены ссылки на медиа в %d сообщении(ях)", updated)
+    return updated
 
 
 async def delete_gallery_asset(session: AsyncSession, asset_id: uuid.UUID) -> None:

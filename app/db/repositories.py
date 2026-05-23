@@ -393,6 +393,29 @@ class MessageRepository:
         await self._session.refresh(message)
         return message
 
+    async def find_messages_containing(
+        self,
+        fragment: str,
+        *,
+        limit: int = 200,
+    ) -> list[Message]:
+        """Сообщения, в тексте или content_json которых встречается фрагмент."""
+        if not fragment:
+            return []
+        pattern = f"%{fragment}%"
+        result = await self._session.execute(
+            select(Message)
+            .where(
+                or_(
+                    Message.content_text.like(pattern),
+                    cast(Message.content_json, String).like(pattern),
+                )
+            )
+            .order_by(Message.created_at.desc())
+            .limit(max(1, int(limit)))
+        )
+        return list(result.scalars().all())
+
     async def list_all_for_conversation(
         self,
         conversation_id: uuid.UUID,

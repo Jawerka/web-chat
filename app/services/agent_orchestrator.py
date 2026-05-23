@@ -115,6 +115,26 @@ class AgentOrchestrator:
             media_url_rewrites.update(result.url_rewrites)
 
     @staticmethod
+    def _merge_streamed_llm_text(
+        streamed: str,
+        completion_content: str | None,
+    ) -> str | None:
+        """Объединить накопленный стрим черновика с финальным content от LLM."""
+        buf = (streamed or "").strip()
+        llm = (completion_content or "").strip()
+        if buf and llm:
+            if buf == llm or llm in buf:
+                return buf
+            if buf in llm:
+                return llm
+            if len(buf) > len(llm):
+                return buf
+            if len(llm) > len(buf):
+                return llm
+            return f"{buf}\n\n{llm}".strip()
+        return buf or llm or None
+
+    @staticmethod
     def _finalize_assistant_text(
         completion_content: str | None,
         media_url_rewrites: dict[str, str],
@@ -468,7 +488,10 @@ class AgentOrchestrator:
                 msg_repo=msg_repo,
                 conv_repo=conv_repo,
                 conversation=conversation,
-                content_from_llm=completion.content,
+                content_from_llm=self._merge_streamed_llm_text(
+                    stream_draft.text,
+                    completion.content,
+                ),
                 all_image_urls=all_image_urls,
                 all_image_asset_ids=all_image_asset_ids,
                 media_url_rewrites=media_url_rewrites,
@@ -718,7 +741,10 @@ class AgentOrchestrator:
                 msg_repo=msg_repo,
                 conv_repo=conv_repo,
                 conversation=conversation,
-                content_from_llm=completion.content,
+                content_from_llm=self._merge_streamed_llm_text(
+                    stream_draft.text,
+                    completion.content,
+                ),
                 all_image_urls=all_image_urls,
                 all_image_asset_ids=all_image_asset_ids,
                 media_url_rewrites=media_url_rewrites,
