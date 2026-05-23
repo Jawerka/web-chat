@@ -15,6 +15,7 @@ from app.config import settings
 from app.db.models import Attachment
 from app.db.repositories import AttachmentRepository, ConversationRepository
 from app.integrations.document_extractor import extract_text_from_file, truncate_text
+from app.services.job_queue import JobCancelled, heavy_job_queue
 from app.integrations.upload_validation import (
     UploadBytesValidationError,
     validate_document_bytes,
@@ -215,6 +216,7 @@ class AttachmentService:
         max_chars: int | None = None,
         *,
         use_cache: bool = True,
+        cancel_event: asyncio.Event | None = None,
     ) -> str:
         """
         Извлечь текст из вложения и сохранить в БД (кэш).
@@ -239,15 +241,22 @@ class AttachmentService:
             return truncate_text(attachment.extracted_text, limit)
 
         path = self.file_path(attachment)
+        mime = attachment.mime_type
+
+        def _read_sync() -> str:
+            return extract_text_from_file(path, mime)
+
         try:
             raw = await asyncio.wait_for(
-                asyncio.to_thread(
-                    extract_text_from_file,
-                    path,
-                    attachment.mime_type,
+                heavy_job_queue.run_sync(
+                    _read_sync,
+                    cancel_event=cancel_event,
+                    operation="extract_text",
                 ),
                 timeout=float(settings.extract_timeout_sec),
             )
+        except JobCancelled as exc:
+            raise ValueError("Извлечение текста отменено") from exc
         except TimeoutError as exc:
             raise ValueError(
                 f"Извлечение текста превысило {settings.extract_timeout_sec} с",

@@ -28,6 +28,7 @@ from app.logging_setup import setup_logging
 from app.middleware.access_control import AccessControlMiddleware
 from app.middleware.public_base_url import PublicBaseUrlMiddleware
 from app.public_url import public_base_url_lan, public_base_url_vpn
+from app.services.job_queue import heavy_job_queue
 from app.services.retention_task import start_retention_background
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
     """Инициализация при старте и остановка при выключении."""
     settings.validate_timeouts()
     await init_db()
+    await heavy_job_queue.start()
     start_mcp_background()
     retention_task, retention_stop = start_retention_background()
     vpn = public_base_url_vpn()
@@ -51,6 +53,7 @@ async def lifespan(app: FastAPI):
         settings.effective_mcp_port,
     )
     yield
+    await heavy_job_queue.stop()
     retention_stop.set()
     if isinstance(retention_task, asyncio.Task):
         retention_task.cancel()

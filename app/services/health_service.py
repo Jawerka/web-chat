@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import socket
 import time
+from pathlib import Path
 from collections import deque
 from typing import Any, Literal
 
@@ -315,17 +317,38 @@ def _probe_mcp() -> ServiceProbe:
         )
 
 
+def _data_disk_extra() -> dict[str, Any]:
+    """Свободное место на томе с каталогом data/ (P1.6)."""
+    data_dir = Path("data")
+    root = data_dir if data_dir.is_dir() else Path(".")
+    usage = shutil.disk_usage(root)
+    free_gb = round(usage.free / (1024**3), 2)
+    used_pct = round(100 * usage.used / usage.total, 1) if usage.total else 0
+    return {"data_free_gb": free_gb, "data_disk_used_percent": used_pct}
+
+
 def _probe_app() -> ServiceProbe:
-    busy = len(manager.busy_conversation_ids())
+    busy = manager.active_turn_count()
+    ws_count = manager.websocket_count()
+    disk = _data_disk_extra()
+    detail = (
+        f"Порт {settings.web_port}, генераций: {busy}, WS: {ws_count}, "
+        f"свободно {disk['data_free_gb']} GB"
+    )
     return ServiceProbe(
         id="app",
         name="web-chat",
         status="ok",
         latency_ms=0,
-        detail=f"Порт {settings.web_port}, генераций: {busy}",
+        detail=detail,
         url=settings.public_base_url,
         load_percent=min(100, busy * 25) if busy else 12,
-        extra={"web_port": settings.web_port},
+        extra={
+            "web_port": settings.web_port,
+            "active_turns": busy,
+            "ws_connections": ws_count,
+            **disk,
+        },
     )
 
 

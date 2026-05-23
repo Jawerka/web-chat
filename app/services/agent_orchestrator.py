@@ -87,6 +87,7 @@ class AgentOrchestrator:
         conversation_id: uuid.UUID,
         *,
         source_user_message_id: uuid.UUID | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> ToolExecutor:
         if self._tools is not None:
             return self._tools
@@ -95,6 +96,7 @@ class AgentOrchestrator:
             conversation_id=conversation_id,
             sd_webui_url=self._sd_webui_url,
             source_user_message_id=source_user_message_id,
+            cancel_event=cancel_event,
         )
 
     @staticmethod
@@ -418,6 +420,7 @@ class AgentOrchestrator:
                     session,
                     conversation_id,
                     source_user_message_id=user_message.id,
+                    cancel_event=cancel_event,
                 )
                 for tc in completion.tool_calls:
                     fn = tc["function"]
@@ -662,6 +665,7 @@ class AgentOrchestrator:
                     session,
                     conversation_id,
                     source_user_message_id=user_message.id,
+                    cancel_event=cancel_event,
                 )
                 for tc in completion.tool_calls:
                     fn = tc["function"]

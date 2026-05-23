@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.api.ws_events import broadcast_generation_update
 from app.api.ws_manager import manager
 from app.db import session as db_session
 from app.log_context import log_turn_context
@@ -70,8 +71,12 @@ async def _run_turn_task(
         len(attachment_ids),
     )
 
+    _GEN_PUSH = frozenset({"tool_start", "tool_done", "done", "ack"})
+
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         await manager.send_json(conversation_id, {"type": event_type, **payload})
+        if event_type in _GEN_PUSH:
+            await broadcast_generation_update(conversation_id)
 
     async with db_session.async_session_factory() as session:
         llm = LLMClient(base_url=integration.llm_base_url if integration else None)
@@ -162,8 +167,12 @@ async def _run_regenerate_task(
     t0 = time.monotonic()
     logger.info("turn start: regenerate message_id=%s", message_id)
 
+    _GEN_PUSH = frozenset({"tool_start", "tool_done", "done", "ack"})
+
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         await manager.send_json(conversation_id, {"type": event_type, **payload})
+        if event_type in _GEN_PUSH:
+            await broadcast_generation_update(conversation_id)
 
     async with db_session.async_session_factory() as session:
         msg_repo = MessageRepository(session)
@@ -364,6 +373,165 @@ async def websocket_chat(websocket: WebSocket, conversation_id: uuid.UUID) -> No
         reset_request_public_base_url(base_token)
 
 
+async def _handle_ws_message(
+    websocket: WebSocket,
+    conversation_id: uuid.UUID,
+    data: dict[str, Any] | None,
+) -> bool:
+    """
+    Обработать одно входящее WS-сообщение.
+
+    Returns:
+        False — закрыть цикл (disconnect sentinel).
+    """
+    if data is None:
+        return False
+
+    msg_type = data.get("type")
+
+    if msg_type == "ping":
+        await websocket.send_json({"type": "pong"})
+        return True
+
+    if msg_type == "cancel":
+        manager.cancel_turn(conversation_id)
+        return True
+
+    if msg_type == "user_message":
+        try:
+            ip = client_ip_from_request(websocket)
+            check_rate_limit(f"{ip}:ws_message")
+        except RateLimitExceeded as rl:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": str(rl),
+                    "code": "rate_limit_error",
+                    "retry_after_sec": rl.retry_after_sec,
+                }
+            )
+            return True
+
+        if manager.is_busy(conversation_id):
+            logger.warning(
+                "WS user_message отклонён: busy (активная задача уже идёт)",
+            )
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "Уже выполняется генерация",
+                    "code": "busy",
+                }
+            )
+            return True
+
+        user_text = (data.get("text") or "").strip()
+        if not user_text:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "Пустое сообщение",
+                    "code": "validation",
+                }
+            )
+            return True
+
+        raw_ids = data.get("attachment_ids") or []
+        attachment_ids: list[uuid.UUID] = []
+        invalid_ids: list[str] = []
+        for raw in raw_ids:
+            try:
+                attachment_ids.append(uuid.UUID(str(raw)))
+            except ValueError:
+                invalid_ids.append(str(raw))
+        if invalid_ids:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": f"Невалидные attachment_id: {', '.join(invalid_ids)}",
+                    "code": "validation",
+                }
+            )
+            return True
+
+        integration = parse_integration_overrides(data)
+        logger.info(
+            "WS user_message принят: %d вложений, llm_override=%s",
+            len(attachment_ids),
+            bool(integration.llm_model or integration.llm_base_url),
+        )
+        _start_background_turn(
+            conversation_id,
+            _schedule_turn_task(
+                conversation_id,
+                user_text,
+                list(attachment_ids),
+                integration,
+            ),
+            turn_kind="user_message",
+        )
+        return True
+
+    if msg_type == "regenerate":
+        if manager.is_busy(conversation_id):
+            logger.warning(
+                "WS regenerate отклонён: busy message_id=%s",
+                data.get("message_id"),
+            )
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "Уже выполняется генерация",
+                    "code": "busy",
+                }
+            )
+            return True
+        try:
+            regen_id = uuid.UUID(str(data.get("message_id", "")))
+        except ValueError:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "Некорректный message_id",
+                    "code": "validation",
+                }
+            )
+            return True
+        integration = parse_integration_overrides(data)
+        logger.info("WS regenerate принят: message_id=%s", regen_id)
+        _start_background_turn(
+            conversation_id,
+            _schedule_regenerate_task(conversation_id, regen_id, integration),
+            turn_kind="regenerate",
+        )
+        return True
+
+    await websocket.send_json(
+        {
+            "type": "error",
+            "message": f"Неизвестный тип сообщения: {msg_type}",
+            "code": "unknown_type",
+        }
+    )
+    return True
+
+
+async def _ws_inbox_receiver(
+    websocket: WebSocket,
+    inbox: asyncio.Queue[dict[str, Any] | None],
+) -> None:
+    """Читать JSON с сокета и складывать в очередь (не блокировать обработку)."""
+    try:
+        while True:
+            data = await websocket.receive_json()
+            await inbox.put(data)
+    except WebSocketDisconnect:
+        await inbox.put(None)
+    except Exception:
+        await inbox.put(None)
+        raise
+
+
 async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
     await manager.connect(conversation_id, websocket)
     async with db_session.async_session_factory() as session:
@@ -376,138 +544,21 @@ async def _websocket_chat_loop(websocket: WebSocket, conversation_id: uuid.UUID)
         }
     )
 
+    inbox: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    receiver = asyncio.create_task(_ws_inbox_receiver(websocket, inbox))
     try:
         while True:
-            data = await websocket.receive_json()
-            msg_type = data.get("type")
-
-            if msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
-                continue
-
-            if msg_type == "cancel":
-                manager.cancel_turn(conversation_id)
-                continue
-
-            if msg_type == "user_message":
-                try:
-                    ip = client_ip_from_request(websocket)
-                    check_rate_limit(f"{ip}:ws_message")
-                except RateLimitExceeded as rl:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": str(rl),
-                            "code": "rate_limit_error",
-                            "retry_after_sec": rl.retry_after_sec,
-                        }
-                    )
-                    continue
-
-                if manager.is_busy(conversation_id):
-                    logger.warning(
-                        "WS user_message отклонён: busy (активная задача уже идёт)",
-                    )
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": "Уже выполняется генерация",
-                            "code": "busy",
-                        }
-                    )
-                    continue
-
-                user_text = (data.get("text") or "").strip()
-                if not user_text:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": "Пустое сообщение",
-                            "code": "validation",
-                        }
-                    )
-                    continue
-
-                raw_ids = data.get("attachment_ids") or []
-                attachment_ids: list[uuid.UUID] = []
-                invalid_ids: list[str] = []
-                for raw in raw_ids:
-                    try:
-                        attachment_ids.append(uuid.UUID(str(raw)))
-                    except ValueError:
-                        invalid_ids.append(str(raw))
-                if invalid_ids:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": f"Невалидные attachment_id: {', '.join(invalid_ids)}",
-                            "code": "validation",
-                        }
-                    )
-                    continue
-
-                integration = parse_integration_overrides(data)
-                logger.info(
-                    "WS user_message принят: %d вложений, llm_override=%s",
-                    len(attachment_ids),
-                    bool(integration.llm_model or integration.llm_base_url),
-                )
-                _start_background_turn(
-                    conversation_id,
-                    _schedule_turn_task(
-                        conversation_id,
-                        user_text,
-                        list(attachment_ids),
-                        integration,
-                    ),
-                    turn_kind="user_message",
-                )
-                continue
-
-            if msg_type == "regenerate":
-                if manager.is_busy(conversation_id):
-                    logger.warning(
-                        "WS regenerate отклонён: busy message_id=%s",
-                        data.get("message_id"),
-                    )
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": "Уже выполняется генерация",
-                            "code": "busy",
-                        }
-                    )
-                    continue
-                try:
-                    regen_id = uuid.UUID(str(data.get("message_id", "")))
-                except ValueError:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": "Некорректный message_id",
-                            "code": "validation",
-                        }
-                    )
-                    continue
-                integration = parse_integration_overrides(data)
-                logger.info("WS regenerate принят: message_id=%s", regen_id)
-                _start_background_turn(
-                    conversation_id,
-                    _schedule_regenerate_task(conversation_id, regen_id, integration),
-                    turn_kind="regenerate",
-                )
-                continue
-
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": f"Неизвестный тип сообщения: {msg_type}",
-                    "code": "unknown_type",
-                }
-            )
-
-    except WebSocketDisconnect:
-        manager.disconnect(conversation_id, websocket)
+            data = await inbox.get()
+            if not await _handle_ws_message(websocket, conversation_id, data):
+                break
     except Exception:
-        manager.disconnect(conversation_id, websocket)
         logger.exception("WS ошибка беседы %s", conversation_id)
+    finally:
+        receiver.cancel()
+        try:
+            await receiver
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        manager.disconnect(conversation_id, websocket)

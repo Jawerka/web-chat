@@ -223,6 +223,7 @@ class ChatSocket {
       case 'image': h.onImages?.(msg.urls || []); break;
       case 'tool_start': h.onToolStart?.(msg.name, msg.arguments); break;
       case 'tool_done': h.onToolDone?.(msg.name, msg.summary); break;
+      case 'generation_update': h.onGenerationUpdate?.(msg); break;
       case 'done': h.onDone?.(msg); break;
       case 'error': h.onWsError?.(msg.message, msg.code); break;
       default: break;
@@ -1839,6 +1840,7 @@ class ChatApp {
       onImages: (urls) => this.onImages(urls),
       onToolStart: (name) => this.onToolStart(name),
       onToolDone: () => this.onToolDone(),
+      onGenerationUpdate: (msg) => this.onGenerationUpdate(msg),
       onAck: (msg) => this.onAck(msg),
       onDone: (msg) => this.onTurnDone(msg),
       onWsError: (message, code) => this.onWsError(message, code),
@@ -2094,6 +2096,15 @@ class ChatApp {
     } else {
       this.hideProgress();
     }
+  }
+
+  onGenerationUpdate(msg) {
+    if (!msg || !this.currentConvId) return;
+    if (msg.in_progress) {
+      this._generationResumeActive = true;
+      this._ensureStreamTarget();
+    }
+    this._syncResumeProgress(msg);
   }
 
   _clearGenerationSyncTimer() {

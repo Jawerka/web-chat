@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-23):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening ([TODO-2](TODO-2.md)). Production: `deploy/install.sh` + systemd. Автотесты: **167** (`pytest -q`), парадигма — [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов). Журнал — [ниже](#журнал-прогресса).
+> **Статус реализации (2026-05-23):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). **P0 закрыт**; **P1** — job queue, generation_update WS, upload hardening ([TODO-2](TODO-2.md)). Production: `deploy/install.sh` + systemd. Автотесты: **171** (`pytest -q`), парадигма — [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов). Журнал — [ниже](#журнал-прогресса).
 
 > **Системные промпты:** эталонные тексты пресетов (txt2img, img2img, default, document_analysis) — в [`Sys-prompt.md`](Sys-prompt.md).  
 > При любых правках промптов, инструментов или поведения агента **сначала** сверяйся с `Sys-prompt.md`, затем переноси изменения в `app/db/seed.py` и при необходимости в `app/db/migrate.py` (обновление существующей БД).
@@ -2021,10 +2021,12 @@ MVP считается готовым после завершения **этап
 | User-msg при LLM error | ✅ | `tests/test_turn_user_commit.py` |
 | SSRF / trusted URL tests | ✅ | `tests/test_security_urls.py` |
 | Безопасная очистка pytest | ✅ | `tests/safety.py`, `tests/cleanup.py`, TODO §14.4 |
+| Tool anti-loop (P1.4) | ✅ | `conversation_tool_state.py`, `MAX_SAME_TOOL_PER_TURN` |
+| Upload hardening (P1.5) | ✅ | `upload_validation.py`, лимит пикселей/PDF, таймаут extract |
 | Job queue для SD | ⏳ | TODO-2 P1.2 |
 | Скилл @alias / embeddings | ⏳ | TODO-2 Ф1–Ф2 |
 
-**Тесты:** **162** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
+**Тесты:** **167** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
 
 ---
 

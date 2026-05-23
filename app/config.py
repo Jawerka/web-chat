@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     max_upload_image_pixels: int = 16_777_216
     max_pdf_pages: int = 500
     extract_timeout_sec: int = 120
+    # Параллельные потоки для SD / extract (P1.2)
+    job_queue_workers: int = 2
     max_files_per_message: int = 10
     max_tool_rounds: int = 10
     # Повтор одного SD-tool (generate_image/img2img/upscale) в одном ходе

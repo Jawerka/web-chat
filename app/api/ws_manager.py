@@ -210,5 +210,13 @@ class ConnectionManager:
             if state.active_task is not None and not state.active_task.done()
         }
 
+    def websocket_count(self) -> int:
+        """Число открытых WS-сокетов (все беседы)."""
+        return sum(len(state.websockets) for state in self._sessions.values())
+
+    def active_turn_count(self) -> int:
+        """Число бесед с незавершённой фоновой задачей."""
+        return len(self.busy_conversation_ids())
+
 
 manager = ConnectionManager()

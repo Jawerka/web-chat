@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **168** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **171+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -150,9 +150,9 @@
 
 **Задачи:**
 
-- [ ] Единая очередь job’ов (`asyncio.Queue` + worker tasks) для: txt2img, img2img, upscale, extract_text (большие файлы)
-- [ ] Cancellation token до/после каждого долгого шага (в т.ч. SD HTTP)
-- [ ] WS только для статуса и стрима; не блокировать `_websocket_chat_loop` на `receive_json` — вынести обработку в task + queue (аудит: «блокирующий цикл»)
+- [x] Единая очередь job’ов — [`job_queue.py`](app/services/job_queue.py), `JOB_QUEUE_WORKERS`; SD + extract через `heavy_job_queue`
+- [x] Cancellation token до/после каждого job (`cancel_event` → `JobCancelled`)
+- [x] WS inbox: `receive_json` в отдельной task, обработка из `asyncio.Queue` — [`websocket.py`](app/api/websocket.py)
 
 **Критерии готовности:** при зависшем SD стрим текста на **другой** вкладке не замирает > N секунд.
 
@@ -164,9 +164,10 @@
 
 **Задачи:**
 
-- [ ] Расширить WS-события: `generation_update`, `gallery_update`, `logs_append` (постепенно вытеснить poll)
-- [ ] Сохранить REST fallback для F5 и offline
-- [ ] Согласовать с `ConnectionManager` (broadcast по `conversation_id` или global channel)
+- [x] WS `generation_update` после tool_start/done/done/ack — [`ws_events.py`](app/api/ws_events.py), UI `chat.js`
+- [ ] `gallery_update`, `logs_append` (постепенно вытеснить poll)
+- [x] REST fallback для F5 — poll generation-status сохранён
+- [x] Broadcast по `conversation_id` через `ConnectionManager.send_json`
 
 **Связь с TODO.md:** [§10.7 resume](TODO.md#107-resume-генерации-после-f5) — не сломать.
 
@@ -203,7 +204,7 @@
 
 - [ ] Структурированные логи (JSON опционально), correlation id на WS-сессию
 - [ ] Канонические коды [`AppError`](audit.md) → [§13](TODO.md#13-обработка-ошибок)
-- [ ] Health: свободное место `data/`, размер WAL, число активных WS-turn
+- [x] Health: свободное место `data/`, WAL, `active_turns` / `ws_connections` в probe app
 - [ ] Разделить `except Exception` в WS: бизнес (warning) vs internal (error + log)
 
 ---

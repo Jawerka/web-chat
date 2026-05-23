@@ -29,6 +29,7 @@ from app.integrations.media_utils import (
 )
 from app.integrations.sd_tools import generate_image, get_gallery, img2img, upscale_images
 from app.services.attachment_service import AttachmentService
+from app.services.job_queue import JobCancelled, heavy_job_queue
 from app.services.media_service import MediaService
 
 logger = logging.getLogger(__name__)
@@ -59,12 +60,14 @@ class ToolExecutor:
         conversation_id: uuid.UUID | None = None,
         sd_webui_url: str | None = None,
         source_user_message_id: uuid.UUID | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> None:
         """Опциональная async-сессия БД (для оркестратора с открытой транзакцией)."""
         self._session = session
         self._conversation_id = conversation_id
         self._sd_webui_url = sd_webui_url
         self._source_user_message_id = source_user_message_id
+        self._cancel_event = cancel_event
         # Закреплённый init из user-сообщения на весь ход (несколько img2img подряд).
         self._pinned_user_init: tuple[bytes, str] | None = None
 
@@ -88,9 +91,11 @@ class ToolExecutor:
         if name == "upscale_images":
             return await self._run_sd_image_tool(upscale_images, arguments, name)
         if name == "get_gallery":
-            text = await asyncio.to_thread(
+            text = await heavy_job_queue.run_sync(
                 get_gallery,
                 limit=int(arguments.get("limit") or 20),
+                cancel_event=self._cancel_event,
+                operation="get_gallery",
             )
             return ToolResult(content=text, image_urls=[])
         if name == "extract_text":
@@ -316,7 +321,17 @@ class ToolExecutor:
         if self._sd_webui_url is not None:
             filtered["sd_webui_url"] = self._sd_webui_url
         t0 = time.monotonic()
-        text = await asyncio.to_thread(func, **filtered)
+        try:
+            text = await heavy_job_queue.run_sync(
+                lambda: func(**filtered),
+                cancel_event=self._cancel_event,
+                operation=tool_name,
+            )
+        except JobCancelled:
+            return ToolResult(
+                content="Генерация отменена",
+                image_urls=[],
+            )
         sd_elapsed = time.monotonic() - t0
         urls = self._parse_urls(text)
         logger.info(
@@ -390,14 +405,22 @@ class ToolExecutor:
         if self._session is not None:
             service = AttachmentService(self._session)
             try:
-                return await service.extract_text(attachment_id, max_chars=max_chars)
+                return await service.extract_text(
+                    attachment_id,
+                    max_chars=max_chars,
+                    cancel_event=self._cancel_event,
+                )
             except ValueError as exc:
                 return f"Ошибка extract_text: {exc}"
 
         async with async_session_factory() as session:
             service = AttachmentService(session)
             try:
-                text = await service.extract_text(attachment_id, max_chars=max_chars)
+                text = await service.extract_text(
+                    attachment_id,
+                    max_chars=max_chars,
+                    cancel_event=self._cancel_event,
+                )
             except ValueError as exc:
                 return f"Ошибка extract_text: {exc}"
             await session.commit()
