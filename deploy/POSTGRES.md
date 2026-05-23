@@ -52,6 +52,45 @@ alembic upgrade head
 DATABASE_URL=sqlite+aiosqlite:///./data/db/web_chat.sqlite alembic stamp head
 ```
 
-## Перенос данных
+## Перенос данных (ETL SQLite → Postgres)
 
-Отдельный скрипт не входит в P2.1. Рекомендация: экспорт бесед через UI/API и новая БД, либо одноразовый `pgloader` / custom ETL.
+Скрипт: `python -m app.scripts.migrate_sqlite_to_postgres`  
+Ядро: `app/db/etl_sqlite_to_postgres.py` — копирует таблицы в порядке FK, сохраняет UUID.
+
+| Таблица | Примечание |
+|---------|------------|
+| presets, prompt_macros | Сначала |
+| conversations, media_assets | media_assets содержит BLOB |
+| messages, attachments | В конце |
+
+**Перед записью:** остановите web-chat или работайте с **копией** файла SQLite.
+
+```bash
+cp data/db/web_chat.sqlite data/db/web_chat.sqlite.bak
+
+export DATABASE_URL=postgresql+asyncpg://webchat:SECRET@127.0.0.1:5432/web_chat
+export MIGRATE_TARGET_URL="$DATABASE_URL"   # опционально
+
+# Подсчёт строк без записи
+python -m app.scripts.migrate_sqlite_to_postgres \
+  --source sqlite+aiosqlite:///./data/db/web_chat.sqlite.bak \
+  --target "$DATABASE_URL" \
+  --dry-run
+
+# Полный перенос (очистка приёмника + вставка)
+python -m app.scripts.migrate_sqlite_to_postgres \
+  --source sqlite+aiosqlite:///./data/db/web_chat.sqlite.bak \
+  --target "$DATABASE_URL" \
+  --truncate-target --yes
+```
+
+Флаги:
+
+- `--truncate-target` — `TRUNCATE … CASCADE` на Postgres (нужен для непустого приёмника)
+- `--skip-media` — не копировать `media_assets` (меньше объём; картинки в чате не заработают)
+- `--batch-size` — по умолчанию 100; для BLOB автоматически ≤ 50
+- `--yes` — обязателен для реальной записи (без `--dry-run`)
+
+После успешного ETL: `DATABASE_URL` в `.env` → Postgres, перезапуск сервиса. На приёмнике выполняется `alembic upgrade head` и `stamp head`.
+
+Тесты: `tests/test_etl_sqlite_to_postgres.py` (SQLite→SQLite без живого Postgres).

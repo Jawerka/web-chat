@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **229+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — WS events, anti-loop (тихий), job queue, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **235+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — WS events, anti-loop (тихий), job queue, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -243,7 +243,7 @@
 - [x] Postgres: `init_db` → `alembic upgrade head`; pool (`DB_POOL_SIZE`)
 - [x] SQLite без изменений: `create_all` + `migrate.py`
 - [x] `python -m app.scripts.db_upgrade`, [deploy/POSTGRES.md](deploy/POSTGRES.md)
-- [ ] ETL SQLite → Postgres (отдельная задача)
+- [x] ETL SQLite → Postgres (`app/db/etl_sqlite_to_postgres.py`, `migrate_sqlite_to_postgres`, [deploy/POSTGRES.md](deploy/POSTGRES.md))
 
 ## P2.4 — Orphan cleanup (пилот)
 
