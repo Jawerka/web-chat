@@ -15,6 +15,11 @@ from app.config import settings
 from app.db.models import Attachment
 from app.db.repositories import AttachmentRepository, ConversationRepository
 from app.integrations.document_extractor import extract_text_from_file, truncate_text
+from app.integrations.upload_validation import (
+    UploadBytesValidationError,
+    validate_document_bytes,
+    validate_image_bytes,
+)
 from app.integrations.media_utils import (
     UPLOAD_ROOT,
     asset_llm_media_url,
@@ -133,6 +138,14 @@ class AttachmentService:
         if size == 0:
             raise UploadValidationError("Пустой файл", status_code=400)
 
+        try:
+            if is_image_mime(mime):
+                validate_image_bytes(content, mime)
+            else:
+                validate_document_bytes(content, mime)
+        except UploadBytesValidationError as exc:
+            raise UploadValidationError(exc.message, status_code=415) from exc
+
         attachment_id = uuid.uuid4()
         media_asset_id: uuid.UUID | None = None
         storage_path = ""
@@ -226,11 +239,19 @@ class AttachmentService:
             return truncate_text(attachment.extracted_text, limit)
 
         path = self.file_path(attachment)
-        raw = await asyncio.to_thread(
-            extract_text_from_file,
-            path,
-            attachment.mime_type,
-        )
+        try:
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(
+                    extract_text_from_file,
+                    path,
+                    attachment.mime_type,
+                ),
+                timeout=float(settings.extract_timeout_sec),
+            )
+        except TimeoutError as exc:
+            raise ValueError(
+                f"Извлечение текста превысило {settings.extract_timeout_sec} с",
+            ) from exc
         await self._repo.update_extracted_text(attachment, raw)
         return truncate_text(raw, limit)
 

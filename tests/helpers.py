@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import io
 from typing import Any
+
+from PIL import Image
 
 from httpx import AsyncClient
 from starlette.testclient import TestClient
@@ -84,6 +87,13 @@ def repo_test_title(request_nodeid: str) -> str:
     return format_test_conversation_title(request_nodeid)
 
 
+def minimal_valid_png_bytes() -> bytes:
+    """Минимальный валидный PNG 1×1 для upload-тестов (Pillow decode)."""
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), color=(1, 2, 3)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def is_pytest_conversation_title(title: str | None) -> bool:
     """Алиас для is_test_conversation_title."""
     from tests.conventions import is_test_conversation_title
@@ -93,6 +103,7 @@ def is_pytest_conversation_title(title: str | None) -> bool:
 
 __all__ = [
     "TEST_CONVERSATION_PREFIX",
+    "minimal_valid_png_bytes",
     "api_create_conversation",
     "record_created_conversation",
     "repo_create_conversation",

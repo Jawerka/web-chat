@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **162** автотестов (`pytest -q`). **P0 закрыт**; в работе **P1** (tool anti-loop, SQLite metrics). Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **167+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -191,8 +191,8 @@
 
 **Задачи:**
 
-- [ ] Magic bytes + попытка decode изображения (Pillow), лимит размеров/пикселей
-- [ ] Защита PDF/DOCX: лимит страниц/символов, таймаут extract в thread
+- [x] Magic bytes + попытка decode изображения (Pillow), лимит пикселей — [`upload_validation.py`](app/integrations/upload_validation.py), `MAX_UPLOAD_IMAGE_PIXELS`
+- [x] Защита PDF/DOCX: сигнатура, `MAX_PDF_PAGES`, `EXTRACT_TIMEOUT_SEC` на extract
 - [ ] Единый media registry (метаданные в БД = источник правды; disk — storage) — задел под P2
 
 **Связь с TODO.md:** [§1.11](TODO.md#111-обработка-вложений), `safe_filename` уже есть.

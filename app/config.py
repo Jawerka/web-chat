@@ -55,6 +55,10 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///./data/db/web_chat.sqlite"
     max_upload_mb: int = 25
+    # Максимум width×height для загружаемых изображений (защита от decompression bomb)
+    max_upload_image_pixels: int = 16_777_216
+    max_pdf_pages: int = 500
+    extract_timeout_sec: int = 120
     max_files_per_message: int = 10
     max_tool_rounds: int = 10
     # Повтор одного SD-tool (generate_image/img2img/upscale) в одном ходе

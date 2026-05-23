@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 _TESSERACT_AVAILABLE: bool | None = None
@@ -46,8 +48,13 @@ def _read_text_file(path: Path) -> str:
 def _extract_pdf(path: Path) -> str:
     import fitz
 
+    max_pages = settings.max_pdf_pages
     parts: list[str] = []
     with fitz.open(path) as doc:
+        if doc.page_count > max_pages:
+            raise ValueError(
+                f"PDF содержит {doc.page_count} страниц, лимит {max_pages}",
+            )
         for page in doc:
             parts.append(page.get_text())
     return "\n".join(parts).strip()
