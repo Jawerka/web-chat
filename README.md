@@ -258,6 +258,26 @@ sudo systemctl status web-chat
 
 Опционально `PUBLIC_BASE_URL_VPN` — если LLM в другой подсети (WireGuard).
 
+### Контекст беседы для LLM (память диалога)
+
+История **не хранится в RAM процесса** — только в SQLite (`messages`, `content_json.parts` для user, `images` / `image_asset_ids` для assistant).
+
+При каждом новом сообщении сервер:
+
+1. Читает последние `MAX_HISTORY_MESSAGES` (по умолчанию 60) user/assistant из БД.
+2. Собирает multimodal-контент: **ваши картинки** из `parts` → vision URL `/llm`; **картинки ассистента** из прошлых ответов — тоже в контекст (vision).
+3. Добавляет system prompt пресета (+ опционально каталог `@alias` при `macro_context=full`).
+
+**После перезапуска сервера** контекст восстанавливается из БД автоматически — достаточно открыть беседу и продолжить.
+
+| Сценарий | Как продолжить |
+|----------|----------------|
+| Веб-UI | Открыть беседу → WS `user_message` (как обычно) |
+| Внешнее приложение | `POST /api/conversations/{id}/turn` + poll `generation-status` и `GET .../messages` |
+| Проверить, что увидит модель | `GET /api/conversations/{id}/llm-context` |
+
+Прерванная генерация: черновик assistant остаётся в БД; UI подхватывает через `generation-status` и WS `connected`.
+
 ---
 
 ## Генерация изображений
@@ -398,6 +418,8 @@ REST: `/api/prompt-macros`.
 | GET/POST | `/conversations` | Список / создание |
 | GET/PATCH/DELETE | `/conversations/{id}` | Беседа |
 | GET | `/conversations/{id}/messages` | История (`?limit=`, `?before=`) |
+| GET | `/conversations/{id}/llm-context` | Контекст для LLM из БД (после рестарта сервера) |
+| POST | `/conversations/{id}/turn` | Запуск хода из внешнего приложения (202, без WS) |
 | GET | `/conversations/{id}/generation-status` | Resume UI |
 | GET | `/conversations/{id}/export` | Markdown |
 | PATCH/DELETE | `/conversations/{id}/messages/{msg_id}` | Редактирование / удаление |
@@ -547,5 +569,5 @@ tests/
 ## Статус
 
 - Этапы **1–11** и основные доработки v2 реализованы.
-- **203** автотеста (`pytest`).
+- **207** автотестов (`pytest`).
 - Внутренний проект для LAN; аутентификации в v1 нет — не выставляйте в открытый интернет без прокси/VPN и защиты.

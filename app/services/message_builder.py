@@ -136,6 +136,26 @@ def build_user_content(
     return parts
 
 
+def _image_urls_from_content_json(content_json: dict[str, Any]) -> list[str]:
+    """URL картинок из content_json assistant/user (images + image_asset_ids)."""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw in content_json.get("images") or []:
+        u = str(raw).strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    for raw in content_json.get("image_asset_ids") or []:
+        try:
+            u = asset_media_url(uuid.UUID(str(raw)))
+        except ValueError:
+            continue
+        if u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls
+
+
 def message_to_llm_dict(
     message: Message,
     *,
@@ -160,12 +180,39 @@ def message_to_llm_dict(
         return {"role": "user", "content": text}
 
     if message.role == MessageRole.ASSISTANT:
-        entry: dict[str, Any] = {
-            "role": "assistant",
-            "content": message.content_text,
-        }
-        if message.content_json and message.content_json.get("tool_calls"):
-            entry["tool_calls"] = message.content_json["tool_calls"]
+        cj = message.content_json if isinstance(message.content_json, dict) else {}
+        image_urls = _image_urls_from_content_json(cj) if cj else []
+        text = message.content_text or ""
+        tool_calls = cj.get("tool_calls") if cj else None
+
+        entry: dict[str, Any] = {"role": "assistant", "content": text or None}
+        if tool_calls:
+            entry["tool_calls"] = tool_calls
+            if image_urls:
+                note_urls = ", ".join(
+                    rewrite_image_url_for_llm(u) for u in image_urls[:8]
+                )
+                suffix = f"\n\n[В этом ответе были изображения (для контекста): {note_urls}]"
+                entry["content"] = (text + suffix).strip() if text else suffix.strip()
+        elif image_urls:
+            parts: list[dict[str, Any]] = []
+            if text:
+                parts.append({"type": "text", "text": text})
+            else:
+                parts.append(
+                    {
+                        "type": "text",
+                        "text": "[Изображения, сгенерированные ассистентом в этом сообщении]",
+                    },
+                )
+            for url in image_urls:
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": rewrite_image_url_for_llm(url)},
+                    },
+                )
+            entry["content"] = parts
         return entry
 
     return {"role": message.role.value, "content": message.content_text or ""}

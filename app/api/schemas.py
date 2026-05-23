@@ -165,3 +165,24 @@ class MessageUpdate(BaseModel):
         None,
         description="Только для user: полный список id вложений сообщения после редактирования",
     )
+
+
+class TurnCreate(BaseModel):
+    """Запуск хода агента через REST (внешние приложения, без WebSocket)."""
+
+    text: str = Field(..., min_length=1, max_length=100_000)
+    attachment_ids: list[UUID] = Field(default_factory=list)
+    macro_context: str | None = Field(
+        None,
+        description="selected (по умолчанию) или full — каталог @alias в system",
+    )
+    llm_base_url: str | None = Field(None, max_length=512)
+    sd_webui_url: str | None = Field(None, max_length=512)
+    model: str | None = Field(None, max_length=200)
+
+
+class TurnStartedOut(BaseModel):
+    """Ответ POST .../turn — ход в фоне, статус через generation-status и messages."""
+
+    status: str = "started"
+    conversation_id: UUID
