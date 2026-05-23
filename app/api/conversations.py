@@ -24,7 +24,9 @@ from app.services.generation_state import get_generation_state
 from app.constants import DEFAULT_CONVERSATION_TITLE
 from app.db.repositories import ConversationRepository, PresetRepository
 from app.db.session import get_db
+from app.services.conversation_access import get_accessible_conversation
 from app.services.conversation_export_service import build_conversation_markdown
+from app.services.request_user import RequestUser, get_request_user, owner_user_id_for_request
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -32,10 +34,13 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 @router.get("", response_model=list[ConversationOut])
 async def list_conversations(
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> list[ConversationOut]:
     """Список бесед, сортировка updated_at DESC."""
     repo = ConversationRepository(db)
-    conversations = await repo.list_all()
+    conversations = await repo.list_all(
+        owner_user_id=owner_user_id_for_request(user),
+    )
     busy = manager.busy_conversation_ids()
     result: list[ConversationOut] = []
     for c in conversations:
@@ -49,6 +54,7 @@ async def list_conversations(
 async def create_conversation(
     body: ConversationCreate,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> ConversationOut:
     """Создать беседу; preset_id опционален — берётся default."""
     preset_repo = PresetRepository(db)
@@ -69,7 +75,11 @@ async def create_conversation(
 
     title = body.title.strip() if body.title and body.title.strip() else DEFAULT_CONVERSATION_TITLE
     conv_repo = ConversationRepository(db)
-    conversation = await conv_repo.create(title=title, preset_id=preset.id)
+    conversation = await conv_repo.create(
+        title=title,
+        preset_id=preset.id,
+        owner_user_id=owner_user_id_for_request(user),
+    )
     return ConversationOut.model_validate(conversation)
 
 
@@ -77,8 +87,14 @@ async def create_conversation(
 async def generation_status(
     conversation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> dict:
     """Состояние фоновой генерации (для возобновления UI после перезагрузки)."""
+    if await get_accessible_conversation(db, conversation_id, user) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Беседа не найдена",
+        )
     return await get_generation_state(db, conversation_id)
 
 
@@ -89,6 +105,7 @@ async def get_llm_context(
     max_messages: int | None = None,
     q: str | None = None,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> dict:
     """
   Контекст для LLM, собранный из SQLite (переживает рестарт сервера).
@@ -97,8 +114,7 @@ async def get_llm_context(
   """
     from app.services.llm_context import build_conversation_llm_context
 
-    conv_repo = ConversationRepository(db)
-    if await conv_repo.get_by_id(conversation_id) is None:
+    if await get_accessible_conversation(db, conversation_id, user) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Беседа не найдена",
@@ -127,6 +143,7 @@ async def start_conversation_turn(
     conversation_id: uuid.UUID,
     body: TurnCreate,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> TurnStartedOut:
     """
     Запустить ход агента из внешнего приложения (без WebSocket).
@@ -136,8 +153,7 @@ async def start_conversation_turn(
     """
     from app.api.websocket import _schedule_turn_task, _start_background_turn
 
-    conv_repo = ConversationRepository(db)
-    if await conv_repo.get_by_id(conversation_id) is None:
+    if await get_accessible_conversation(db, conversation_id, user) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Беседа не найдена",
@@ -171,10 +187,10 @@ async def start_conversation_turn(
 async def get_conversation(
     conversation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> ConversationOut:
     """Одна беседа по id."""
-    repo = ConversationRepository(db)
-    conversation = await repo.get_by_id(conversation_id)
+    conversation = await get_accessible_conversation(db, conversation_id, user)
     if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -188,10 +204,11 @@ async def update_conversation(
     conversation_id: uuid.UUID,
     body: ConversationUpdate,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> ConversationOut:
     """Обновить заголовок и/или пресет беседы."""
     conv_repo = ConversationRepository(db)
-    conversation = await conv_repo.get_by_id(conversation_id)
+    conversation = await get_accessible_conversation(db, conversation_id, user)
     if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -220,17 +237,21 @@ async def update_conversation(
 async def export_conversation(
     conversation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> PlainTextResponse:
     """Скачать беседу как Markdown."""
+    conversation = await get_accessible_conversation(db, conversation_id, user)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Беседа не найдена",
+        )
     markdown = await build_conversation_markdown(db, conversation_id)
     if markdown is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Беседа не найдена",
         )
-    conv_repo = ConversationRepository(db)
-    conversation = await conv_repo.get_by_id(conversation_id)
-    assert conversation is not None
     filename = f"conversation-{conversation_id}.md"
     return PlainTextResponse(
         content=markdown,
@@ -245,10 +266,11 @@ async def export_conversation(
 async def delete_conversation(
     conversation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> None:
     """Удалить беседу и связанные сообщения."""
     repo = ConversationRepository(db)
-    conversation = await repo.get_by_id(conversation_id)
+    conversation = await get_accessible_conversation(db, conversation_id, user)
     if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -9,7 +9,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException, status
 
 from app.api.ws_events import broadcast_generation_update
 from app.api.ws_manager import manager
@@ -17,7 +17,9 @@ from app.db import session as db_session
 from app.log_context import log_turn_context, log_ws_session
 from app.security.access import check_api_key, check_ws_origin, client_ip_from_request
 from app.security.rate_limit import RateLimitExceeded, check_rate_limit
+from app.services.conversation_access import get_accessible_conversation
 from app.services.generation_state import get_generation_state
+from app.services.request_user import resolve_request_user_from_websocket
 from app.services.turn_recovery import settle_interrupted_turn
 from app.db.models import MessageRole
 from app.db.repositories import MessageRepository
@@ -592,9 +594,21 @@ async def _websocket_chat_loop_inner(
     ws_session_id: str,
 ) -> None:
     logger.debug("WS session start: %s conv=%s", ws_session_id, conversation_id)
-    await manager.connect(conversation_id, websocket)
     async with db_session.async_session_factory() as session:
+        try:
+            user = await resolve_request_user_from_websocket(websocket, session)
+        except ValueError as exc:
+            raise WebSocketException(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason=str(exc),
+            ) from exc
+        if await get_accessible_conversation(session, conversation_id, user) is None:
+            raise WebSocketException(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="Беседа не найдена",
+            )
         gen_state = await get_generation_state(session, conversation_id)
+    await manager.connect(conversation_id, websocket)
     await websocket.send_json(
         {
             "type": "connected",

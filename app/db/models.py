@@ -61,6 +61,24 @@ class PromptMacroCategory(enum.StrEnum):
     OTHER = "other"
 
 
+class User(Base):
+    """Пользователь (P2.2 multi-user, опционально через MULTI_USER_ENABLED)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    conversations: Mapped[list[Conversation]] = relationship(back_populates="owner")
+
+
 class Preset(Base):
     """Системный промпт и метаданные пресета."""
 
@@ -94,6 +112,12 @@ class Conversation(Base):
         ForeignKey("presets.id"),
         nullable=False,
     )
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utc_now,
@@ -109,6 +133,7 @@ class Conversation(Base):
     )
 
     preset: Mapped[Preset] = relationship(back_populates="conversations")
+    owner: Mapped[User | None] = relationship(back_populates="conversations")
     messages: Mapped[list[Message]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",

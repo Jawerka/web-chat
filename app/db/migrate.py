@@ -39,9 +39,51 @@ async def run_sqlite_migrations(engine: AsyncEngine) -> None:
             )
             logger.info("Миграция: prompt_macros.embedding_json")
 
+        await _migrate_users_and_conversation_owner(conn)
         await _migrate_preset_prompts(conn)
         await _normalize_dashed_uuid_ids(conn)
         await _normalize_sqlite_enum_names(conn)
+
+
+async def _migrate_users_and_conversation_owner(conn) -> None:
+    """P2.2: таблица users и conversations.owner_user_id."""
+    users = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'"),
+    )
+    if users.fetchone() is None:
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE users (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    slug VARCHAR(64) NOT NULL UNIQUE,
+                    display_name VARCHAR(120) NOT NULL,
+                    created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+                )
+                """
+            ),
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_users_slug ON users (slug)"),
+        )
+        logger.info("Миграция: таблица users")
+
+    result = await conn.execute(text("PRAGMA table_info(conversations)"))
+    conv_cols = {row[1] for row in result.fetchall()}
+    if "owner_user_id" not in conv_cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE conversations ADD COLUMN owner_user_id "
+                "TEXT REFERENCES users(id)"
+            ),
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_conversations_owner_user_id "
+                "ON conversations (owner_user_id)"
+            ),
+        )
+        logger.info("Миграция: conversations.owner_user_id")
 
 
 async def _normalize_sqlite_enum_names(conn) -> None:

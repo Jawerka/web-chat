@@ -1799,13 +1799,13 @@ Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 - [x] Inline-редактирование заголовка беседы (двойной клик в списке слева)
 - [x] Поиск по истории (`GET /api/search`, поле в сайдбаре)
 - [x] Экспорт беседы в Markdown (`GET /api/conversations/{id}/export`, кнопка в настройках)
-- [ ] PostgreSQL вместо SQLite
+- [x] PostgreSQL вместо SQLite (production, см. [deploy/POSTGRES.md](deploy/POSTGRES.md))
 - [x] API key / Origin / rate limit в приложении (2026-05-23, см. SECURITY.md)
 - [ ] Basic auth за reverse proxy (шаблон nginx — в TODO-2 P0.1)
 - [x] `img2img` + инструкции denoising (см. image-gen TODO)
 - [x] Вкладка «Галерея» (`/gallery`, ссылка в сайдбаре)
 - [ ] RAG / embeddings
-- [ ] Поддержка нескольких пользователей
+- [~] Поддержка нескольких пользователей (пилот P2.2: `MULTI_USER_ENABLED`, `X-Web-Chat-User`)
 
 ---
 
@@ -2028,9 +2028,11 @@ MVP считается готовым после завершения **этап
 | Job queue (P1.2) | ✅ | `HeavyJobQueue`, SD/extract, WS inbox |
 | generation_update (P1.3) | ✅ частично | `ws_events.py`, `chat.js`; poll остаётся fallback |
 | Health disk / WS (P1.6) | ✅ частично | `data_free_gb`, `active_turns`, `ws_connections` |
-| Скилл @alias / embeddings | ⏳ | TODO-2 Ф1–Ф2 |
+| Скилл @alias / embeddings | ✅ | TODO-2 Ф1–Ф2 |
+| Postgres + ETL | ✅ | P2.1, `DATABASE_URL` production |
+| Multi-user пилот | [~] | P2.2: `User`, `owner_user_id`, заголовок `X-Web-Chat-User` |
 
-**Тесты:** **182** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
+**Тесты:** **244** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
 
 ---
 

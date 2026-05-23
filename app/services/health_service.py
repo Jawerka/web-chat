@@ -235,12 +235,13 @@ async def _probe_sd() -> ServiceProbe:
 
 def _db_extra() -> dict[str, Any]:
     """Метаданные БД для health (SQLite WAL / размер Postgres)."""
-    from app.db.url import is_postgres_url, is_sqlite_url
+    from app.db.url import active_database_url, is_postgres_url, is_sqlite_url
 
-    if is_postgres_url():
+    url = active_database_url()
+    if is_postgres_url(url):
         return _postgres_db_extra()
-    if is_sqlite_url():
-        return _sqlite_db_extra()
+    if is_sqlite_url(url):
+        return _sqlite_db_extra(url)
     return {}
 
 
@@ -257,7 +258,7 @@ def _postgres_db_extra() -> dict[str, Any]:
     return extra
 
 
-def _sqlite_db_extra() -> dict[str, Any]:
+def _sqlite_db_extra(url: str) -> dict[str, Any]:
     """Размер WAL и счётчик retry busy (P1.1)."""
     from pathlib import Path
 
@@ -267,7 +268,6 @@ def _sqlite_db_extra() -> dict[str, Any]:
         "backend": "sqlite",
         "sqlite_busy_retries": sqlite_busy_retries_total(),
     }
-    url = settings.database_url
     if "sqlite" in url:
         part = url.split("///", 1)[-1]
         path = Path(part[2:]) if part.startswith("./") else Path(part)
@@ -280,21 +280,22 @@ def _sqlite_db_extra() -> dict[str, Any]:
 
 
 async def _probe_database() -> ServiceProbe:
-    from app.db.url import is_postgres_url
+    from app.db.url import active_database_url, is_postgres_url
 
+    url = active_database_url()
     t0 = time.perf_counter()
     try:
         async with db_session.async_session_factory() as session:
             await session.execute(text("SELECT 1"))
             db_size: str | None = None
-            if is_postgres_url():
+            if is_postgres_url(url):
                 row = await session.execute(
                     text("SELECT pg_size_pretty(pg_database_size(current_database()))"),
                 )
                 db_size = row.scalar()
         latency = (time.perf_counter() - t0) * 1000
         extra = _db_extra()
-        if is_postgres_url():
+        if is_postgres_url(url):
             detail_parts = ["PostgreSQL"]
             if db_size:
                 detail_parts.append(db_size)

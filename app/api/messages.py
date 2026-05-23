@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import AttachmentOut, MessageOut, MessageUpdate
 from app.db.models import MessageRole
-from app.db.repositories import AttachmentRepository, ConversationRepository, MessageRepository
+from app.db.repositories import AttachmentRepository, MessageRepository
 from app.db.session import get_db
 from app.services.attachment_service import AttachmentService
+from app.services.conversation_access import get_accessible_conversation
+from app.services.request_user import RequestUser, get_request_user
 from app.services.media_service import MediaService
 from app.services.message_builder import build_user_content
 
@@ -37,10 +39,10 @@ async def list_messages(
     limit: int = Query(50, ge=1, le=200),
     before: uuid.UUID | None = Query(None, description="Cursor: id сообщения"),
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> list[MessageOut]:
     """История сообщений с пагинацией (before = старше указанного id)."""
-    conv_repo = ConversationRepository(db)
-    if await conv_repo.get_by_id(conversation_id) is None:
+    if await get_accessible_conversation(db, conversation_id, user) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Беседа не найдена",

@@ -12,12 +12,34 @@ def database_url_raw(url: str | None = None) -> str:
     return (url or settings.database_url).strip()
 
 
+def active_database_url() -> str:
+    """
+    URL текущего async engine (в тестах — временная SQLite).
+
+    Если engine ещё не создан — ``settings.database_url``.
+    """
+    try:
+        from app.db import session as db_session
+
+        if db_session.engine is not None:
+            return str(db_session.engine.url)
+    except Exception:
+        pass
+    return database_url_raw()
+
+
+def _resolved_database_url(url: str | None = None) -> str:
+    if url is not None:
+        return database_url_raw(url)
+    return active_database_url()
+
+
 def is_sqlite_url(url: str | None = None) -> bool:
-    return "sqlite" in database_url_raw(url).lower()
+    return "sqlite" in _resolved_database_url(url).lower()
 
 
 def is_postgres_url(url: str | None = None) -> bool:
-    raw = database_url_raw(url).lower()
+    raw = _resolved_database_url(url).lower()
     return raw.startswith("postgresql") or raw.startswith("postgres+")
 
 

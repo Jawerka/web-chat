@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_requests: int = 60
     rate_limit_window_sec: int = 60
+    # P2.2: изоляция бесед по заголовку X-Web-Chat-User (slug)
+    multi_user_enabled: bool = False
 
     @field_validator("public_base_url", "public_base_url_vpn")
     @classmethod

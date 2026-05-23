@@ -22,7 +22,12 @@ from app.db.migrate import run_sqlite_migrations
 from app.db.models import Base, Preset
 from app.db.seed import PRESET_SEEDS
 from app.db.sqlite import configure_sqlite_engine
-from app.db.url import is_postgres_url, is_sqlite_url, normalize_async_database_url
+from app.db.url import (
+    active_database_url,
+    is_postgres_url,
+    is_sqlite_url,
+    normalize_async_database_url,
+)
 from app.integrations.media_utils import ensure_media_directories
 
 logger = logging.getLogger(__name__)
@@ -82,9 +87,9 @@ configure_database()
 
 def _ensure_db_directory() -> None:
     """Создать каталог для SQLite, если его ещё нет."""
-    if not is_sqlite_url():
+    url = active_database_url()
+    if not is_sqlite_url(url):
         return
-    url = settings.database_url
     # sqlite+aiosqlite:///./data/db/web_chat.sqlite
     path_part = url.split("///", 1)[-1]
     if path_part.startswith("./"):
@@ -98,7 +103,8 @@ async def init_db() -> None:
     """Создать таблицы, миграции и синхронизировать пресеты из seed."""
     _ensure_db_directory()
     ensure_media_directories()
-    if is_postgres_url():
+    url = active_database_url()
+    if is_postgres_url(url):
         await asyncio.to_thread(run_alembic_upgrade, "head")
     else:
         async with engine.begin() as conn:

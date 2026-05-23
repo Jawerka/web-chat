@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **235+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — WS events, anti-loop (тихий), job queue, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **244** автотестов (`pytest -q`). **P0 закрыт**; **P1 закрыт**; **P2.1** production Postgres + ETL; **P2.2** пилот multi-user. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -239,11 +239,23 @@
 ## P2.1 — PostgreSQL + Alembic (пилот)
 
 - [x] `alembic/` + начальная ревизия `2d462089f839_initial_schema`
-- [x] `app/db/url.py` — async/sync URL, определение backend
+- [x] `app/db/url.py` — async/sync URL, определение backend; `active_database_url()` для тестов
 - [x] Postgres: `init_db` → `alembic upgrade head`; pool (`DB_POOL_SIZE`)
 - [x] SQLite без изменений: `create_all` + `migrate.py`
 - [x] `python -m app.scripts.db_upgrade`, [deploy/POSTGRES.md](deploy/POSTGRES.md)
 - [x] ETL SQLite → Postgres (`app/db/etl_sqlite_to_postgres.py`, `migrate_sqlite_to_postgres`, [deploy/POSTGRES.md](deploy/POSTGRES.md))
+- [x] Production cutover + `verify_migration`; legacy SQLite read-only (`data/db/README.md`)
+- [x] Бэкап/restore: `scripts/backup-database.sh`, `data/backups/database/`, [deploy/DATABASE-BACKUP.md](deploy/DATABASE-BACKUP.md)
+
+## P2.2 — Multi-user (пилот)
+
+- [x] Модель `User`, `conversations.owner_user_id`; Alembic `860ba0641744`
+- [x] `MULTI_USER_ENABLED` + заголовок `X-Web-Chat-User` (slug)
+- [x] Изоляция REST: список/CRUD бесед, поиск, сообщения
+- [x] Изоляция WS: отказ при чужой `conversation_id`
+- [ ] Назначить `owner_user_id` существующим беседам при включении multi-user (скрипт миграции данных)
+- [ ] Quotas (лимит бесед / upload на пользователя)
+- [ ] Роли (admin / user) и UI выбора пользователя
 
 ## P2.4 — Orphan cleanup (пилот)
 
@@ -341,7 +353,7 @@ M3 — Platform v2         P2.*, Ф2, Postgres, multi-user
 - [x] SD → F5 → статус и сетка без дублей (draft dedupe + `_setGridImages` при resume; полный SD+F5 — smoke вручную при необходимости)
 - [x] img2img regenerate → в логах `init взят из user-сообщения` (`test_regression_checklist`)
 - [x] `@@macro` → один `@` в UI (`test_expand_double_at_alias` + `MACRO_MENTION_RE` / CSS `::before`)
-- [x] `pytest -q` — все зелёные (223 теста, 2026-05-23)
+- [x] `pytest -q` — все зелёные (244 теста, 2026-05-23)
 - [x] `PUBLIC_BASE_URL` / VPN URL в health совпадают с браузером (`Host` → `public_base_url`, LAN/VPN в config)
 - [x] После обрыва WS нет вечного «генерация…» (`test_ws_disconnect_after_turn_not_busy`, `test_reconnect_manager_not_busy`)
 

@@ -11,6 +11,12 @@ const SCROLL_FOLLOW_PX = 28;
 const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
 /** Черновик поля ввода и вложений по беседе (до отправки) */
 const COMPOSER_DRAFTS_STORAGE_KEY = 'webchat_composer_drafts_v1';
+/** Позиция прокрутки истории по беседе */
+const SCROLL_POSITIONS_STORAGE_KEY = 'webchat_scroll_positions_v1';
+const SCROLL_POSITION_SAVE_DEBOUNCE_MS = 400;
+const SCROLL_POSITIONS_MAX_ENTRIES = 80;
+/** Задержка перед оверлеем при смене беседы (быстрые переключения без мигания). */
+const CONV_SWITCH_OVERLAY_DELAY_MS = 140;
 /** Вложения после перехода из галереи (скрепка → новый чат) */
 const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
 const ACCEPTED_UPLOAD_ACCEPT =
@@ -292,6 +298,9 @@ class ChatApp {
     this._searchDebounceTimer = null;
     this._inlineTitleConvId = null;
     this._composerDraftDebounceTimer = null;
+    this._scrollPositionSaveTimer = null;
+    this._suppressScrollPositionSave = false;
+    this._convSwitchOverlayTimer = null;
     this._fileDragDepth = 0;
     this._uploadInProgress = false;
     this._uploadToastTimer = null;
@@ -593,13 +602,25 @@ class ChatApp {
     this._syncFloatingSettingsVisibility();
 
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) void this._tickGlobalSync();
+      if (document.hidden && this.currentConvId) {
+        this._saveComposerDraft(this.currentConvId);
+        this._saveScrollPosition(this.currentConvId);
+      } else if (!document.hidden) {
+        void this._tickGlobalSync();
+      }
     });
     window.addEventListener('pagehide', () => {
-      if (this.currentConvId) this._saveComposerDraft(this.currentConvId);
+      if (this.currentConvId) {
+        this._saveComposerDraft(this.currentConvId);
+        this._saveScrollPosition(this.currentConvId);
+      }
     });
-    window.addEventListener('pageshow', () => {
-      if (this.currentConvId) this._restoreComposerDraft(this.currentConvId);
+    window.addEventListener('pageshow', (ev) => {
+      if (!this.currentConvId) return;
+      this._restoreComposerDraft(this.currentConvId);
+      if (ev.persisted) {
+        this._restoreScrollPosition(this.currentConvId);
+      }
     });
   }
 
@@ -1254,6 +1275,71 @@ class ChatApp {
     return `${messages.length}:${last.id}:${last.role}:${streaming ? 1 : 0}:${(last.content_text || '').length}`;
   }
 
+  _messagesStructureKey(messages) {
+    if (!messages?.length) return '';
+    return messages.map((m) => m.id).join('|');
+  }
+
+  _messageContentFingerprint(m) {
+    const cj = m.content_json || {};
+    const imgN = (cj.images || []).length + (cj.image_asset_ids || []).length;
+    return [
+      m.role,
+      cj.streaming ? '1' : '0',
+      (m.content_text || '').length,
+      imgN,
+      cj.turn_phase || '',
+    ].join(':');
+  }
+
+  _activeStreamingIdFromList(messages) {
+    const streamingAssistantIds = (messages || [])
+      .filter((m) => m.role === 'assistant' && m.content_json?.streaming)
+      .map((m) => m.id);
+    return streamingAssistantIds.length
+      ? streamingAssistantIds[streamingAssistantIds.length - 1]
+      : null;
+  }
+
+  _domMessageIds() {
+    return [...this.$.chatMessages.querySelectorAll('.message-row[data-message-id]')]
+      .map((row) => row.dataset.messageId)
+      .filter(Boolean);
+  }
+
+  _tagMessageRow(row, m) {
+    if (row && m?.id) {
+      row.dataset.contentFp = this._messageContentFingerprint(m);
+    }
+    return row;
+  }
+
+  _patchMessageRowIfNeeded(m, { activeStreamingId = null } = {}) {
+    const row = this._findRow(m.id);
+    if (!row) return false;
+    const fp = this._messageContentFingerprint(m);
+    if (row.dataset.contentFp === fp) return false;
+    const newRow = this._tagMessageRow(
+      this._messageRowFromDb(m, { activeStreamingId }),
+      m,
+    );
+    row.replaceWith(newRow);
+    return true;
+  }
+
+  _beginConvSwitchOverlay() {
+    clearTimeout(this._convSwitchOverlayTimer);
+    this._convSwitchOverlayTimer = setTimeout(() => {
+      this.$.loadingOverlay?.classList.remove('hidden');
+    }, CONV_SWITCH_OVERLAY_DELAY_MS);
+  }
+
+  _endConvSwitchOverlay() {
+    clearTimeout(this._convSwitchOverlayTimer);
+    this._convSwitchOverlayTimer = null;
+    this.$.loadingOverlay?.classList.add('hidden');
+  }
+
   async _messagesFingerprintFromServer() {
     if (!this.currentConvId) return '';
     const messages = await this.api(
@@ -1567,16 +1653,18 @@ class ChatApp {
   async _openSearchHit(conversationId, messageId) {
     this._closeConvSearchPanel();
     this.closeSidebar();
-    await this.selectConversation(conversationId);
-    if (messageId) this._highlightMessage(messageId);
+    await this.selectConversation(conversationId, { scrollToMessageId: messageId || null });
   }
 
   _highlightMessage(messageId) {
-    const row = this._findMessageRow(messageId);
+    const row = this._findRow(messageId);
     if (!row) return;
     row.classList.add('search-highlight');
     row.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setTimeout(() => row.classList.remove('search-highlight'), 2600);
+    if (this.currentConvId) {
+      setTimeout(() => this._saveScrollPosition(this.currentConvId), 350);
+    }
   }
 
   exportCurrentConversation() {
@@ -1619,6 +1707,7 @@ class ChatApp {
     try {
       await this.api(`/api/conversations/${id}`, { method: 'DELETE' });
       this._clearComposerDraft(id);
+      this._clearScrollPosition(id);
       if (this.currentConvId === id) {
         this._clearCurrentConversation();
       }
@@ -1671,17 +1760,19 @@ class ChatApp {
     await this.selectConversation(conv.id);
   }
 
-  async selectConversation(id) {
+  async selectConversation(id, opts = {}) {
     const rs = this.socket?.ws?.readyState;
     if (
       this.currentConvId === id
       && (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING)
+      && !opts.scrollToMessageId
     ) {
       return;
     }
 
     if (this.currentConvId && this.currentConvId !== id) {
       this._saveComposerDraft(this.currentConvId);
+      this._saveScrollPosition(this.currentConvId);
     }
 
     this._cancelPendingDelete();
@@ -1691,7 +1782,7 @@ class ChatApp {
     this.currentConvId = id;
     localStorage.setItem('webchat_conv_id', id);
 
-    this.$.loadingOverlay.classList.remove('hidden');
+    this._beginConvSwitchOverlay();
     try {
       this.currentConv = await this.api(`/api/conversations/${id}`);
 
@@ -1708,50 +1799,137 @@ class ChatApp {
       if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = false;
 
       this._resetComposerUi();
-      this._scrollStuckToBottom = true;
-      await this.loadMessages({ scrollToEnd: true });
+
+      const scrollToMessageId = opts.scrollToMessageId || null;
+      if (scrollToMessageId) {
+        this._scrollStuckToBottom = false;
+        await this.loadMessages({ scrollToEnd: false, preserveScroll: false });
+        this._highlightMessage(scrollToMessageId);
+      } else {
+        const scrollEntry = this._getScrollPositionEntry(id);
+        const restoreScroll = scrollEntry
+          && !scrollEntry.atBottom
+          && (scrollEntry.anchorMessageId || Number.isFinite(scrollEntry.scrollTop));
+        this._scrollStuckToBottom = !restoreScroll;
+        await this.loadMessages({
+          scrollToEnd: !restoreScroll,
+          preserveScroll: false,
+          restoreScrollEntry: restoreScroll ? scrollEntry : null,
+        });
+      }
+
       await this._resumeOngoingGeneration();
       this._restoreComposerDraft(id);
       this._restorePendingAttachmentsFromSession();
       this.renderConvList();
       this.connectSocket();
     } finally {
-      this.$.loadingOverlay.classList.add('hidden');
+      this._endConvSwitchOverlay();
     }
   }
 
   /**
-   * @param {{ preserveScroll?: boolean, scrollToEnd?: boolean }} [opts]
+   * @param {{
+   *   preserveScroll?: boolean,
+   *   scrollToEnd?: boolean,
+   *   restoreScrollEntry?: object|null,
+   *   force?: boolean,
+   * }} [opts]
    */
   async loadMessages(opts = {}) {
     const scrollEl = this._chatHistoryScrollEl();
+    const restoreEntry = opts.restoreScrollEntry || null;
+    const wantScrollEnd = restoreEntry
+      ? false
+      : (
+        opts.scrollToEnd === true
+        || (opts.scrollToEnd !== false && this._scrollStuckToBottom)
+      );
     const preserve =
       opts.preserveScroll === true
-      || (opts.preserveScroll !== false && opts.scrollToEnd !== true && !this._scrollStuckToBottom);
+      || (
+        opts.preserveScroll !== false
+        && !wantScrollEnd
+        && !restoreEntry
+      );
     const scrollTopBefore = scrollEl?.scrollTop ?? 0;
     const scrollHeightBefore = scrollEl?.scrollHeight ?? 0;
 
     const messages = await this.api(`/api/conversations/${this.currentConvId}/messages?limit=100`);
-    const streamingAssistantIds = messages
-      .filter((m) => m.role === 'assistant' && m.content_json?.streaming)
-      .map((m) => m.id);
-    const activeStreamingId = streamingAssistantIds.length
-      ? streamingAssistantIds[streamingAssistantIds.length - 1]
-      : null;
+    const listFp = this._messagesFingerprintFromList(messages);
+    const structureKey = this._messagesStructureKey(messages);
+    const activeStreamingId = this._activeStreamingIdFromList(messages);
+
+    if (!opts.force && listFp === this._messagesFingerprint) {
+      return;
+    }
+
+    const domIds = this._domMessageIds();
+    const serverIds = messages.map((m) => m.id);
+    const sameStructure = domIds.join('|') === serverIds.join('|');
+
+    const afterLayout = () => {
+      if (restoreEntry) {
+        this._applyScrollRestore(restoreEntry);
+      } else if (preserve && scrollEl) {
+        const delta = scrollEl.scrollHeight - scrollHeightBefore;
+        scrollEl.scrollTop = scrollTopBefore + delta;
+        this._onChatScroll();
+      } else {
+        this.scrollToBottom(opts.scrollToEnd !== false);
+      }
+    };
+
+    if (sameStructure && !opts.force) {
+      let changed = false;
+      let domComplete = domIds.length === serverIds.length;
+      for (const m of messages) {
+        if (!this._findRow(m.id)) {
+          domComplete = false;
+          break;
+        }
+        if (this._patchMessageRowIfNeeded(m, { activeStreamingId })) changed = true;
+      }
+      if (domComplete) {
+        this.$.chatMessages.dataset.structureKey = structureKey;
+        this._messagesFingerprint = listFp;
+        if (changed || restoreEntry) afterLayout();
+        return;
+      }
+    }
+
+    const canAppendOnly = domIds.length > 0
+      && serverIds.length >= domIds.length
+      && serverIds.slice(0, domIds.length).join('|') === domIds.join('|');
+
+    if (canAppendOnly && !opts.force) {
+      for (let i = domIds.length; i < messages.length; i += 1) {
+        this.$.chatMessages.appendChild(
+          this._tagMessageRow(
+            this._messageRowFromDb(messages[i], { activeStreamingId }),
+            messages[i],
+          ),
+        );
+      }
+      this.$.chatMessages.dataset.structureKey = structureKey;
+      this._messagesFingerprint = listFp;
+      afterLayout();
+      return;
+    }
+
     const fragment = document.createDocumentFragment();
     for (const m of messages) {
-      fragment.appendChild(this._messageRowFromDb(m, { activeStreamingId }));
+      fragment.appendChild(
+        this._tagMessageRow(
+          this._messageRowFromDb(m, { activeStreamingId }),
+          m,
+        ),
+      );
     }
     this.$.chatMessages.replaceChildren(fragment);
-    this._messagesFingerprint = this._messagesFingerprintFromList(messages);
-
-    if (preserve && scrollEl) {
-      const delta = scrollEl.scrollHeight - scrollHeightBefore;
-      scrollEl.scrollTop = scrollTopBefore + delta;
-      this._onChatScroll();
-    } else {
-      this.scrollToBottom(opts.scrollToEnd !== false);
-    }
+    this.$.chatMessages.dataset.structureKey = structureKey;
+    this._messagesFingerprint = listFp;
+    afterLayout();
   }
 
   appendMessageFromDb(m) {
@@ -3294,6 +3472,194 @@ class ChatApp {
     this._writeComposerDrafts(drafts);
   }
 
+  _readScrollPositions() {
+    try {
+      const raw = localStorage.getItem(SCROLL_POSITIONS_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  _writeScrollPositions(positions) {
+    try {
+      localStorage.setItem(SCROLL_POSITIONS_STORAGE_KEY, JSON.stringify(positions));
+    } catch (err) {
+      this.log?.warn('chat', `Не удалось сохранить позицию прокрутки: ${err.message}`);
+    }
+  }
+
+  _getScrollPositionEntry(convId) {
+    if (!convId) return null;
+    const entry = this._readScrollPositions()[convId];
+    if (!entry || typeof entry !== 'object') return null;
+    return entry;
+  }
+
+  _trimScrollPositions(positions) {
+    const keys = Object.keys(positions);
+    if (keys.length <= SCROLL_POSITIONS_MAX_ENTRIES) return positions;
+    const sorted = keys
+      .map((id) => ({ id, updatedAt: Number(positions[id]?.updatedAt) || 0 }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const keep = new Set(sorted.slice(0, SCROLL_POSITIONS_MAX_ENTRIES).map((x) => x.id));
+    const out = {};
+    for (const id of keep) {
+      out[id] = positions[id];
+    }
+    return out;
+  }
+
+  _findScrollAnchor(scrollEl) {
+    if (!scrollEl) return null;
+    const containerTop = scrollEl.getBoundingClientRect().top;
+    const rows = this.$.chatMessages?.querySelectorAll('.message-row[data-message-id]');
+    if (!rows?.length) return null;
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom > containerTop + 1) {
+        return {
+          messageId: row.dataset.messageId,
+          offset: Math.round(rect.top - containerTop),
+        };
+      }
+    }
+    return null;
+  }
+
+  _saveScrollPosition(convId = this.currentConvId) {
+    if (!convId || this._suppressScrollPositionSave) return;
+    const scrollEl = this._chatHistoryScrollEl();
+    if (!scrollEl) return;
+
+    const positions = this._readScrollPositions();
+    const dist = this._distanceFromBottom(scrollEl);
+    if (dist <= SCROLL_STICKY_PX) {
+      positions[convId] = { atBottom: true, updatedAt: Date.now() };
+    } else {
+      const anchor = this._findScrollAnchor(scrollEl);
+      positions[convId] = {
+        atBottom: false,
+        scrollTop: Math.round(scrollEl.scrollTop),
+        anchorMessageId: anchor?.messageId || null,
+        anchorOffset: anchor?.offset ?? 0,
+        updatedAt: Date.now(),
+      };
+    }
+    this._writeScrollPositions(this._trimScrollPositions(positions));
+  }
+
+  _clearScrollPosition(convId) {
+    if (!convId) return;
+    const positions = this._readScrollPositions();
+    if (!positions[convId]) return;
+    delete positions[convId];
+    this._writeScrollPositions(positions);
+  }
+
+  _scheduleScrollPositionSave() {
+    if (!this.currentConvId || this._suppressScrollPositionSave) return;
+    clearTimeout(this._scrollPositionSaveTimer);
+    this._scrollPositionSaveTimer = setTimeout(
+      () => this._saveScrollPosition(this.currentConvId),
+      SCROLL_POSITION_SAVE_DEBOUNCE_MS,
+    );
+  }
+
+  _applyScrollAnchor(entry) {
+    const scrollEl = this._chatHistoryScrollEl();
+    if (!scrollEl || !entry) return false;
+
+    if (entry.anchorMessageId) {
+      const row = this._findRow(entry.anchorMessageId);
+      if (row) {
+        const containerTop = scrollEl.getBoundingClientRect().top;
+        const rowTop = row.getBoundingClientRect().top;
+        const targetOffset = Number.isFinite(entry.anchorOffset) ? entry.anchorOffset : 0;
+        scrollEl.scrollTop += (rowTop - containerTop) - targetOffset;
+        return true;
+      }
+    }
+
+    if (Number.isFinite(entry.scrollTop)) {
+      scrollEl.scrollTop = entry.scrollTop;
+      return true;
+    }
+    return false;
+  }
+
+  _settleScrollAfterImages(entry) {
+    if (!entry?.anchorMessageId) return;
+    const scrollEl = this._chatHistoryScrollEl();
+    if (!scrollEl) return;
+
+    const reapply = () => {
+      this._suppressScrollPositionSave = true;
+      this._applyScrollAnchor(entry);
+      this._onChatScroll();
+      this._suppressScrollPositionSave = false;
+    };
+
+    const imgs = scrollEl.querySelectorAll('.message-images img, .message-bubble img');
+    let pending = 0;
+    for (const img of imgs) {
+      if (!img.complete) {
+        pending += 1;
+        const done = () => {
+          pending -= 1;
+          if (pending === 0) requestAnimationFrame(reapply);
+        };
+        img.addEventListener('load', done, { once: true });
+        img.addEventListener('error', done, { once: true });
+      }
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(reapply);
+    });
+  }
+
+  _applyScrollRestore(entry) {
+    const scrollEl = this._chatHistoryScrollEl();
+    if (!scrollEl || !entry) return;
+
+    const prevOverflow = scrollEl.style.overflow;
+    scrollEl.style.overflow = 'hidden';
+    this._suppressScrollPositionSave = true;
+
+    if (entry.atBottom) {
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+      this._scrollStuckToBottom = true;
+    } else if (!this._applyScrollAnchor(entry)) {
+      if (Number.isFinite(entry.scrollTop)) {
+        scrollEl.scrollTop = entry.scrollTop;
+      }
+    } else {
+      this._scrollStuckToBottom = false;
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollEl.style.overflow = prevOverflow;
+        this._suppressScrollPositionSave = false;
+        this._onChatScroll();
+        if (!entry.atBottom) {
+          this._settleScrollAfterImages(entry);
+        }
+      });
+    });
+  }
+
+  _restoreScrollPosition(convId) {
+    const entry = this._getScrollPositionEntry(convId);
+    if (!entry || entry.atBottom) {
+      this.scrollToBottom(true);
+      return;
+    }
+    this._applyScrollRestore(entry);
+  }
+
   _resetComposerUi() {
     this.pendingAttachments = [];
     this.$.attachmentStrip.innerHTML = '';
@@ -3750,6 +4116,7 @@ class ChatApp {
       this._scrollStuckToBottom = false;
     }
     this._updateScrollBtn();
+    this._scheduleScrollPositionSave();
   }
 
   _scheduleScrollToBottom(force = false) {
@@ -3774,6 +4141,9 @@ class ChatApp {
       this._scrollStuckToBottom = false;
     }
     this._updateScrollBtn();
+    if (force && this.currentConvId) {
+      this._saveScrollPosition(this.currentConvId);
+    }
   }
 
   _updateScrollBtn() {

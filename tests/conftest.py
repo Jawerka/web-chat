@@ -91,8 +91,14 @@ def _track_created_conversations(monkeypatch: pytest.MonkeyPatch) -> None:
         *,
         title: str,
         preset_id,
+        owner_user_id=None,
     ):
-        conversation = await original_create(self, title=title, preset_id=preset_id)
+        conversation = await original_create(
+            self,
+            title=title,
+            preset_id=preset_id,
+            owner_user_id=owner_user_id,
+        )
         if should_register_test_conversation(title):
             record_test_conversation_id(conversation.id)
         return conversation

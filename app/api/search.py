@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas import MessageSearchHit
 from app.db.repositories import ConversationRepository, MessageRepository
 from app.db.session import get_db
+from app.services.request_user import RequestUser, get_request_user, owner_user_id_for_request
 from app.services.search_snippet import build_search_snippet, search_tokens
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -26,18 +27,21 @@ async def search_messages(
     ),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> list[MessageSearchHit]:
     """Найти беседы и сообщения: совпадение любого слова из запроса."""
     words = search_tokens(q)
     if not words:
         return []
 
+    owner_id = owner_user_id_for_request(user)
     msg_repo = MessageRepository(db)
     conv_repo = ConversationRepository(db)
 
     rows = await msg_repo.search_in_content(
         words,
         conversation_id=conversation_id,
+        owner_user_id=owner_id,
         limit=limit,
     )
     hits: list[MessageSearchHit] = [
@@ -59,7 +63,11 @@ async def search_messages(
     seen_convs = {h.conversation_id for h in hits}
     title_limit = max(0, limit - len(hits))
     if title_limit:
-        for conv in await conv_repo.search_by_title_words(words, limit=title_limit):
+        for conv in await conv_repo.search_by_title_words(
+            words,
+            limit=title_limit,
+            owner_user_id=owner_id,
+        ):
             if conv.id in seen_convs:
                 continue
             hits.append(

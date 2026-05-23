@@ -20,7 +20,31 @@ from app.db.models import (
     Preset,
     PromptMacro,
     PromptMacroCategory,
+    User,
 )
+
+
+class UserRepository:
+    """Пользователи (P2.2)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_by_slug(self, slug: str) -> User | None:
+        result = await self._session.execute(
+            select(User).where(User.slug == slug).limit(1),
+        )
+        return result.scalar_one_or_none()
+
+    async def get_or_create(self, *, slug: str, display_name: str) -> User:
+        existing = await self.get_by_slug(slug)
+        if existing is not None:
+            return existing
+        user = User(slug=slug, display_name=display_name)
+        self._session.add(user)
+        await self._session.flush()
+        await self._session.refresh(user)
+        return user
 
 
 class PresetRepository:
@@ -90,28 +114,49 @@ class ConversationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def list_all(self) -> list[Conversation]:
+    async def list_all(
+        self,
+        *,
+        owner_user_id: uuid.UUID | None = None,
+    ) -> list[Conversation]:
         """Список бесед, новые сверху (updated_at DESC)."""
-        result = await self._session.execute(
-            select(Conversation).order_by(Conversation.updated_at.desc())
-        )
+        stmt = select(Conversation).order_by(Conversation.updated_at.desc())
+        if owner_user_id is not None:
+            stmt = stmt.where(Conversation.owner_user_id == owner_user_id)
+        result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
     async def get_by_id(self, conversation_id: uuid.UUID) -> Conversation | None:
         """Беседа по id или None."""
         return await self._session.get(Conversation, conversation_id)
 
+    async def get_by_id_for_owner(
+        self,
+        conversation_id: uuid.UUID,
+        *,
+        owner_user_id: uuid.UUID | None,
+    ) -> Conversation | None:
+        """Беседа по id с проверкой владельца (P2.2). owner_user_id=None — без фильтра."""
+        conversation = await self.get_by_id(conversation_id)
+        if conversation is None:
+            return None
+        if owner_user_id is not None and conversation.owner_user_id != owner_user_id:
+            return None
+        return conversation
+
     async def create(
         self,
         *,
         title: str,
         preset_id: uuid.UUID,
+        owner_user_id: uuid.UUID | None = None,
     ) -> Conversation:
         """Создать беседу."""
         now = datetime.now(UTC)
         conversation = Conversation(
             title=title,
             preset_id=preset_id,
+            owner_user_id=owner_user_id,
             created_at=now,
             updated_at=now,
         )
@@ -125,17 +170,21 @@ class ConversationRepository:
         words: list[str],
         *,
         limit: int = 20,
+        owner_user_id: uuid.UUID | None = None,
     ) -> list[Conversation]:
         """Беседы, в названии которых есть хотя бы одно из слов."""
         if not words:
             return []
         filters = [func.lower(Conversation.title).contains(w.lower()) for w in words]
-        result = await self._session.execute(
+        stmt = (
             select(Conversation)
             .where(or_(*filters))
             .order_by(Conversation.updated_at.desc())
             .limit(limit)
         )
+        if owner_user_id is not None:
+            stmt = stmt.where(Conversation.owner_user_id == owner_user_id)
+        result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
     async def update(
@@ -442,6 +491,7 @@ class MessageRepository:
         words: list[str],
         *,
         conversation_id: uuid.UUID | None = None,
+        owner_user_id: uuid.UUID | None = None,
         limit: int = 50,
     ) -> list[tuple[Message, Conversation]]:
         """Поиск по content_text: хотя бы одно слово совпало (user/assistant)."""
@@ -460,6 +510,8 @@ class MessageRepository:
                 or_(*word_filters),
             )
         )
+        if owner_user_id is not None:
+            stmt = stmt.where(Conversation.owner_user_id == owner_user_id)
         if conversation_id is not None:
             stmt = stmt.where(Message.conversation_id == conversation_id)
         stmt = stmt.order_by(Message.created_at.desc()).limit(limit)

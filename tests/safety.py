@@ -17,9 +17,21 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_db_url(url: str) -> str:
-    if "///" in url:
-        return url.split("///", 1)[-1]
-    return url
+    u = url.strip()
+    if "///" in u:
+        return u.split("///", 1)[-1]
+    lower = u.lower()
+    for prefix in (
+        "postgresql+asyncpg://",
+        "postgresql+psycopg2://",
+        "postgresql+psycopg://",
+        "postgresql://",
+    ):
+        if lower.startswith(prefix):
+            return "postgresql://" + u[len(prefix) :]
+    if lower.startswith("postgres://"):
+        return "postgresql://" + u[len("postgres://") :]
+    return u
 
 
 def production_database_url() -> str:
@@ -60,7 +72,7 @@ def assert_not_using_production_database() -> None:
     current = str(engine.url)
     if is_production_database_url(current):
         msg = (
-            "Тест подключён к production SQLite. "
+            "Тест подключён к production БД (DATABASE_URL из .env). "
             "Используйте фикстуру client, safe_configure_database() "
             "или db_session.async_session_factory() после configure tmp DB."
         )
