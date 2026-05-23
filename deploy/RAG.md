@@ -25,10 +25,18 @@ RAG_CONTEXT_MAX_CHARS=8000
 3. `POST /api/attachments/{id}/index-rag` — переиндексация вручную.
 4. При `RAG_AUTO_INJECT=true` — релевантные фрагменты добавляются в system prompt (как `macro_context=semantic` для макросов).
 
+## UI в чате
+
+При `RAG_ENABLED=true` в composer появляется кнопка с иконкой документа:
+
+- **Выкл** — RAG не подмешивается (если не включён `RAG_AUTO_INJECT` на сервере).
+- **Вкл** — при отправке в system prompt добавляются top-K фрагментов; над полем ввода показывается превью совпадений (debounce 400 ms, от 3 символов).
+
+Состояние кнопки хранится в `sessionStorage` (`webchat_document_rag_enabled`).
+
 ## Огранения пилота
 
 - Только документы текущей беседы (не глобальный корпус).
-- Без UI-переключателя (только env).
 - Keyword fallback, если embeddings недоступны.
 
 См. [TODO-2.md](../TODO-2.md) § P2.3.

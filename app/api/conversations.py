@@ -171,6 +171,7 @@ async def start_conversation_turn(
         llm_base_url=parse_optional_url(body.llm_base_url),
         sd_webui_url=parse_optional_url(body.sd_webui_url),
         macro_context=parse_macro_context_mode(body.macro_context),
+        document_rag=bool(body.document_rag),
     )
     _start_background_turn(
         conversation_id,

@@ -131,6 +131,7 @@ function imageUrlKey(url) {
 /** sessionStorage: selected | full | semantic (Ф1/Ф2) */
 const MACRO_CONTEXT_MODE_KEY = 'webchat_macro_context_mode';
 const MACRO_CONTEXT_FULL_LEGACY = 'webchat_macro_context_full';
+const DOCUMENT_RAG_KEY = 'webchat_document_rag_enabled';
 
 const MSG_ICONS = {
   copy: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
@@ -299,6 +300,8 @@ class ChatApp {
     this._inlineTitleConvId = null;
     this._composerDraftDebounceTimer = null;
     this._scrollPositionSaveTimer = null;
+    this._ragPreviewTimer = null;
+    this._ragPreviewSeq = 0;
     this._suppressScrollPositionSave = false;
     this._convSwitchOverlayTimer = null;
     this._fileDragDepth = 0;
@@ -328,6 +331,8 @@ class ChatApp {
       logsPanel: document.getElementById('logs-panel'),
       macroInsertBtn: document.getElementById('macro-insert-btn'),
       macroContextFullBtn: document.getElementById('macro-context-full-btn'),
+      documentRagBtn: document.getElementById('document-rag-btn'),
+      documentRagPreview: document.getElementById('document-rag-preview'),
       settingsChatTitle: document.getElementById('settings-chat-title'),
       exportConversationBtn: document.getElementById('export-conversation-btn'),
       convPresetSelect: document.getElementById('conv-preset-select'),
@@ -406,6 +411,10 @@ class ChatApp {
       WebChatDateTime.applyServerDefault(cfg.display_timezone);
       this._loadIntegrationUrlFields();
     } catch { /* optional */ }
+    if (this.config.rag_enabled) {
+      this.$.documentRagBtn?.classList.remove('hidden');
+      this._initDocumentRagToggle();
+    }
     if (this.config.auth_enabled) {
       try {
         this.currentUser = await this.api('/api/auth/me');
@@ -493,6 +502,7 @@ class ChatApp {
     this.$.userInput.addEventListener('input', () => {
       this.autoResizeInput();
       this._scheduleComposerDraftSave();
+      this._scheduleRagPreview();
     });
     this.$.userInput.addEventListener('paste', (e) => this._onComposerPaste(e));
     window.addEventListener('resize', () => this.autoResizeInput());
@@ -1846,6 +1856,8 @@ class ChatApp {
     this.$.sendBtn.disabled = true;
     if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = true;
     if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = true;
+    if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = true;
+    this._hideRagPreview();
     if (this.streaming) this.endStreaming();
   }
 
@@ -1907,8 +1919,11 @@ class ChatApp {
       this.$.sendBtn.disabled = false;
       if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = false;
       if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = false;
+      if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = false;
 
       this._resetComposerUi();
+      this._updateDocumentRagToggleUi();
+      this._scheduleRagPreview();
 
       const scrollToMessageId = opts.scrollToMessageId || null;
       if (scrollToMessageId) {
@@ -4650,7 +4665,116 @@ class ChatApp {
     if (model) payload.model = model;
     const macroMode = this.getMacroContextMode();
     if (macroMode !== 'selected') payload.macro_context = macroMode;
+    if (this.getDocumentRagEnabled()) payload.document_rag = true;
     return payload;
+  }
+
+  getDocumentRagEnabled() {
+    if (!this.config.rag_enabled) return false;
+    return sessionStorage.getItem(DOCUMENT_RAG_KEY) === '1';
+  }
+
+  _initDocumentRagToggle() {
+    const btn = this.$.documentRagBtn;
+    if (!btn) return;
+    this._updateDocumentRagToggleUi();
+    btn.addEventListener('click', () => {
+      const next = !this.getDocumentRagEnabled();
+      if (next) {
+        sessionStorage.setItem(DOCUMENT_RAG_KEY, '1');
+      } else {
+        sessionStorage.removeItem(DOCUMENT_RAG_KEY);
+        this._hideRagPreview();
+      }
+      this._updateDocumentRagToggleUi();
+      this._scheduleRagPreview();
+      this.log?.info('rag', next ? 'Контекст документов включён' : 'Контекст документов выключен');
+    });
+  }
+
+  _updateDocumentRagToggleUi() {
+    const btn = this.$.documentRagBtn;
+    if (!btn) return;
+    const on = this.getDocumentRagEnabled();
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.title = on
+      ? 'RAG по документам: вкл (фрагменты в контексте модели)'
+      : 'RAG по документам: выкл (нажмите для поиска по PDF/DOCX беседы)';
+  }
+
+  _scheduleRagPreview() {
+    if (!this.getDocumentRagEnabled() || !this.currentConvId) {
+      this._hideRagPreview();
+      return;
+    }
+    const q = (this.$.userInput?.value || '').trim();
+    if (q.length < 3) {
+      this._hideRagPreview();
+      return;
+    }
+    clearTimeout(this._ragPreviewTimer);
+    this._ragPreviewTimer = setTimeout(() => {
+      void this._fetchRagPreview(q);
+    }, 400);
+  }
+
+  _hideRagPreview() {
+    const el = this.$.documentRagPreview;
+    if (!el) return;
+    el.classList.add('hidden');
+    el.replaceChildren();
+  }
+
+  async _fetchRagPreview(query) {
+    const el = this.$.documentRagPreview;
+    if (!el || !this.currentConvId) return;
+    const seq = ++this._ragPreviewSeq;
+    try {
+      const hits = await this.api(
+        `/api/conversations/${this.currentConvId}/document-search?q=${encodeURIComponent(query)}&limit=3`,
+      );
+      if (seq !== this._ragPreviewSeq) return;
+      this._renderRagPreview(hits, query);
+    } catch (err) {
+      if (seq !== this._ragPreviewSeq) return;
+      el.classList.remove('hidden');
+      el.replaceChildren();
+      const msg = document.createElement('p');
+      msg.className = 'document-rag-preview-empty';
+      msg.textContent = typeof err?.message === 'string' ? err.message : 'Поиск недоступен';
+      el.appendChild(msg);
+    }
+  }
+
+  _renderRagPreview(hits, query) {
+    const el = this.$.documentRagPreview;
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.replaceChildren();
+    const title = document.createElement('p');
+    title.className = 'document-rag-preview-title';
+    title.textContent = 'Фрагменты документов';
+    el.appendChild(title);
+    if (!hits?.length) {
+      const empty = document.createElement('p');
+      empty.className = 'document-rag-preview-empty';
+      empty.textContent = `Нет совпадений для «${query.slice(0, 40)}»`;
+      el.appendChild(empty);
+      return;
+    }
+    for (const hit of hits) {
+      const item = document.createElement('div');
+      item.className = 'document-rag-preview-item';
+      const file = document.createElement('div');
+      file.className = 'document-rag-preview-file';
+      file.textContent = hit.file_name || 'Документ';
+      const snippet = document.createElement('div');
+      snippet.className = 'document-rag-preview-snippet';
+      snippet.textContent = hit.snippet || '';
+      item.append(file, snippet);
+      el.appendChild(item);
+    }
   }
 
   async loadLlmModelInfo() {

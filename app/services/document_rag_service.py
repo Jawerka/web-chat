@@ -185,9 +185,13 @@ async def append_document_rag_to_system(
     conversation_id: uuid.UUID,
     user_text: str,
     system_prompt: str,
+    *,
+    client_enabled: bool = False,
 ) -> str:
-    """Дополнить system prompt top-K фрагментами документов (``rag_auto_inject``)."""
-    if not settings.rag_enabled or not settings.rag_auto_inject:
+    """Дополнить system prompt top-K фрагментами документов."""
+    if not settings.rag_enabled:
+        return system_prompt
+    if not (settings.rag_auto_inject or client_enabled):
         return system_prompt
     if not user_text.strip():
         return system_prompt

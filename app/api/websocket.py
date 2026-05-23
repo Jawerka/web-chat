@@ -112,6 +112,7 @@ async def _run_turn_task(
         )
         try:
             macro_ctx = integration.macro_context if integration else "selected"
+            doc_rag = integration.document_rag if integration else False
             await orchestrator.run_conversation_turn(
                 session,
                 conversation_id,
@@ -121,6 +122,7 @@ async def _run_turn_task(
                 cancel_event,
                 llm_model=integration.llm_model if integration else None,
                 macro_context=macro_ctx,
+                document_rag=doc_rag,
             )
             await session.commit()
         except TurnCancelled:
@@ -249,6 +251,7 @@ async def _run_regenerate_task(
         )
         try:
             macro_ctx = integration.macro_context if integration else "selected"
+            doc_rag = integration.document_rag if integration else False
             await orchestrator.run_regenerate_turn(
                 session,
                 conversation_id,
@@ -257,6 +260,7 @@ async def _run_regenerate_task(
                 cancel_event,
                 llm_model=integration.llm_model if integration else None,
                 macro_context=macro_ctx,
+                document_rag=doc_rag,
             )
             await session.commit()
         except TurnCancelled:

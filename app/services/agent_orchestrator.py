@@ -426,11 +426,13 @@ class AgentOrchestrator:
         *,
         llm_model: str | None = None,
         macro_context: str = "selected",
+        document_rag: bool = False,
     ) -> AgentTurnResult:
         """
         Полный ход в беседе: сохранение user/assistant, стриминг WS-событий.
 
         macro_context: ``selected`` | ``full`` | ``semantic`` (top-K по user_text).
+        document_rag: подмешать top-K фрагментов документов беседы в system prompt.
 
         Raises:
             ValueError: Беседа не найдена.
@@ -520,6 +522,7 @@ class AgentOrchestrator:
             conversation_id,
             user_text,
             system_prompt,
+            client_enabled=document_rag,
         )
 
         history = await msg_repo.list_for_llm(
@@ -680,6 +683,7 @@ class AgentOrchestrator:
         *,
         llm_model: str | None = None,
         macro_context: str = "selected",
+        document_rag: bool = False,
     ) -> AgentTurnResult:
         """Перегенерировать ответ на существующее user-сообщение (без нового user)."""
         conv_repo = ConversationRepository(session)
@@ -761,6 +765,7 @@ class AgentOrchestrator:
             conversation_id,
             regen_query,
             system_prompt,
+            client_enabled=document_rag,
         )
 
         history = await msg_repo.list_for_llm(

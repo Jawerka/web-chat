@@ -33,6 +33,7 @@ class PublicConfigOut(BaseModel):
     llm_base_url: str
     sd_webui_url: str
     auth_enabled: bool
+    rag_enabled: bool
 
 
 class LlmModelOut(BaseModel):
@@ -60,6 +61,7 @@ async def get_public_config() -> PublicConfigOut:
         llm_base_url=settings.llm_base_url.rstrip("/"),
         sd_webui_url=settings.sd_webui_url.rstrip("/"),
         auth_enabled=settings.auth_enabled,
+        rag_enabled=settings.rag_enabled,
     )
 
 

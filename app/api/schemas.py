@@ -193,6 +193,10 @@ class TurnCreate(BaseModel):
         None,
         description="selected | full | semantic — контекст @alias для LLM",
     )
+    document_rag: bool | None = Field(
+        None,
+        description="Подмешать top-K фрагментов документов беседы в system prompt",
+    )
     llm_base_url: str | None = Field(None, max_length=512)
     sd_webui_url: str | None = Field(None, max_length=512)
     model: str | None = Field(None, max_length=200)

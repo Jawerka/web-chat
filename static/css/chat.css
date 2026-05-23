@@ -3921,6 +3921,89 @@ body.gallery-lightbox-open {
   cursor: not-allowed;
 }
 
+.document-rag-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.document-rag-btn:hover:not(:disabled) {
+  color: var(--accent-cyan);
+  border-color: color-mix(in srgb, var(--accent-cyan) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent-cyan) 8%, var(--surface));
+}
+
+.document-rag-btn.active {
+  color: var(--accent-cyan);
+  border-color: color-mix(in srgb, var(--accent-cyan) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent-cyan) 14%, var(--surface));
+}
+
+.document-rag-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.document-rag-preview {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent-cyan) 6%, var(--surface));
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.document-rag-preview-title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.document-rag-preview-item {
+  padding: 6px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.document-rag-preview-item:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.document-rag-preview-file {
+  font-weight: 600;
+  color: var(--accent-cyan);
+  margin-bottom: 2px;
+}
+
+.document-rag-preview-snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.document-rag-preview-empty {
+  font-style: italic;
+  opacity: 0.85;
+}
+
 .macro-mention-list {
   position: absolute;
   left: 0;
