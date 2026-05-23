@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.models import Message
 from app.db.repositories import GalleryAssetMeta, MessageRepository
 from app.services.media_registry import MediaRegistry
@@ -262,6 +264,77 @@ async def delete_gallery_asset(session: AsyncSession, asset_id: uuid.UUID) -> No
     """Удалить изображение из БД."""
     registry = MediaRegistry(session)
     await registry.delete_asset(asset_id)
+
+
+async def cleanup_orphan_generated_on_disk(
+    session: AsyncSession,
+    *,
+    dry_run: bool = False,
+    min_age_hours: float | None = None,
+) -> dict[str, Any]:
+    """
+    Удалить файлы в ``data/generated/``, не представленные MediaAsset (по original_name).
+
+    Файлы моложе ``min_age_hours`` не трогаются (защита от гонки с ingest).
+    """
+    age_h = min_age_hours if min_age_hours is not None else settings.orphan_generated_min_age_hours
+    cutoff = time.time() - max(0.0, age_h) * 3600.0
+
+    registry = MediaRegistry(session)
+    db_assets = await registry.list_gallery_metadata(limit=GALLERY_MAX_LIMIT * 2)
+    ingested_names = {(a.original_name or "").lower() for a in db_assets if a.original_name}
+
+    candidates: list[str] = []
+    for path in _list_orphan_generated_paths(ingested_names, cutoff=cutoff):
+        candidates.append(path.name)
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "candidates": candidates,
+            "would_delete": len(candidates),
+        }
+
+    deleted = 0
+    for name in candidates:
+        try:
+            delete_gallery_disk_file(name)
+            deleted += 1
+        except FileNotFoundError:
+            continue
+        except ValueError as exc:
+            logger.warning("orphan cleanup: пропуск %s: %s", name, exc)
+
+    if deleted:
+        logger.info(
+            "orphan cleanup: удалено %d файлов из generated/ (min_age=%.1f ч)",
+            deleted,
+            age_h,
+        )
+    return {"dry_run": False, "deleted": deleted, "candidates": candidates}
+
+
+def _list_orphan_generated_paths(
+    ingested_names: set[str],
+    *,
+    cutoff: float,
+) -> list[Path]:
+    """Локальные изображения на диске, не закреплённые в БД и старше cutoff (mtime)."""
+    if not GENERATED_ROOT.is_dir():
+        return []
+    out: list[Path] = []
+    for path in GENERATED_ROOT.iterdir():
+        if not path.is_file() or path.suffix.lower() not in _IMAGE_SUFFIXES:
+            continue
+        if MediaRegistry.disk_filename_claimed_by_db(path.name, ingested_names):
+            continue
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        out.append(path)
+    return out
 
 
 async def purge_all_gallery(

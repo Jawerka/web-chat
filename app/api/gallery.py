@@ -14,6 +14,7 @@ from app.api.ws_events import broadcast_gallery_update
 from app.db.session import get_db
 from app.services.gallery_service import (
     GALLERY_MAX_LIMIT,
+    cleanup_orphan_generated_on_disk,
     delete_gallery_asset,
     delete_gallery_disk_file,
     list_gallery_images,
@@ -37,6 +38,28 @@ async def api_gallery(
         "images": [i.to_api_dict() for i in items],
         "count": len(items),
     }
+
+
+@router.post("/api/gallery/cleanup-orphans")
+async def api_cleanup_orphan_generated(
+    dry_run: bool = False,
+    min_age_hours: float | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Удалить orphan-файлы в ``data/generated/`` (не в MediaAsset по original_name).
+
+    ``dry_run=true`` — только список кандидатов без удаления.
+    """
+    stats = await cleanup_orphan_generated_on_disk(
+        db,
+        dry_run=dry_run,
+        min_age_hours=min_age_hours,
+    )
+    if not dry_run and stats.get("deleted", 0) > 0:
+        await db.commit()
+        await broadcast_gallery_update("cleanup_orphans", count=stats["deleted"])
+    return stats
 
 
 @router.delete("/api/gallery/all")

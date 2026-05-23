@@ -123,7 +123,11 @@ async def cleanup_stale_attachments(session: AsyncSession) -> int:
 
 
 async def run_full_cleanup(session: AsyncSession) -> dict[str, int]:
-    """Полная очистка: файлы на диске + сироты вложений в БД."""
+    """Полная очистка: файлы на диске + сироты вложений в БД + orphan generated."""
+    from app.services.gallery_service import cleanup_orphan_generated_on_disk
+
     stats = run_filesystem_cleanup()
     stats["attachments_db"] = await cleanup_stale_attachments(session)
+    orphan = await cleanup_orphan_generated_on_disk(session, dry_run=False)
+    stats["orphan_generated"] = int(orphan.get("deleted", 0))
     return stats
