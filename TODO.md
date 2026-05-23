@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-23):** этапы **1–11** выполнены; **P0/P1** по [TODO-2](TODO-2.md) (turn_phase, flush 2KB, тесты WS/XSS/load). Автотесты: **182** (`pytest -q`), [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов). Журнал — [ниже](#журнал-прогресса).
+> **Статус (2026-05-23):** этапы **1–11** и стабилизация **P0–P2 (пилот)** выполнены. **254** автотеста (`pytest -q`). Production: **PostgreSQL**, вход **login/password**, multi-user, RAG по документам. Журнал — [§журнал](#журнал-прогресса); план работ — [§22](#22-планируемые-действия).
 
 > **Системные промпты:** эталонные тексты пресетов (txt2img, img2img, default, document_analysis) — в [`Sys-prompt.md`](Sys-prompt.md).  
 > При любых правках промптов, инструментов или поведения агента **сначала** сверяйся с `Sys-prompt.md`, затем переноси изменения в `app/db/seed.py` и при необходимости в `app/db/migrate.py` (обновление существующей БД).
@@ -34,7 +34,10 @@
 17. [Дорожная карта v2](#17-дорожная-карта-v2)  
 18. [Зависимости (requirements)](#18-зависимости-requirements)  
 19. [Критерий готовности MVP](#19-критерий-готовности-mvp)  
-20. [Доработки после MVP (итерации разработки)](#20-доработки-после-mvp-итерации-разработки)
+20. [Доработки после MVP (итерации разработки)](#20-доработки-после-mvp-итерации-разработки)  
+21. [Стабилизация и платформа v2](#21-стабилизация-и-платформа-v2-2026-05-23)  
+22. [Планируемые действия](#22-планируемые-действия)  
+[Журнал прогресса](#журнал-прогресса)
 
 ---
 
@@ -302,7 +305,7 @@ MediaAsset
 ├── static/css/chat.css
 ├── static/js/      chat.js, markdown.js, prompt-macros.js, macros-page.js, gallery.js
 ├── templates/      chat.html, gallery.html, macros.html
-├── tests/          105 pytest (generation_state, prompt_macros, llm_vision, img2img, …)
+├── tests/          254 pytest (auth, RAG, WS lifecycle, security, img2img, …)
 ├── deploy/
 │   install.sh, DEPLOY.md, backup-data.sh
 │   web-chat.service.template, web-chat-cleanup.service.template
@@ -946,7 +949,7 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 - [x] Расширенный `/health` — llm, sd (`degraded` при сбое).
 - [x] Таймауты и коды `error.code` (раздел 13).
 - [x] Cleanup по `UPLOAD_RETENTION_DAYS` / `GENERATED_RETENTION_DAYS`: фоновая задача при старте + `deploy/web-chat-cleanup.timer`.
-- [x] pytest: unit + integration (**105** тестов, раздел 14).
+- [x] pytest: unit + integration (**254** теста, раздел 14).
 - [x] systemd, README deploy (LAN); WireGuard — в разделе 15.
 - [x] SQLite WAL + retry записи (`app/db/sqlite.py`, `run_write`).
 
@@ -1017,6 +1020,9 @@ Seed выполнять в `init_db()` только если таблица `pre
 - [ ] SD запущен с `--api`.
 - [ ] (Опционально) WireGuard: туннель для удалённого доступа, не обязателен для первого релиза в LAN.
 - [ ] `.env` не в git; права на `data/` ограничены.
+- [ ] `AUTH_ENABLED=true`, `AUTH_SECRET` (≥32), смена пароля bootstrap `admin` — [deploy/AUTH.md](deploy/AUTH.md).
+- [ ] (Рекомендуется) `API_ACCESS_KEY` и/или Basic Auth на reverse proxy — [SECURITY.md](SECURITY.md).
+- [ ] `TRUSTED_WS_ORIGINS` задан при доступе не только с localhost.
 - [x] Резервное копирование — `deploy/backup-data.sh`.
 - [x] systemd + **автозапуск после reboot** — `sudo ./deploy/install.sh` (шаблоны `*.service.template`).
 - [x] Логи — journald и/или `deploy/logrotate-web-chat.conf` (`install.sh --logrotate`).
@@ -1801,11 +1807,12 @@ Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 - [x] Экспорт беседы в Markdown (`GET /api/conversations/{id}/export`, кнопка в настройках)
 - [x] PostgreSQL вместо SQLite (production, см. [deploy/POSTGRES.md](deploy/POSTGRES.md))
 - [x] API key / Origin / rate limit в приложении (2026-05-23, см. SECURITY.md)
-- [ ] Basic auth за reverse proxy (шаблон nginx — в TODO-2 P0.1)
+- [x] Шаблон reverse proxy (nginx) — [deploy/nginx-web-chat.conf.template](deploy/nginx-web-chat.conf.template), [DEPLOY.md §11](deploy/DEPLOY.md#11-reverse-proxy-nginx); **развёртывание Basic Auth на стенде** — ops, см. [§7](#7-чеклист-перед-production)
 - [x] `img2img` + инструкции denoising (см. image-gen TODO)
 - [x] Вкладка «Галерея» (`/gallery`, ссылка в сайдбаре)
-- [x] RAG / embeddings (пилот P2.3: document chunks, см. [deploy/RAG.md](deploy/RAG.md))
-- [~] Поддержка нескольких пользователей (пилот P2.2: `MULTI_USER_ENABLED`, `X-Web-Chat-User`)
+- [x] RAG по документам (пилот) — [deploy/RAG.md](deploy/RAG.md)
+- [x] Multi-user + auth: login/password, сессии, изоляция бесед — [deploy/AUTH.md](deploy/AUTH.md), [deploy/MULTI-USER.md](deploy/MULTI-USER.md)
+- [x] Embeddings для @alias (semantic search) — `macro_context=semantic`, reindex API
 
 ---
 
@@ -1928,15 +1935,15 @@ MVP считается готовым после завершения **этап
 - ~~Rate limit~~ — **реализован** (2026-05-23): middleware + WS, см. `app/security/`, [SECURITY.md](SECURITY.md).
 - `reasoning_delta` в WS — в протоколе описан, UI опционален.
 - Расширенный `/api/health` (disk_free, generated_count) — упрощённый вариант в коде.
-- PostgreSQL, auth, RAG — §17.
+- ~~PostgreSQL, auth, RAG~~ — реализовано (§17, §21); см. [§22](#22-планируемые-действия) для следующих шагов.
 
 ### 20.6. Чеклист регрессии после правок
 
-- [ ] Генерация SD → F5 → статус и сетка картинок восстановились, без дублей.
-- [ ] `@@macro` в поле ввода → один `@` в спойлере.
-- [ ] Lightbox: download и attach в composer.
-- [ ] `sudo ./deploy/install.sh` → reboot → `systemctl status web-chat` active.
-- [ ] `pytest -q` → 137 passed.
+- [x] Генерация SD → F5 → статус и сетка (автотесты + smoke вручную при необходимости).
+- [x] `@@macro` → один `@` в UI (`test_expand_double_at_alias`).
+- [x] Lightbox: download и attach в composer.
+- [ ] `sudo ./deploy/install.sh` → reboot → `systemctl status web-chat` active — проверка на стенде.
+- [x] `pytest -q` → **254** passed (2026-05-23).
 
 ### 20.7. img2img: fallback init, UI и метаданные PNG (2026-05-16)
 
@@ -1997,42 +2004,109 @@ MVP считается готовым после завершения **этап
 | deploy | [x] | 2026-05-16 | install.sh, systemd templates, DEPLOY.md |
 | img2img doc | [x] | 2026-05-16 | §9.5 пайплайн, пресеты txt2img/img2img, init hints, fallback, 105 pytest |
 | img2img fix | [x] | 2026-05-16 | server-first init, no get_gallery, denoise 0.54, png-info, UI, §20.7, 118 pytest |
-| stabilize P0 | [~] | 2026-05-23 | API key, rate limit, WS cleanup, turn_recovery, gallery purge, safe pytest cleanup — [TODO-2](TODO-2.md) |
-| P0 closeout | [x] | 2026-05-23 | nginx template, user-msg commit tests, SSRF/trusted URL tests, 157 pytest |
-| P1 tool anti-loop | [x] | 2026-05-23 | ConversationToolState, MAX_SAME_TOOL_PER_TURN, 162 pytest |
-| P1 upload hardening | [x] | 2026-05-23 | `upload_validation.py`, magic bytes, MAX_UPLOAD_IMAGE_PIXELS, MAX_PDF_PAGES, 167 pytest |
-| P1 job queue + WS | [x] | 2026-05-23 | `job_queue.py`, WS inbox, `generation_update`, health disk/WS metrics, 171 pytest |
-| P0.4 turn_phase + P1.7 tests | [x] | 2026-05-23 | `turn_status.py`, stream flush 2KB, ws_session logs, 182 pytest |
+| stabilize P0 | [x] | 2026-05-23 | API key, rate limit, WS cleanup, turn_recovery, gallery purge, pytest safety |
+| P0 closeout | [x] | 2026-05-23 | nginx template, user-msg commit tests, SSRF/trusted URL tests |
+| P1 tool anti-loop | [x] | 2026-05-23 | ConversationToolState, MAX_SAME_TOOL_PER_TURN |
+| P1 upload hardening | [x] | 2026-05-23 | `upload_validation.py`, magic bytes, лимиты PDF/изображений |
+| P1 job queue + WS | [x] | 2026-05-23 | `job_queue.py`, WS inbox, `generation_update` |
+| P0.4 turn_phase + P1.7 | [x] | 2026-05-23 | `turn_status.py`, stream flush 2KB, WS/XSS/load tests |
+| P2.1 Postgres | [x] | 2026-05-23 | Alembic, ETL, backup/restore, [deploy/POSTGRES.md](deploy/POSTGRES.md) |
+| P2.2 auth + multi-user | [x] | 2026-05-23 | login/password, admin users UI, quotas — [deploy/AUTH.md](deploy/AUTH.md) |
+| P2.3 RAG documents | [x] | 2026-05-23 | DocumentChunk, UI toggle, [deploy/RAG.md](deploy/RAG.md) |
+| P2.4–P2.5 | [x] | 2026-05-23 | orphan cleanup, localStorage migrations v3 |
+| docs sync | [x] | 2026-05-23 | TODO §21–22, TODO-2 архив, README/SECURITY/audit/DEPLOY |
 
 ---
 
-## 21. Стабилизация (TODO-2, 2026-05-23)
+## 21. Стабилизация и платформа v2 (2026-05-23)
 
-План и статус задач — в **[TODO-2.md](TODO-2.md)**. Кратко по уже сделанному в коде:
+> Исторический план «TODO-2» закрыт и перенесён сюда. Файл [TODO-2.md](TODO-2.md) — только закладка.
 
-| Область | Статус | Файлы / примечание |
-|---------|--------|-------------------|
-| API key + WS Origin | ✅ | `app/security/access.py`, `.env` `API_ACCESS_KEY`, `TRUSTED_WS_ORIGINS` |
-| Rate limiting | ✅ | `app/security/rate_limit.py`, `app/middleware/access_control.py` |
-| WS lifecycle | ✅ | `app/api/ws_manager.py` — `ConversationSessionState`, sweeper |
-| Черновик при ошибке turn | ✅ | `app/services/turn_recovery.py`, правки `websocket.py` |
-| Валидация PUBLIC_BASE_URL | ✅ частично | `app/config.py` — схема/loopback |
-| Очистка всей галереи | ✅ | `DELETE /api/gallery/all`, кнопка в `/gallery` |
-| Документация безопасности | ✅ | [SECURITY.md](SECURITY.md) |
-| Nginx/Caddy шаблоны | ✅ | `deploy/nginx-web-chat.conf.template`, DEPLOY.md §11 |
-| User-msg при LLM error | ✅ | `tests/test_turn_user_commit.py` |
-| SSRF / trusted URL tests | ✅ | `tests/test_security_urls.py` |
-| Безопасная очистка pytest | ✅ | `tests/safety.py`, `tests/cleanup.py`, TODO §14.4 |
-| Tool anti-loop (P1.4) | ✅ | `conversation_tool_state.py`, `MAX_SAME_TOOL_PER_TURN` |
-| Upload hardening (P1.5) | ✅ | `upload_validation.py`, лимит пикселей/PDF, таймаут extract |
-| Job queue (P1.2) | ✅ | `HeavyJobQueue`, SD/extract, WS inbox |
-| generation_update (P1.3) | ✅ частично | `ws_events.py`, `chat.js`; poll остаётся fallback |
-| Health disk / WS (P1.6) | ✅ частично | `data_free_gb`, `active_turns`, `ws_connections` |
-| Скилл @alias / embeddings | ✅ | TODO-2 Ф1–Ф2 |
-| Postgres + ETL | ✅ | P2.1, `DATABASE_URL` production |
-| Multi-user пилот | [~] | P2.2: `User`, `owner_user_id`, заголовок `X-Web-Chat-User` |
+### P0 — безопасность и предсказуемость (выполнено)
 
-**Тесты:** **254** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
+| ID | Содержание | Ключевые файлы |
+|----|------------|----------------|
+| P0.1 | API key, WS Origin, proxy, SECURITY.md, nginx template | `app/security/access.py`, [SECURITY.md](SECURITY.md) |
+| P0.2 | Rate limit REST/WS | `app/security/rate_limit.py` |
+| P0.3 | WS lifecycle, sweeper, `ConversationSessionState` | `app/api/ws_manager.py` |
+| P0.4 | Turn phases, черновик при ошибке, user-msg commit | `turn_status.py`, `turn_recovery.py` |
+| P0.5 | SSRF / PUBLIC_BASE_URL / trusted media | `app/config.py`, `tests/test_security_urls.py` |
+
+### P1 — архитектура runtime (выполнено)
+
+| ID | Содержание |
+|----|------------|
+| P1.1 | SQLite WAL/retry, concurrent tests, stream flush 2KB, `app/db/uow.py` |
+| P1.2 | `HeavyJobQueue`, cancel, WS inbox |
+| P1.3 | `generation_update`, `/ws/events`, poll fallback 30 с |
+| P1.4 | Tool anti-loop, duplicate detection |
+| P1.5 | Upload validation, media registry |
+| P1.6 | JSON logs, `ErrorCode`, health metrics |
+| P1.7 | WS/security/load/markdown tests, счётчик тестов в доках |
+
+### P2 — платформа v2 (пилот, выполнено)
+
+| ID | Содержание | Документация |
+|----|------------|--------------|
+| P2.1 | PostgreSQL + Alembic + ETL + backup | [deploy/POSTGRES.md](deploy/POSTGRES.md), [deploy/DATABASE-BACKUP.md](deploy/DATABASE-BACKUP.md) |
+| P2.2 | Users, `owner_user_id`, auth, quotas, admin API/UI | [deploy/AUTH.md](deploy/AUTH.md), [deploy/MULTI-USER.md](deploy/MULTI-USER.md) |
+| P2.3 | RAG: `document_chunks`, index/search, UI toggle | [deploy/RAG.md](deploy/RAG.md) |
+| P2.4 | Orphan gallery cleanup | `POST /api/gallery/cleanup-orphans` |
+| P2.5 | `storage-migrate.js`, scroll positions v3 | `static/js/storage-migrate.js` |
+
+### Продуктовые фичи (выполнено)
+
+- **Ф1:** `macro_context` selected / full / semantic — кнопка в composer.
+- **Ф2:** embeddings для @alias, `GET /api/prompt-macros/search`, reindex.
+- **Ф3:** `DELETE /api/gallery/all` + confirm в UI.
+
+### Вехи
+
+| Веха | Статус |
+|------|--------|
+| M1 — Secure LAN | ✅ P0 + Ф3 + deploy docs |
+| M2 — Stable runtime | ✅ P1 + Ф1 |
+| M3 — Platform v2 | ✅ P2.1–P2.5, Ф2 |
+
+**Автотесты:** `pytest -q` → **254** passed. Парадигма и очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов).
+
+---
+
+## 22. Планируемые действия
+
+Приоритеты после закрытия плана стабилизации. Новые крупные фичи — только если не ломают state machine (WS, черновики, turn).
+
+### P1 — эксплуатация и auth (ближайшее)
+
+| Задача | Описание |
+|--------|----------|
+| Basic Auth / HTTPS на стенде | Развернуть [nginx template](deploy/nginx-web-chat.conf.template) на production (сейчас только шаблон в репо) |
+| Смена пароля в UI | Для всех пользователей; смена bootstrap `admin` после первого входа |
+| Деактивация пользователей | `is_active=false`, API admin |
+| Чеклист §7 на стенде | Пинг LLM/SD, `PUBLIC_BASE_URL`, `systemctl is-enabled` |
+
+### P2 — по необходимости
+
+| ID | Задача | Когда |
+|----|--------|-------|
+| P2.6 | Redis/NATS event bus, horizontal scale | При реальной нагрузке нескольких инстансов |
+| P2.7 | Semantic memory, agent planning | Future, не блокирует LAN |
+| RAG v2 | Глобальный корпус документов, cron reindex | После пилота P2.3 |
+| Сессии в Redis | Вместо signed cookie | При нескольких воркерах uvicorn |
+
+### Техдолг / качество
+
+| Задача | Примечание |
+|--------|------------|
+| Расширить security/load тесты | WS reconnect под нагрузкой, concurrent WS |
+| `reasoning_delta` в UI | Опционально, протокол описан |
+| Расширенный health | disk/generated_count — при необходимости ops |
+
+### Не планируется в v1
+
+- Публичный интернет без proxy/VPN.
+- Микросервисное разбиение монолита.
+- Отдельный SPA (React/Vue).
 
 ---
 

@@ -47,14 +47,16 @@
 
 | Область | Что умеет |
 |---------|-----------|
-| **Чат** | Несколько бесед, стриминг ответа, авто-заголовок, переименование, поиск по истории, экспорт в Markdown |
-| **Пресеты** | Разные системные промпты и наборы инструментов: обычный ассистент, txt2img, img2img, анализ документов |
-| **Вложения** | Картинки (vision), PDF, DOCX, TXT; drag-and-drop и скрепка; до 10 файлов на сообщение |
-| **SD** | `generate_image`, `img2img` (в т.ч. несколько denoise за один вызов), `upscale_images` |
-| **Галерея** | До 1000 последних картинок (БД + диск), скачивание, «прикрепить в новый чат» |
-| **UX** | Тёмная тема, размер шрифта, lightbox, черновик ввода в localStorage, resume после F5 |
-| **Синхронизация** | Несколько вкладок/устройств: poll истории, индикатор «идёт генерация» |
-| **Операции** | systemd, retention файлов, backup, WireGuard для LXC |
+| **Чат** | Несколько бесед, стриминг, поиск, экспорт Markdown, scroll persistence |
+| **Пресеты** | default, txt2img, img2img, document_analysis |
+| **Вложения** | Vision, PDF, DOCX, TXT; drag-and-drop; до 10 файлов |
+| **SD** | `generate_image`, `img2img`, `upscale_images` |
+| **Галерея** | До 1000 картинок, очистка сирот, purge all |
+| **@alias** | Быстрые промпты; режимы selected / full / semantic |
+| **RAG** | Поиск по документам беседы (при `RAG_ENABLED`), UI-переключатель |
+| **Пользователи** | Login/password, изоляция бесед, admin API (опционально `AUTH_ENABLED`) |
+| **UX** | Тёмная/светлая тема, lightbox, черновики, resume после F5 |
+| **Операции** | systemd, Postgres/SQLite, backup БД, retention, WireGuard |
 
 ---
 
@@ -384,10 +386,13 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 
 | type | Поля | Описание |
 |------|------|----------|
-| `user_message` | `text`, `attachment_ids[]`, опционально `llm_base_url`, `sd_webui_url`, `model` | Новый запрос |
+| `user_message` | `text`, `attachment_ids[]`, опционально `llm_base_url`, `sd_webui_url`, `model`, `macro_context`, `document_rag` | Новый запрос |
 | `cancel` | — | Отмена генерации |
-| `regenerate` | `message_id`, опционально URL/model | Перегенерация |
+| `regenerate` | `message_id`, опционально overrides | Перегенерация |
 | `ping` | — | Keepalive → `pong` |
+
+`macro_context`: `selected` (default) \| `full` \| `semantic`.  
+`document_rag`: `true` — подмешать top-K фрагментов документов (если `RAG_ENABLED` на сервере).
 
 ### Сервер → клиент
 
@@ -416,7 +421,11 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/health` | LLM, SD, `timeouts_ok` |
+| GET | `/health` | LLM, SD, `timeouts_ok`, disk, WS |
+| GET | `/config` | Публичные лимиты, `auth_enabled`, `rag_enabled` |
+| POST | `/auth/login`, `/auth/logout` | Сессия (при `AUTH_ENABLED`) |
+| GET | `/auth/me` | Текущий пользователь |
+| GET/POST | `/users` | Список / создание (admin) |
 | GET/POST | `/conversations` | Список / создание |
 | GET/PATCH/DELETE | `/conversations/{id}` | Беседа |
 | GET | `/conversations/{id}/messages` | История (`?limit=`, `?before=`) |
@@ -426,7 +435,9 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | GET | `/conversations/{id}/export` | Markdown |
 | PATCH/DELETE | `/conversations/{id}/messages/{msg_id}` | Редактирование / удаление |
 | GET | `/conversations/{id}/messages/{msg_id}/attachments` | Вложения сообщения (для редактирования) |
-| GET | `/search?q=` | Поиск |
+| GET | `/search?q=` | Поиск по истории |
+| GET | `/conversations/{id}/document-search?q=` | RAG по документам беседы |
+| POST | `/attachments/{id}/index-rag` | Индексация документа для RAG |
 | GET/POST/PATCH/DELETE | `/prompt-macros` | Макросы |
 | GET | `/presets` | Пресеты |
 | POST | `/upload` | Загрузка файлов (`files`, `conversation_id`) |
@@ -511,7 +522,7 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 ```bash
 source .venv/bin/activate
 ruff check app tests
-pytest -q          # 207 тестов
+pytest -q          # 254 теста
 ```
 
 ### Структура репозитория
@@ -560,10 +571,16 @@ tests/
 
 | Файл | Содержание |
 |------|------------|
-| [TODO.md](TODO.md) | Полная архитектура, этапы 1–11, API, риски, §20 доработки |
-| [Sys-prompt.md](Sys-prompt.md) | Эталонные системные промпты пресетов |
-| [deploy/DEPLOY.md](deploy/DEPLOY.md) | Production, backup, systemd |
-| [docs/images/](docs/images/) | Скриншоты UI (добавляйте новые сюда) |
+| [TODO.md](TODO.md) | Архитектура, этапы 1–11, §21 выполненное, §22 план |
+| [audit.md](audit.md) | Сводный аудит + таблица статуса (исторические разборы ниже) |
+| [SECURITY.md](SECURITY.md) | Auth, rate limit, proxy |
+| [deploy/AUTH.md](deploy/AUTH.md) | Login, сессии, multi-user |
+| [deploy/POSTGRES.md](deploy/POSTGRES.md) | PostgreSQL, ETL |
+| [deploy/RAG.md](deploy/RAG.md) | RAG по документам |
+| [deploy/DATABASE-BACKUP.md](deploy/DATABASE-BACKUP.md) | Backup/restore БД |
+| [Sys-prompt.md](Sys-prompt.md) | Эталонные системные промпты |
+| [deploy/DEPLOY.md](deploy/DEPLOY.md) | Production, systemd |
+| [docs/images/](docs/images/) | Скриншоты UI |
 
 При изменении системных промптов: сначала **Sys-prompt.md**, затем `app/db/seed.py` и миграция БД (см. TODO.md §6).
 
@@ -571,6 +588,6 @@ tests/
 
 ## Статус
 
-- Этапы **1–11** и основные доработки v2 реализованы.
-- **207** автотестов (`pytest`).
-- Внутренний проект для LAN; аутентификации в v1 нет — не выставляйте в открытый интернет без прокси/VPN и защиты.
+- Этапы **1–11** и стабилизация **P0–P2 (пилот)** реализованы.
+- **254** автотеста (`pytest -q`).
+- Для production: включите `AUTH_ENABLED`, `AUTH_SECRET`, reverse proxy; см. [SECURITY.md](SECURITY.md). Не выставляйте порт в открытый интернет без HTTPS и защиты.

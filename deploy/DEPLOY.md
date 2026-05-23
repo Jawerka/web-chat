@@ -28,8 +28,8 @@
 | Ресурс | Минимум | Рекомендуется |
 |--------|---------|---------------|
 | CPU | 2 ядра | 4+ (при активной SD-генерации нагрузка на SD-хост, не на web-chat) |
-| RAM | **2 GB** | **4+ GB** (SQLite + кэш вложений; vision сжимает картинки до ~6 MB) |
-| Диск | **10 GB** свободно | **50+ GB** (`data/generated/`, uploads, SQLite) |
+| RAM | **2 GB** | **4+ GB** (Postgres/SQLite + кэш вложений; vision сжимает картинки до ~6 MB) |
+| Диск | **10 GB** свободно | **50+ GB** (`data/generated/`, uploads, БД Postgres или SQLite) |
 
 web-chat сам по себе лёгкий; узкое место — **внешние** LLM и SD WebUI.
 
@@ -367,7 +367,9 @@ sudo ./deploy/install.sh --skip-tests
 Для доступа **вне доверенной LAN** не открывайте `8090` напрямую. Используйте HTTPS и аутентификацию на proxy.
 
 Шаблон: **[deploy/nginx-web-chat.conf.template](nginx-web-chat.conf.template)**  
-Документация: **[SECURITY.md](../SECURITY.md)** · вход: **[AUTH.md](AUTH.md)** · multi-user: **[MULTI-USER.md](MULTI-USER.md)**
+Документация: **[SECURITY.md](../SECURITY.md)** · вход: **[AUTH.md](AUTH.md)** · multi-user: **[MULTI-USER.md](MULTI-USER.md)** · план работ: **[TODO.md §22](../TODO.md#22-планируемые-действия)**
+
+**Автотесты (2026-05-23):** `pytest -q` → **254** passed.
 
 Минимальные шаги:
 

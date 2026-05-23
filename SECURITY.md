@@ -42,4 +42,14 @@ In-memory лимит на процесс (см. `.env`):
 - [ ] Firewall: только подсеть VPN/LAN
 - [ ] Регулярный backup: `deploy/backup-data.sh`
 
-Подробнее: [TODO.md §7](TODO.md#7-чеклист-перед-production), план [TODO-2.md](TODO-2.md).
+## Вход login/password (P2.2)
+
+При `AUTH_ENABLED=true` (рекомендуется в production):
+
+- Сессия HttpOnly cookie, bcrypt, `AUTH_SECRET` ≥ 32 символов.
+- Изоляция бесед по `owner_user_id`.
+- Документация: [deploy/AUTH.md](deploy/AUTH.md).
+
+Дополнительно к proxy/API key: cookie-сессия для браузера, API key — для внешних клиентов.
+
+Подробнее: [TODO.md §7](TODO.md#7-чеклист-перед-production), выполненное — [§21](TODO.md#21-стабилизация-и-платформа-v2-2026-05-23), план — [§22](TODO.md#22-планируемые-действия).
