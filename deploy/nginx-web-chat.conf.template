@@ -1,0 +1,67 @@
+# nginx reverse proxy для web-chat (шаблон).
+# Подставьте: {PUBLIC_HOST}, {WEB_PORT}, {INSTALL_ROOT}
+#
+# Установка (Debian/Ubuntu):
+#   sudo apt install nginx apache2-utils
+#   sudo htpasswd -c /etc/nginx/web-chat.htpasswd USER
+#   sudo cp deploy/nginx-web-chat.conf.template /etc/nginx/sites-available/web-chat
+#   # отредактировать server_name, upstream, пути
+#   sudo ln -s /etc/nginx/sites-available/web-chat /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# В .env web-chat:
+#   TRUSTED_PROXY_IPS=127.0.0.1
+#   TRUSTED_WS_ORIGINS=https://{PUBLIC_HOST}
+#   API_ACCESS_KEY=...   # опционально, если не только Basic Auth на nginx
+
+upstream web_chat_backend {
+    server 127.0.0.1:{WEB_PORT};
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name {PUBLIC_HOST};
+
+    # ssl_certificate     /etc/letsencrypt/live/{PUBLIC_HOST}/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/{PUBLIC_HOST}/privkey.pem;
+
+    client_max_body_size 30m;
+
+    # Basic Auth (рекомендуется для доступа извне LAN)
+    auth_basic "web-chat";
+    auth_basic_user_file /etc/nginx/web-chat.htpasswd;
+
+    location / {
+        proxy_pass http://web_chat_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # Статика и медиа — через то же приложение (FastAPI)
+    location /media/ {
+        proxy_pass http://web_chat_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Редирект HTTP → HTTPS (раскомментировать при наличии сертификата)
+# server {
+#     listen 80;
+#     server_name {PUBLIC_HOST};
+#     return 301 https://$host$request_uri;
+# }

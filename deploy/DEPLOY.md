@@ -236,7 +236,7 @@ curl -s http://127.0.0.1:8090/api/presets | jq '.[].slug'
 ```bash
 source .venv/bin/activate
 pytest -q
-# ожидается: 88 passed
+# ожидается: 155+ passed (см. TODO.md §14)
 ```
 
 ### После перезагрузки ОС
@@ -372,7 +372,28 @@ sudo ./deploy/install.sh --skip-tests
 
 ---
 
-## 11. Устранение неполадок
+## 11. Reverse proxy (nginx)
+
+Для доступа **вне доверенной LAN** не открывайте `8090` напрямую. Используйте HTTPS и аутентификацию на proxy.
+
+Шаблон: **[deploy/nginx-web-chat.conf.template](nginx-web-chat.conf.template)**  
+Документация: **[SECURITY.md](../SECURITY.md)**
+
+Минимальные шаги:
+
+1. Установить nginx, создать `htpasswd`.
+2. Подставить `server_name`, upstream `127.0.0.1:WEB_PORT`.
+3. В `.env` web-chat:
+   - `TRUSTED_PROXY_IPS=127.0.0.1` (или IP nginx)
+   - `TRUSTED_WS_ORIGINS=https://ваш-хост`
+   - `API_ACCESS_KEY=...` (дополнительно к Basic Auth)
+4. `PUBLIC_BASE_URL` — **внешний** URL браузера (`https://…`), не внутренний IP:8090.
+
+Альтернатива: **Caddy** с `basicauth` и автоматическим TLS — принцип тот же (proxy → `127.0.0.1:8090`, WebSocket upgrade).
+
+---
+
+## 12. Устранение неполадок
 
 | Симптом | Решение |
 |---------|---------|
@@ -387,6 +408,7 @@ sudo ./deploy/install.sh --skip-tests
 
 ### Чеклист перед production
 
+- [ ] Reverse proxy + HTTPS (§11) или доступ только по VPN
 - [ ] С хоста web-chat доступны LLM и SD (`curl` / health)
 - [ ] `PUBLIC_BASE_URL` = URL в браузере
 - [ ] SD с `--api`

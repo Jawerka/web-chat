@@ -4,7 +4,8 @@
 
 ## Рекомендуемый контур
 
-1. **Reverse proxy** (nginx, Caddy, Traefik): HTTPS, Basic Auth или OAuth2-proxy.
+1. **Reverse proxy** (nginx, Caddy, Traefik): HTTPS, Basic Auth или OAuth2-proxy.  
+   Шаблон nginx: [`deploy/nginx-web-chat.conf.template`](deploy/nginx-web-chat.conf.template), раздел [DEPLOY.md §11](deploy/DEPLOY.md#11-reverse-proxy-nginx).
 2. **API key в приложении** (опционально): переменная `API_ACCESS_KEY` в `.env`.
    - REST: заголовок `X-API-Key` или `Authorization: Bearer <key>`.
    - WebSocket: тот же заголовок или query `?api_key=<key>` до upgrade.

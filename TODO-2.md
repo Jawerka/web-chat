@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **137** автотестов (`pytest -q`). **В работе:** волна P0 (см. ниже — отмечено `[x]`). Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **157** автотестов (`pytest -q`). **В работе:** P0 почти закрыт; далее P1. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -60,7 +60,7 @@
 
 **Задачи:**
 
-- [ ] Документировать и шаблонизировать reverse proxy (nginx / Caddy / Traefik): HTTPS, Basic Auth или OAuth2-proxy
+- [x] Документировать и шаблонизировать reverse proxy (nginx / Caddy / Traefik): HTTPS, Basic Auth или OAuth2-proxy — [`deploy/nginx-web-chat.conf.template`](deploy/nginx-web-chat.conf.template), [DEPLOY.md §11](deploy/DEPLOY.md#11-reverse-proxy-nginx)
 - [x] Минимум в приложении: API key / shared secret для REST и WS (заголовок или query при upgrade)
 - [x] Валидация `Origin` / `Host` на WebSocket; список доверенных origins в `.env`
 - [x] Ограничить доверие к `X-Forwarded-*` — `TRUSTED_PROXY_IPS` ([`access.py`](app/security/access.py))
@@ -110,7 +110,7 @@
 
 - [ ] Явная модель статусов turn: `queued → streaming → tool_running → partial → completed | cancelled | failed` (частично: `turn_status` в content_json)
 - [x] При ошибке: **не** удалять черновик с контентом — [`turn_recovery.py`](app/services/turn_recovery.py)
-- [ ] User-message всегда остаётся закоммиченным (в архитектуре есть — нужен отдельный тест)
+- [x] User-message всегда остаётся закоммиченным — `tests/test_turn_user_commit.py`
 - [x] WS `error` с `code`; commit вместо rollback для LLM/tool/cancel/internal
 
 **Критерии готовности:** сценарий «обрыв LLM на середине стрима → F5 → текст/картинки на месте»; тест `test_tool_limit_draft` и аналоги зелёные.
@@ -124,8 +124,8 @@
 **Задачи:**
 
 - [x] Валидатор `public_base_url` / `public_base_url_vpn` в `Settings` (схема, loopback/metadata)
-- [ ] Аудит всех точек, где LLM получает внешний URL; для vision — только `for_llm=True` (LAN base)
-- [ ] Жёстче `is_trusted_media_url` для img2img/upscale (уже частично есть — покрыть тестами)
+- [x] Аудит всех точек, где LLM получает внешний URL; для vision — только `for_llm=True` (LAN base) — тест `test_for_llm_ignores_vpn_host`
+- [x] Жёстче `is_trusted_media_url` для img2img/upscale — `tests/test_security_urls.py`, `test_stage11_sd.py`
 
 **Критерии готовности:** security-тесты на отклонение `http://169.254.169.254/...` и произвольного Host.
 
@@ -212,8 +212,9 @@
 
 - [x] Починить `tests/test_tool_limit_draft.py` (`streaming: None` в финальном сообщении)
 - [ ] WS reconnect + resume; concurrent tabs; cancel mid-tool
-- [ ] Security: path traversal upload, XSS payload в markdown, SSRF URL
-- [ ] Синхронизировать счётчик тестов: README / TODO.md / факт (`pytest -q`)
+- [x] Security: SSRF URL / trusted media — `tests/test_security_urls.py`
+- [ ] Security: path traversal upload, XSS payload в markdown
+- [x] Синхронизировать счётчик тестов: README / TODO.md / факт (`pytest -q`)
 - [ ] Load smoke: 5–10 параллельных «лёгких» чатов без deadlock
 
 ---

@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус реализации (2026-05-23):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Идёт **стабилизация P0** по [TODO-2.md](TODO-2.md): API key, rate limit, WS lifecycle, partial turn recovery, purge галереи. Production: `deploy/install.sh` + systemd. Автотесты: **148** (`pytest -q`), парадигма — [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки), план — [TODO-2.md](TODO-2.md). Журнал — [ниже](#журнал-прогресса).
+> **Статус реализации (2026-05-23):** этапы **1–11** выполнены; v2 (export, search, gallery, macros, resume). Идёт **стабилизация P0** по [TODO-2.md](TODO-2.md): API key, rate limit, WS lifecycle, partial turn recovery, purge галереи. Production: `deploy/install.sh` + systemd. Автотесты: **157** (`pytest -q`), парадигма — [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов). Доработки после MVP — [§20](#20-доработки-после-mvp-итерации-разработки), план — [TODO-2.md](TODO-2.md). Журнал — [ниже](#журнал-прогресса).
 
 > **Системные промпты:** эталонные тексты пресетов (txt2img, img2img, default, document_analysis) — в [`Sys-prompt.md`](Sys-prompt.md).  
 > При любых правках промптов, инструментов или поведения агента **сначала** сверяйся с `Sys-prompt.md`, затем переноси изменения в `app/db/seed.py` и при необходимости в `app/db/migrate.py` (обновление существующей БД).
@@ -1997,7 +1997,8 @@ MVP считается готовым после завершения **этап
 | deploy | [x] | 2026-05-16 | install.sh, systemd templates, DEPLOY.md |
 | img2img doc | [x] | 2026-05-16 | §9.5 пайплайн, пресеты txt2img/img2img, init hints, fallback, 105 pytest |
 | img2img fix | [x] | 2026-05-16 | server-first init, no get_gallery, denoise 0.54, png-info, UI, §20.7, 118 pytest |
-| stabilize P0 | [~] | 2026-05-23 | API key, rate limit, WS cleanup, turn_recovery, gallery purge all, SECURITY.md — [TODO-2](TODO-2.md) |
+| stabilize P0 | [~] | 2026-05-23 | API key, rate limit, WS cleanup, turn_recovery, gallery purge, safe pytest cleanup — [TODO-2](TODO-2.md) |
+| P0 closeout | [x] | 2026-05-23 | nginx template, user-msg commit tests, SSRF/trusted URL tests, 157 pytest |
 
 ---
 
@@ -2014,11 +2015,14 @@ MVP считается готовым после завершения **этап
 | Валидация PUBLIC_BASE_URL | ✅ частично | `app/config.py` — схема/loopback |
 | Очистка всей галереи | ✅ | `DELETE /api/gallery/all`, кнопка в `/gallery` |
 | Документация безопасности | ✅ | [SECURITY.md](SECURITY.md) |
-| Nginx/Caddy шаблоны | ⏳ | TODO-2 P0.1 |
+| Nginx/Caddy шаблоны | ✅ | `deploy/nginx-web-chat.conf.template`, DEPLOY.md §11 |
+| User-msg при LLM error | ✅ | `tests/test_turn_user_commit.py` |
+| SSRF / trusted URL tests | ✅ | `tests/test_security_urls.py` |
+| Безопасная очистка pytest | ✅ | `tests/safety.py`, `tests/cleanup.py`, TODO §14.4 |
 | Job queue для SD | ⏳ | TODO-2 P1.2 |
 | Скилл @alias / embeddings | ⏳ | TODO-2 Ф1–Ф2 |
 
-**Тесты:** см. `pytest -q` (актуальное число — в журнале ниже). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
+**Тесты:** **157** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
 
 ---
 
