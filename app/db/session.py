@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -16,10 +17,12 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
+from app.db.alembic_runner import run_alembic_upgrade
 from app.db.migrate import run_sqlite_migrations
 from app.db.models import Base, Preset
 from app.db.seed import PRESET_SEEDS
 from app.db.sqlite import configure_sqlite_engine
+from app.db.url import is_postgres_url, is_sqlite_url, normalize_async_database_url
 from app.integrations.media_utils import ensure_media_directories
 
 logger = logging.getLogger(__name__)
@@ -50,17 +53,23 @@ def configure_database(database_url: str | None = None) -> None:
     Перед сменой URL в async-коде сначала await dispose_database().
     """
     global engine, async_session_factory
-    url = database_url or settings.database_url
+    url = normalize_async_database_url(database_url)
     if engine is not None:
         logger.warning(
             "configure_database: engine уже есть — вызовите await dispose_database() "
             "перед переконфигурацией, иначе возможны утечки соединений",
         )
     connect_args: dict = {}
-    if "sqlite" in url:
+    engine_kwargs: dict = {"echo": False, "connect_args": connect_args}
+    if is_sqlite_url(url):
         connect_args["timeout"] = 60.0
-    engine = create_async_engine(url, echo=False, connect_args=connect_args)
-    configure_sqlite_engine(engine)
+    elif is_postgres_url(url):
+        engine_kwargs["pool_pre_ping"] = True
+        engine_kwargs["pool_size"] = settings.db_pool_size
+        engine_kwargs["max_overflow"] = settings.db_max_overflow
+    engine = create_async_engine(url, **engine_kwargs)
+    if is_sqlite_url(url):
+        configure_sqlite_engine(engine)
     async_session_factory = async_sessionmaker(
         engine,
         class_=AsyncSession,
@@ -73,9 +82,9 @@ configure_database()
 
 def _ensure_db_directory() -> None:
     """Создать каталог для SQLite, если его ещё нет."""
-    url = settings.database_url
-    if "sqlite" not in url:
+    if not is_sqlite_url():
         return
+    url = settings.database_url
     # sqlite+aiosqlite:///./data/db/web_chat.sqlite
     path_part = url.split("///", 1)[-1]
     if path_part.startswith("./"):
@@ -89,9 +98,12 @@ async def init_db() -> None:
     """Создать таблицы, миграции и синхронизировать пресеты из seed."""
     _ensure_db_directory()
     ensure_media_directories()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await run_sqlite_migrations(engine)
+    if is_postgres_url():
+        await asyncio.to_thread(run_alembic_upgrade, "head")
+    else:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await run_sqlite_migrations(engine)
     await _sync_seed_presets()
 
 

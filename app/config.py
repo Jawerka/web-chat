@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     mcp_timeout: int = 900
 
     database_url: str = "sqlite+aiosqlite:///./data/db/web_chat.sqlite"
+    # Postgres (P2.1): postgresql+asyncpg://user:pass@host:5432/web_chat
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
     max_upload_mb: int = 25
     # Максимум width×height для загружаемых изображений (защита от decompression bomb)
     max_upload_image_pixels: int = 16_777_216

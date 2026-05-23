@@ -533,7 +533,8 @@ tests/
 
 ### Миграции и данные
 
-- SQLite: `data/db/web_chat.sqlite` (WAL).
+- SQLite (по умолчанию): `data/db/web_chat.sqlite` (WAL).
+- PostgreSQL (опционально, P2.1): `DATABASE_URL=postgresql+asyncpg://…`, миграции Alembic — [deploy/POSTGRES.md](deploy/POSTGRES.md).
 - Первый запуск: seed пресетов из `app/db/seed.py`.
 - Обновление промптов в существующей БД: `app/db/migrate.py`.
 - Legacy user-сообщения без `parts`: `python -m app.scripts.migrate_missing_parts`.

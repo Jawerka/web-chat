@@ -228,13 +228,22 @@
 
 | ID | Задача | Связь с TODO.md |
 |----|--------|-----------------|
-| P2.1 | PostgreSQL + миграции Alembic | [§17](TODO.md#17-дорожная-карта-v2) |
+| P2.1 | PostgreSQL + миграции Alembic | [§17](TODO.md#17-дорожная-карта-v2) — **пилот** |
 | P2.2 | Multi-user: изоляция бесед, quotas, роли | [§17](TODO.md#17-дорожная-карта-v2), [§0.3](TODO.md#03-не-цели-версии-1-v1) |
 | P2.3 | RAG / embeddings (отдельно от «скилла» — см. Фичи) | [§17](TODO.md#17-дорожная-карта-v2) |
 | P2.4 | Media registry: orphan cleanup, dedup, retention policies | [§20](TODO.md#20-доработки-после-mvp-итерации-разработки) — **пилот:** orphan disk |
 | P2.5 | `localStorage` schema versioning + migrations на клиенте | audit: corruption при обновлениях UI — **v1** |
 | P2.6 | Redis / NATS event bus + horizontal scale | только при реальной потребности |
 | P2.7 | Semantic memory, agent planning layer | future, не блокирует LAN |
+
+## P2.1 — PostgreSQL + Alembic (пилот)
+
+- [x] `alembic/` + начальная ревизия `2d462089f839_initial_schema`
+- [x] `app/db/url.py` — async/sync URL, определение backend
+- [x] Postgres: `init_db` → `alembic upgrade head`; pool (`DB_POOL_SIZE`)
+- [x] SQLite без изменений: `create_all` + `migrate.py`
+- [x] `python -m app.scripts.db_upgrade`, [deploy/POSTGRES.md](deploy/POSTGRES.md)
+- [ ] ETL SQLite → Postgres (отдельная задача)
 
 ## P2.4 — Orphan cleanup (пилот)
 
