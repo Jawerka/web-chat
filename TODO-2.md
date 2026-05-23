@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **167+** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **168** автотестов (`pytest -q`). **P0 закрыт**; **P1** — tool anti-loop, SQLite metrics, upload hardening. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -137,7 +137,7 @@
 
 **Уже есть:** WAL, retry, debounce flush. **Добавить:**
 
-- [ ] Тесты конкурентных записей (2+ вкладки, одна беседа)
+- [x] Тесты конкурентных записей — `tests/test_sqlite_concurrent_writes.py` (12× `run_write` параллельно)
 - [x] Метрика/лог при срабатывании retry `database is locked` — `sqlite_busy_retries_total`, health `/api/health`
 - [ ] Опционально: батч по размеру буфера (2 KB), не только по таймеру — снизить write amplification на длинных ответах
 - [ ] Подготовка DAO-слоя под Postgres ([TODO.md §17](TODO.md#17-дорожная-карта-v2)) — без миграции данных пока
