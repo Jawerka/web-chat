@@ -261,7 +261,10 @@ class AttachmentService:
             raise ValueError(
                 f"Извлечение текста превысило {settings.extract_timeout_sec} с",
             ) from exc
-        await self._repo.update_extracted_text(attachment, raw)
+        attachment = await self._repo.update_extracted_text(attachment, raw)
+        from app.services.document_rag_service import maybe_index_attachment_after_extract
+
+        await maybe_index_attachment_after_extract(self._session, attachment)
         return truncate_text(raw, limit)
 
     async def prepare_for_llm(

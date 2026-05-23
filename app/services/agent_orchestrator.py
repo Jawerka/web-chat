@@ -513,6 +513,15 @@ class AgentOrchestrator:
         elif macro_context == "semantic":
             logger.info("macro_context=semantic: top-K по запросу пользователя")
 
+        from app.services.document_rag_service import append_document_rag_to_system
+
+        system_prompt = await append_document_rag_to_system(
+            session,
+            conversation_id,
+            user_text,
+            system_prompt,
+        )
+
         history = await msg_repo.list_for_llm(
             conversation_id,
             settings.max_history_messages,
@@ -744,6 +753,15 @@ class AgentOrchestrator:
                 "macro_context=full (regenerate): каталог %d макросов в system",
                 len(all_macros),
             )
+
+        from app.services.document_rag_service import append_document_rag_to_system
+
+        system_prompt = await append_document_rag_to_system(
+            session,
+            conversation_id,
+            regen_query,
+            system_prompt,
+        )
 
         history = await msg_repo.list_for_llm(
             conversation_id,

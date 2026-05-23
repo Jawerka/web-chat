@@ -1,7 +1,7 @@
 # TODO-2 — приоритизированный план доработок
 
 > **Источники:** сводный аудит [`audit.md`](audit.md), направление и ограничения [`TODO.md`](TODO.md).  
-> **Статус кодовой базы (2026-05-23):** MVP закрыт; **251** автотестов (`pytest -q`). **P0 закрыт**; **P1 закрыт**; **P2.1** production Postgres + ETL; **P2.2** пилот multi-user. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
+> **Статус кодовой базы (2026-05-23):** MVP закрыт; **253** автотестов (`pytest -q`). **P0 закрыт**; **P1 закрыт**; **P2.1** production Postgres + ETL; **P2.2** пилот multi-user. Журнал в [TODO.md §21](TODO.md#21-стабилизация-todo-2-2026-05-23).
 
 ---
 
@@ -230,7 +230,7 @@
 |----|--------|-----------------|
 | P2.1 | PostgreSQL + миграции Alembic | [§17](TODO.md#17-дорожная-карта-v2) — **пилот** |
 | P2.2 | Multi-user: изоляция бесед, quotas, роли | [§17](TODO.md#17-дорожная-карта-v2), [§0.3](TODO.md#03-не-цели-версии-1-v1) |
-| P2.3 | RAG / embeddings (отдельно от «скилла» — см. Фичи) | [§17](TODO.md#17-дорожная-карта-v2) |
+| P2.3 | RAG / embeddings (отдельно от «скилла» — см. Фичи) | [§17](TODO.md#17-дорожная-карта-v2) — **пилот** |
 | P2.4 | Media registry: orphan cleanup, dedup, retention policies | [§20](TODO.md#20-доработки-после-mvp-итерации-разработки) — **пилот:** orphan disk |
 | P2.5 | `localStorage` schema versioning + migrations на клиенте | audit: corruption при обновлениях UI — **v1** |
 | P2.6 | Redis / NATS event bus + horizontal scale | только при реальной потребности |
@@ -258,6 +258,15 @@
 - [x] Вход login/password, сессия HttpOnly — [`auth.py`](app/api/auth.py), [`AUTH.md`](deploy/AUTH.md), bootstrap admin
 - [x] Роли в БД (`admin` / `user`); admin API `GET/POST /api/users`
 - [x] UI: аккаунт (логин, роль, выход), создание пользователей в настройках (admin)
+
+## P2.3 — RAG по документам (пилот)
+
+- [x] Модель `DocumentChunk`, миграция `d1a2b3c4e5f6`
+- [x] Чанкинг `extracted_text`, embeddings — [`document_rag_service.py`](app/services/document_rag_service.py)
+- [x] API: `POST /api/attachments/{id}/index-rag`, `GET /api/conversations/{id}/document-search`
+- [x] Автоиндексация после extract; `RAG_AUTO_INJECT` в orchestrator
+- [x] Документация — [deploy/RAG.md](deploy/RAG.md)
+- [ ] UI: переключатель RAG в чате, превью найденных фрагментов
 
 ## P2.4 — Orphan cleanup (пилот)
 
@@ -356,7 +365,7 @@ M3 — Platform v2         P2.*, Ф2, Postgres, multi-user
 - [x] SD → F5 → статус и сетка без дублей (draft dedupe + `_setGridImages` при resume; полный SD+F5 — smoke вручную при необходимости)
 - [x] img2img regenerate → в логах `init взят из user-сообщения` (`test_regression_checklist`)
 - [x] `@@macro` → один `@` в UI (`test_expand_double_at_alias` + `MACRO_MENTION_RE` / CSS `::before`)
-- [x] `pytest -q` — все зелёные (251 тест, 2026-05-23)
+- [x] `pytest -q` — все зелёные (253 теста, 2026-05-23)
 - [x] `PUBLIC_BASE_URL` / VPN URL в health совпадают с браузером (`Host` → `public_base_url`, LAN/VPN в config)
 - [x] После обрыва WS нет вечного «генерация…» (`test_ws_disconnect_after_turn_not_busy`, `test_reconnect_manager_not_busy`)
 

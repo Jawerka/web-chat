@@ -39,11 +39,43 @@ async def run_sqlite_migrations(engine: AsyncEngine) -> None:
             )
             logger.info("Миграция: prompt_macros.embedding_json")
 
+        await _migrate_document_chunks(conn)
         await _migrate_users_and_conversation_owner(conn)
         await _migrate_users_auth(conn)
         await _migrate_preset_prompts(conn)
         await _normalize_dashed_uuid_ids(conn)
         await _normalize_sqlite_enum_names(conn)
+
+
+async def _migrate_document_chunks(conn) -> None:
+    """P2.3: document_chunks для RAG."""
+    result = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='document_chunks'"),
+    )
+    if result.fetchone() is not None:
+        return
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE document_chunks (
+                id TEXT PRIMARY KEY,
+                attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+                conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                text TEXT NOT NULL,
+                embedding_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """,
+        ),
+    )
+    await conn.execute(
+        text("CREATE INDEX ix_document_chunks_attachment_id ON document_chunks (attachment_id)"),
+    )
+    await conn.execute(
+        text("CREATE INDEX ix_document_chunks_conversation_id ON document_chunks (conversation_id)"),
+    )
+    logger.info("Миграция: таблица document_chunks")
 
 
 async def _migrate_users_auth(conn) -> None:

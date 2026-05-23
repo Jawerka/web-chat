@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import (
     Attachment,
     Conversation,
+    DocumentChunk,
     MediaAsset,
     Message,
     MessageRole,
@@ -521,6 +522,52 @@ class AttachmentRepository:
             att.conversation_id = conversation_id
 
         await self._session.flush()
+
+
+class DocumentChunkRepository:
+    """Фрагменты документов для RAG (P2.3)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def delete_for_attachment(self, attachment_id: uuid.UUID) -> int:
+        result = await self._session.execute(
+            delete(DocumentChunk).where(DocumentChunk.attachment_id == attachment_id),
+        )
+        return int(result.rowcount or 0)
+
+    async def create_chunks(
+        self,
+        *,
+        attachment_id: uuid.UUID,
+        conversation_id: uuid.UUID | None,
+        chunks: list[tuple[int, str, list[float] | None]],
+    ) -> list[DocumentChunk]:
+        rows: list[DocumentChunk] = []
+        for index, text, embedding in chunks:
+            row = DocumentChunk(
+                attachment_id=attachment_id,
+                conversation_id=conversation_id,
+                chunk_index=index,
+                text=text,
+                embedding_json=embedding,
+            )
+            self._session.add(row)
+            rows.append(row)
+        await self._session.flush()
+        return rows
+
+    async def list_for_conversation(
+        self,
+        conversation_id: uuid.UUID,
+    ) -> list[tuple[DocumentChunk, Attachment]]:
+        result = await self._session.execute(
+            select(DocumentChunk, Attachment)
+            .join(Attachment, DocumentChunk.attachment_id == Attachment.id)
+            .where(DocumentChunk.conversation_id == conversation_id)
+            .order_by(DocumentChunk.attachment_id, DocumentChunk.chunk_index),
+        )
+        return list(result.all())
 
 
 class MessageRepository:

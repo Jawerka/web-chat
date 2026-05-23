@@ -276,3 +276,38 @@ class Attachment(Base):
         server_default=func.now(),
         nullable=False,
     )
+    document_chunks: Mapped[list[DocumentChunk]] = relationship(
+        back_populates="attachment",
+        cascade="all, delete-orphan",
+    )
+
+
+class DocumentChunk(Base):
+    """Фрагмент extracted_text вложения для semantic RAG (P2.3)."""
+
+    __tablename__ = "document_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    attachment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("attachments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_json: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    attachment: Mapped[Attachment] = relationship(back_populates="document_chunks")

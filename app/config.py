@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     # Ф2: embeddings для semantic search по каталогу @alias
     embedding_model: str = ""
     macro_search_top_k: int = 5
+    # P2.3: RAG по extracted_text документов беседы
+    rag_enabled: bool = False
+    rag_auto_inject: bool = False
+    rag_chunk_chars: int = 1500
+    rag_chunk_overlap: int = 200
+    rag_search_top_k: int = 5
+    rag_context_max_chars: int = 8000
 
     # Vision: llama-server скачивает image_url по HTTP (лимит ~10 MB на стороне LLM)
     llm_vision_max_bytes: int = 6 * 1024 * 1024

@@ -1804,7 +1804,7 @@ Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 - [ ] Basic auth за reverse proxy (шаблон nginx — в TODO-2 P0.1)
 - [x] `img2img` + инструкции denoising (см. image-gen TODO)
 - [x] Вкладка «Галерея» (`/gallery`, ссылка в сайдбаре)
-- [ ] RAG / embeddings
+- [x] RAG / embeddings (пилот P2.3: document chunks, см. [deploy/RAG.md](deploy/RAG.md))
 - [~] Поддержка нескольких пользователей (пилот P2.2: `MULTI_USER_ENABLED`, `X-Web-Chat-User`)
 
 ---
@@ -2032,7 +2032,7 @@ MVP считается готовым после завершения **этап
 | Postgres + ETL | ✅ | P2.1, `DATABASE_URL` production |
 | Multi-user пилот | [~] | P2.2: `User`, `owner_user_id`, заголовок `X-Web-Chat-User` |
 
-**Тесты:** **251** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
+**Тесты:** **253** passed (`pytest -q`). Очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов), `tests/safety.py`.
 
 ---
 
