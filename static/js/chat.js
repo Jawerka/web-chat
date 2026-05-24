@@ -2852,7 +2852,6 @@ class ChatApp {
     if (!details) {
       details = document.createElement('details');
       details.className = 'message-reasoning';
-      details.open = true;
       const summary = document.createElement('summary');
       summary.className = 'message-reasoning-summary';
       summary.textContent = 'Размышления модели';
@@ -2868,8 +2867,6 @@ class ChatApp {
     const pre = this._ensureStreamReasoningShell();
     if (!pre) return;
     pre.textContent = text || '';
-    const details = pre.closest('.message-reasoning');
-    if (details && text) details.open = true;
     if (text) this.streamEl?.classList.add('has-reasoning');
   }
 
