@@ -16,6 +16,10 @@ class AppLog {
 
   _formatDetail(detail) {
     if (detail == null) return '';
+    if (detail instanceof Error) {
+      const stack = detail.stack ? `\n${detail.stack}` : '';
+      return ` — ${detail.message}${stack}`;
+    }
     if (typeof detail === 'string') return ` — ${detail}`;
     try {
       return ` — ${JSON.stringify(detail)}`;
@@ -33,7 +37,12 @@ class AppLog {
     this._notify();
     if (level === 'error') console.error(line);
     else if (level === 'warn') console.warn(line);
+    else if (level === 'debug') console.debug(line);
     else console.info(line);
+  }
+
+  debug(category, message, detail) {
+    this.log('debug', category, message, detail);
   }
 
   info(category, message, detail) {

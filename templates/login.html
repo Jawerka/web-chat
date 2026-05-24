@@ -54,20 +54,25 @@
           </svg>
         </div>
         <div>
-          <h1 id="login-title">web-chat</h1>
-          <p class="login-subtitle">Вход в систему</p>
+          <h1 id="login-title" class="type-title">web-chat</h1>
+          <p class="login-subtitle type-meta">Вход в систему</p>
         </div>
       </div>
+
+      <p class="login-intro type-hint" id="login-intro">
+        После входа создайте беседу, прикрепите файл или напишите <code>@alias</code> для быстрого промпта.
+      </p>
 
       <form id="login-form" class="login-form" autocomplete="on">
         <label class="login-field">
           <span class="login-field-label">Логин</span>
-          <input type="text" id="login-input" name="login" required autocomplete="username" autofocus placeholder="admin">
+          <input type="text" id="login-input" name="login" required autocomplete="username" autofocus placeholder="Ваш логин">
         </label>
         <label class="login-field">
           <span class="login-field-label">Пароль</span>
-          <input type="password" id="password-input" name="password" required autocomplete="current-password" placeholder="••••••••">
+          <input type="password" id="password-input" name="password" required autocomplete="current-password" placeholder="Пароль">
         </label>
+        <p class="login-hint type-hint" id="login-hint">Учётные данные задаются администратором сервера.</p>
         <p class="login-error hidden" id="login-error" role="alert"></p>
         <button type="submit" class="login-submit" id="login-submit">Войти</button>
       </form>

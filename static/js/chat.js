@@ -168,7 +168,6 @@ const MSG_ICONS = {
   edit: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
   regen: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
   delete: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-  more: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
 };
 
 /** Действия над сообщением (pin/quote/retry — отложены, см. TODO-2 UX-2). */
@@ -294,7 +293,7 @@ class ChatSocket {
       case 'progress': h.onProgress?.(msg); break;
       case 'generation_update': h.onGenerationUpdate?.(msg); break;
       case 'done': h.onDone?.(msg); break;
-      case 'error': h.onWsError?.(msg.message, msg.code); break;
+      case 'error': h.onWsError?.(msg.message, msg.code, msg.error_id); break;
       default: break;
     }
   }
@@ -303,6 +302,11 @@ class ChatSocket {
 class ChatApp {
   constructor() {
     this.conversations = [];
+    this.trashConversations = [];
+    this._trashOpen = false;
+    this._pendingTrashDeleteId = null;
+    this._pendingTrashDeleteBtn = null;
+    this._pendingEmptyTrash = false;
     this.presets = [];
     this.currentConvId = null;
     this.currentConv = null;
@@ -323,6 +327,10 @@ class ChatApp {
     this._logsUnsub = null;
     this._pendingDeleteConvId = null;
     this._pendingDeleteBtn = null;
+    this._pendingDeleteMessageId = null;
+    this._pendingDeleteMessageBtn = null;
+    this._pendingDeleteMessageRole = null;
+    this._deletingConvIds = new Set();
     this._scrollStuckToBottom = true;
     this._lightboxUrls = [];
     this._lightboxIndex = 0;
@@ -376,6 +384,13 @@ class ChatApp {
       convSearchResults: document.getElementById('conv-search-results'),
       convList: document.getElementById('conv-list'),
       convEmpty: document.getElementById('conv-empty'),
+      convTrashTabBtn: document.getElementById('conv-trash-tab-btn'),
+      convTrashPanel: document.getElementById('conv-trash-panel'),
+      convTrashList: document.getElementById('conv-trash-list'),
+      convTrashCount: document.getElementById('conv-trash-count'),
+      convTrashEmpty: document.getElementById('conv-trash-empty'),
+      convTrashHint: document.getElementById('conv-trash-hint'),
+      convTrashEmptyAll: document.getElementById('conv-trash-empty-all'),
       convSidebar: document.getElementById('conv-sidebar'),
       convSidebarSheet: document.querySelector('.conv-sidebar-sheet'),
       chatPanel: document.querySelector('.chat-panel'),
@@ -451,6 +466,16 @@ class ChatApp {
     };
 
     this.log?.info('app', 'Интерфейс загружен');
+    window.addEventListener('error', (ev) => {
+      this.log?.error('window', ev.message || 'uncaught error', {
+        filename: ev.filename,
+        lineno: ev.lineno,
+        colno: ev.colno,
+      });
+    });
+    window.addEventListener('unhandledrejection', (ev) => {
+      this.log?.error('promise', 'unhandled rejection', ev.reason);
+    });
     this._bindEvents();
     this._loadTheme();
     this._updateThemeToggleLabel();
@@ -466,6 +491,12 @@ class ChatApp {
       this.config = { ...this.config, ...cfg };
       WebChatDateTime.applyServerDefault(cfg.display_timezone);
       this._loadIntegrationUrlFields();
+      this._updateTrustedInternalHint();
+      if (this.config.auth_enabled) {
+        const llm = this._normalizeServiceUrl(this.$.llmBaseUrlInput?.value);
+        const sd = this._normalizeServiceUrl(this.$.sdWebuiUrlInput?.value);
+        if (llm || sd) this._syncTrustedInternalHosts(llm, sd);
+      }
     } catch { /* optional */ }
     if (this.config.rag_enabled) {
       this.$.documentRagBtn?.classList.remove('hidden');
@@ -486,7 +517,18 @@ class ChatApp {
     }
     this.loadLlmModelInfo().catch(() => {});
 
-    await Promise.all([this.loadPresets(), this.loadConversations(), this.promptMacros.load()]);
+    await Promise.all([
+      this.loadPresets(),
+      this.loadConversations(),
+      this.loadTrash(),
+      this.promptMacros.load(),
+    ]);
+    if (this.config?.trash_retention_days && this.$.convTrashHint) {
+      const days = this.config.trash_retention_days;
+      this.$.convTrashHint.textContent = `Удалённые беседы хранятся ${days} ${
+        days === 1 ? 'день' : days < 5 ? 'дня' : 'дней'
+      }, затем удаляются навсегда`;
+    }
     this.promptMacros.bindInputAutocomplete(this.$.userInput);
     const saved = localStorage.getItem('webchat_conv_id');
     if (saved && this.conversations.some((c) => c.id === saved)) {
@@ -497,6 +539,8 @@ class ChatApp {
 
   _bindEvents() {
     document.getElementById('btn-new-chat').addEventListener('click', () => this.openNewConvModal());
+    this.$.convTrashTabBtn?.addEventListener('click', () => this._toggleTrashPanel());
+    this.$.convTrashEmptyAll?.addEventListener('click', () => this._onEmptyTrashClick());
     document.getElementById('placeholder-new-chat').addEventListener('click', () => this.openNewConvModal());
     const closeNewConvModal = () => this.$.newConvModal.close();
     document.getElementById('new-conv-cancel')?.addEventListener('click', closeNewConvModal);
@@ -526,7 +570,6 @@ class ChatApp {
     });
     this._initMacroContextToggle();
     this._initComposerToolsMenu();
-    this._initMessageActionsGlobalClose();
     document.addEventListener('click', (e) => {
       const pop = document.getElementById('macro-picker-popover');
       if (!pop || pop.classList.contains('hidden')) return;
@@ -688,9 +731,25 @@ class ChatApp {
     this._initComposerFileHandlers();
 
     this._onDocumentClickCancelDelete = (e) => {
-      if (!this._pendingDeleteConvId) return;
-      if (e.target.closest(`.conv-item-delete[data-id="${this._pendingDeleteConvId}"]`)) return;
-      this._cancelPendingDelete();
+      if (this._pendingDeleteConvId) {
+        if (!e.target.closest(`.conv-item-delete[data-id="${this._pendingDeleteConvId}"]`)) {
+          this._cancelPendingDelete();
+        }
+      }
+      if (this._pendingDeleteMessageId) {
+        const deleteSel = `.message-row[data-message-id="${CSS.escape(this._pendingDeleteMessageId)}"] .msg-action-btn[data-action="delete"]`;
+        if (!e.target.closest(deleteSel)) {
+          this._cancelPendingMessageDelete();
+        }
+      }
+      if (this._pendingTrashDeleteId) {
+        if (!e.target.closest(`.conv-trash-delete[data-id="${this._pendingTrashDeleteId}"]`)) {
+          this._cancelPendingTrashDelete();
+        }
+      }
+      if (this._pendingEmptyTrash && !e.target.closest('#conv-trash-empty-all')) {
+        this._cancelPendingEmptyTrash();
+      }
     };
     document.addEventListener('click', this._onDocumentClickCancelDelete);
 
@@ -1502,6 +1561,210 @@ class ChatApp {
     this.renderConvList();
   }
 
+  async loadTrash() {
+    try {
+      this.trashConversations = await this.api('/api/conversations/trash');
+      this._renderTrashList();
+      this._updateTrashBadge();
+    } catch (err) {
+      this.log?.warn('trash', err.message);
+      this.trashConversations = [];
+      this._renderTrashList();
+      this._updateTrashBadge();
+    }
+  }
+
+  _updateTrashBadge() {
+    const n = this.trashConversations.length;
+    if (!this.$.convTrashCount) return;
+    this.$.convTrashCount.textContent = String(n);
+    this.$.convTrashCount.classList.toggle('hidden', n === 0);
+    if (this.$.convTrashEmpty) {
+      this.$.convTrashEmpty.classList.toggle('hidden', n > 0);
+    }
+    if (this.$.convTrashEmptyAll) {
+      this.$.convTrashEmptyAll.classList.toggle('hidden', n === 0);
+      if (n === 0) {
+        this._cancelPendingEmptyTrash();
+      }
+    }
+    this.$.convTrashTabBtn?.classList.toggle('has-items', n > 0);
+  }
+
+  _setSidebarTab(tab) {
+    const showTrash = tab === 'trash';
+    this._trashOpen = showTrash;
+    this.$.convTrashPanel?.classList.toggle('hidden', !showTrash);
+    this.$.convTrashTabBtn?.classList.toggle('is-active', showTrash);
+    this.$.convTrashTabBtn?.setAttribute('aria-pressed', showTrash ? 'true' : 'false');
+    this.$.convSidebarSheet?.classList.toggle('trash-tab-open', showTrash);
+    if (showTrash) {
+      this._closeConvSearchPanel();
+      void this.loadTrash();
+    }
+  }
+
+  _toggleTrashPanel() {
+    this._setSidebarTab(this._trashOpen ? 'conversations' : 'trash');
+  }
+
+  _cancelPendingEmptyTrash() {
+    if (!this._pendingEmptyTrash) return;
+    this._pendingEmptyTrash = false;
+    this.$.convTrashEmptyAll?.classList.remove('delete-armed');
+    if (this.$.convTrashEmptyAll) {
+      this.$.convTrashEmptyAll.title = 'Удалить все беседы из корзины навсегда';
+    }
+  }
+
+  _onEmptyTrashClick() {
+    if (!this.trashConversations.length) return;
+    if (this._pendingEmptyTrash) {
+      void this._executeEmptyTrash();
+      return;
+    }
+    this._cancelPendingTrashDelete();
+    this._cancelPendingDelete();
+    this._cancelPendingMessageDelete();
+    this._cancelMessageImageDelete();
+    this._pendingEmptyTrash = true;
+    this.$.convTrashEmptyAll?.classList.add('delete-armed');
+    if (this.$.convTrashEmptyAll) {
+      this.$.convTrashEmptyAll.title = 'Нажмите ещё раз — удалить всё навсегда';
+    }
+  }
+
+  async _executeEmptyTrash() {
+    this._cancelPendingEmptyTrash();
+    const snapshot = [...this.trashConversations];
+    this.trashConversations = [];
+    this._renderTrashList();
+    try {
+      const result = await this.api('/api/conversations/trash', { method: 'DELETE' });
+      const n = result?.deleted ?? snapshot.length;
+      this.log?.info('trash', `Корзина очищена: ${n} бесед`);
+    } catch (err) {
+      this.trashConversations = snapshot;
+      this._renderTrashList();
+      this.showError(err.message || 'Не удалось очистить корзину');
+    }
+  }
+
+  _renderTrashList() {
+    if (!this.$.convTrashList) return;
+    this._cancelPendingTrashDelete();
+    const days = this.config?.trash_retention_days || 3;
+    const html = this.trashConversations
+      .map((c) => {
+        const deletedAt = c.deleted_at ? new Date(c.deleted_at) : null;
+        let meta = WebChatDateTime.formatDateTime(c.deleted_at || c.updated_at);
+        if (deletedAt) {
+          const purgeAt = new Date(deletedAt.getTime() + days * 86400000);
+          const leftMs = purgeAt.getTime() - Date.now();
+          const leftDays = Math.max(0, Math.ceil(leftMs / 86400000));
+          meta += leftDays > 0 ? ` · ещё ${leftDays} дн.` : ' · скоро удалится';
+        }
+        return `<li class="conv-trash-item" data-id="${c.id}" role="listitem">
+          <div class="conv-trash-item-row">
+            <div class="conv-trash-item-main">
+              <div class="conv-trash-item-title">${this.escape(c.title)}</div>
+              <div class="conv-trash-item-meta">${meta}</div>
+            </div>
+            <div class="conv-trash-item-actions">
+              <button type="button" class="conv-trash-restore" data-id="${c.id}" title="Восстановить" aria-label="Восстановить">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              </button>
+              <button type="button" class="conv-trash-delete" data-id="${c.id}" title="Удалить навсегда" aria-label="Удалить навсегда">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+        </li>`;
+      })
+      .join('');
+    this.$.convTrashList.innerHTML = html;
+    this._updateTrashBadge();
+
+    this.$.convTrashList.querySelectorAll('.conv-trash-restore').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void this._restoreTrashConversation(btn.dataset.id);
+      });
+    });
+    this.$.convTrashList.querySelectorAll('.conv-trash-delete').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._onTrashDeleteClick(btn.dataset.id, btn);
+      });
+    });
+  }
+
+  _cancelPendingTrashDelete() {
+    if (!this._pendingTrashDeleteId) return;
+    this._pendingTrashDeleteBtn?.classList.remove('delete-armed');
+    if (this._pendingTrashDeleteBtn) {
+      this._pendingTrashDeleteBtn.title = 'Удалить навсегда';
+    }
+    this.$.convTrashList
+      ?.querySelector(`.conv-trash-item[data-id="${this._pendingTrashDeleteId}"]`)
+      ?.classList.remove('delete-pending');
+    this._pendingTrashDeleteId = null;
+    this._pendingTrashDeleteBtn = null;
+  }
+
+  _onTrashDeleteClick(id, btn) {
+    if (this._pendingTrashDeleteId === id) {
+      void this._executePermanentTrashDelete(id);
+      return;
+    }
+    this._cancelPendingEmptyTrash();
+    this._cancelPendingTrashDelete();
+    this._cancelPendingDelete();
+    this._cancelPendingMessageDelete();
+    this._cancelMessageImageDelete();
+    this._pendingTrashDeleteId = id;
+    this._pendingTrashDeleteBtn = btn;
+    btn.classList.add('delete-armed');
+    btn.title = 'Нажмите ещё раз для удаления';
+    this.$.convTrashList
+      ?.querySelector(`.conv-trash-item[data-id="${id}"]`)
+      ?.classList.add('delete-pending');
+  }
+
+  async _executePermanentTrashDelete(id) {
+    this._cancelPendingTrashDelete();
+    const idx = this.trashConversations.findIndex((c) => c.id === id);
+    const removed = idx >= 0 ? this.trashConversations[idx] : null;
+    if (idx >= 0) {
+      this.trashConversations.splice(idx, 1);
+      this._renderTrashList();
+    }
+    try {
+      await this.api(`/api/conversations/${id}/permanent`, { method: 'DELETE' });
+      this.log?.info('trash', `Беседа ${id} удалена навсегда`);
+    } catch (err) {
+      if (removed) {
+        this.trashConversations.splice(idx, 0, removed);
+        this._renderTrashList();
+      }
+      this.showError(err.message || 'Не удалось удалить');
+    }
+  }
+
+  async _restoreTrashConversation(id) {
+    try {
+      const conv = await this.api(`/api/conversations/${id}/restore`, { method: 'POST' });
+      this.trashConversations = this.trashConversations.filter((c) => c.id !== id);
+      this._upsertConversationInList(conv);
+      this.renderConvList();
+      this._renderTrashList();
+      await this.selectConversation(conv.id, { prefetchedConversation: conv });
+      this.log?.info('trash', `Беседа ${id} восстановлена`);
+    } catch (err) {
+      this.showError(err.message || 'Не удалось восстановить');
+    }
+  }
+
   _conversationsFingerprintFrom(conversations) {
     return (conversations || [])
       .map((c) => `${c.id}|${c.updated_at}|${c.in_progress ? 1 : 0}|${c.title}`)
@@ -1700,7 +1963,7 @@ class ChatApp {
               </div>
               <div class="conv-item-meta">${date}</div>
             </div>
-            <button type="button" class="conv-item-delete" data-id="${c.id}" title="Удалить беседу" aria-label="Удалить беседу">
+            <button type="button" class="conv-item-delete" data-id="${c.id}" title="Удалить в корзину" aria-label="Удалить в корзину">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             </button>
           </div>
@@ -1771,15 +2034,23 @@ class ChatApp {
       const next = input.value.trim() || 'Новая беседа';
       const textEl = titleEl.querySelector('.conv-item-title-text');
       const tipBody = titleEl.querySelector('.conv-item-title-tooltip-body');
-      if (textEl) textEl.textContent = conv.title;
-      else titleEl.textContent = conv.title;
-      if (tipBody) tipBody.textContent = conv.title;
-      titleEl.setAttribute('aria-label', conv.title);
+      const prevTitle = conv.title;
+      if (save && next !== prevTitle) {
+        if (textEl) textEl.textContent = next;
+        else titleEl.textContent = next;
+        if (tipBody) tipBody.textContent = next;
+        titleEl.setAttribute('aria-label', next);
+      } else {
+        if (textEl) textEl.textContent = prevTitle;
+        else titleEl.textContent = prevTitle;
+        if (tipBody) tipBody.textContent = prevTitle;
+        titleEl.setAttribute('aria-label', prevTitle);
+      }
       titleEl.classList.remove('hidden');
       input.remove();
       this._inlineTitleConvId = null;
       this._updateConvTitleTooltips();
-      if (save && next !== conv.title) {
+      if (save && next !== prevTitle) {
         await this._patchConversationTitle(convId, next);
       }
     };
@@ -1804,20 +2075,39 @@ class ChatApp {
   }
 
   async _patchConversationTitle(convId, title) {
+    const conv = this.conversations.find((c) => c.id === convId);
+    const prevTitle = conv?.title;
+    const prevCurrentTitle = this.currentConvId === convId ? this.currentConv?.title : null;
+
+    if (conv) conv.title = title;
+    if (this.currentConvId === convId && this.currentConv) {
+      this.currentConv = { ...this.currentConv, title };
+      this._setSettingsChatTitle(title);
+    }
+    this._conversationsFingerprint = this._conversationsFingerprintFrom(this.conversations);
+    this.renderConvList();
+
     try {
       const updated = await this.api(`/api/conversations/${convId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
       });
-      const conv = this.conversations.find((c) => c.id === convId);
       if (conv) conv.title = updated.title;
       if (this.currentConvId === convId) {
         this.currentConv = updated;
         this._setSettingsChatTitle(updated.title);
       }
+      this._conversationsFingerprint = this._conversationsFingerprintFrom(this.conversations);
       this.renderConvList();
     } catch (err) {
+      if (conv && prevTitle !== undefined) conv.title = prevTitle;
+      if (this.currentConvId === convId && this.currentConv && prevCurrentTitle !== null) {
+        this.currentConv = { ...this.currentConv, title: prevCurrentTitle };
+        this._setSettingsChatTitle(prevCurrentTitle);
+      }
+      this._conversationsFingerprint = this._conversationsFingerprintFrom(this.conversations);
+      this.renderConvList();
       this.showError(err.message);
     }
   }
@@ -1839,6 +2129,7 @@ class ChatApp {
   }
 
   _openConvSearchPanel() {
+    this._setSidebarTab('conversations');
     const stack = this.$.convSearchStack;
     if (!stack) return;
     stack.hidden = false;
@@ -1987,8 +2278,13 @@ class ChatApp {
       void this._executeDeleteConversation(id);
       return;
     }
+    this._cancelPendingMessageDelete();
+    this._cancelMessageImageDelete();
+    this._cancelPendingEmptyTrash();
+    this._cancelPendingTrashDelete();
     this._cancelPendingDelete();
     this._pendingDeleteConvId = id;
+    btn.title = 'Нажмите ещё раз — в корзину';
     this._pendingDeleteBtn = btn;
     btn.classList.add('delete-armed');
     btn.closest('.conv-item')?.classList.add('delete-pending');
@@ -2000,25 +2296,78 @@ class ChatApp {
     this._pendingDeleteBtn?.classList.remove('delete-armed');
     this._pendingDeleteBtn?.closest('.conv-item')?.classList.remove('delete-pending');
     if (this._pendingDeleteBtn) {
-      this._pendingDeleteBtn.title = 'Удалить беседу';
+      this._pendingDeleteBtn.title = 'Удалить в корзину';
     }
     this._pendingDeleteConvId = null;
     this._pendingDeleteBtn = null;
   }
 
-  async _executeDeleteConversation(id) {
-    this._cancelPendingDelete();
-    this.log?.info('chat', `Удаление беседы ${id}`);
-    try {
-      await this.api(`/api/conversations/${id}`, { method: 'DELETE' });
-      this._clearComposerDraft(id);
-      this._clearScrollPosition(id);
-      if (this.currentConvId === id) {
+  _snapshotConversationListState() {
+    return {
+      conversations: [...this.conversations],
+      fingerprint: this._conversationsFingerprint,
+      currentConvId: this.currentConvId,
+      currentConv: this.currentConv ? { ...this.currentConv } : null,
+    };
+  }
+
+  _restoreConversationListState(snapshot) {
+    this.conversations = snapshot.conversations;
+    this._conversationsFingerprint = snapshot.fingerprint;
+    this.renderConvList();
+  }
+
+  /**
+   * Мгновенно убрать беседу из списка (оптимистично).
+   * @returns {{ snapshot, nextConvId: string|null }}
+   */
+  _optimisticRemoveConversation(id) {
+    const snapshot = this._snapshotConversationListState();
+    const wasCurrent = this.currentConvId === id;
+    const remaining = this.conversations.filter((c) => c.id !== id);
+    const nextConvId = wasCurrent && remaining.length ? remaining[0].id : null;
+
+    this.conversations = remaining;
+    this._conversationsFingerprint = this._conversationsFingerprintFrom(this.conversations);
+    this._clearComposerDraft(id);
+    this._clearScrollPosition(id);
+
+    if (wasCurrent) {
+      this.disconnectSocket();
+      if (nextConvId) {
+        void this.selectConversation(nextConvId);
+      } else {
         this._clearCurrentConversation();
       }
-      await this.loadConversations();
+    }
+
+    this.renderConvList();
+    return { snapshot, nextConvId, wasCurrent };
+  }
+
+  async _executeDeleteConversation(id) {
+    this._cancelPendingDelete();
+    if (this._deletingConvIds.has(id)) return;
+    this._deletingConvIds.add(id);
+
+    const { snapshot, wasCurrent } = this._optimisticRemoveConversation(id);
+    this.log?.info('chat', `Удаление беседы ${id}`);
+
+    try {
+      await this.api(`/api/conversations/${id}`, { method: 'DELETE' });
+      void this.loadTrash();
+      void this._syncConversationsFromServer();
     } catch (err) {
-      this.showError(err.message);
+      this._restoreConversationListState(snapshot);
+      if (wasCurrent && snapshot.currentConvId === id && snapshot.currentConv) {
+        this.currentConvId = id;
+        this.currentConv = snapshot.currentConv;
+        localStorage.setItem('webchat_conv_id', id);
+        void this.selectConversation(id, { prefetchedConversation: snapshot.currentConv });
+      }
+      this.showError(err.message || 'Не удалось удалить беседу');
+    } finally {
+      this._deletingConvIds.delete(id);
     }
   }
 
@@ -2052,7 +2401,64 @@ class ChatApp {
   openNewConvModal() {
     document.getElementById('new-conv-title').value = '';
     this.$.newConvModal.showModal();
+    this._bindDialogFocusTrap(this.$.newConvModal);
     setTimeout(() => document.getElementById('new-conv-title').focus(), 50);
+  }
+
+  _bindDialogFocusTrap(dialog) {
+    if (!dialog || dialog.dataset.focusTrapBound) return;
+    dialog.dataset.focusTrapBound = '1';
+    const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab' || !dialog.open) return;
+      const nodes = [...dialog.querySelectorAll(selector)].filter(
+        (el) => !el.disabled && el.offsetParent !== null,
+      );
+      if (nodes.length < 2) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
+  }
+
+  _upsertConversationInList(conv) {
+    const idx = this.conversations.findIndex((c) => c.id === conv.id);
+    if (idx >= 0) {
+      this.conversations[idx] = { ...this.conversations[idx], ...conv };
+    } else {
+      this.conversations.unshift(conv);
+    }
+    this._conversationsFingerprint = this._conversationsFingerprintFrom(this.conversations);
+  }
+
+  async _fetchConversationMeta(id, opts = {}) {
+    const prefetched = opts.prefetchedConversation;
+    if (prefetched && prefetched.id === id) {
+      return prefetched;
+    }
+    const maxAttempts = opts.retryOn404 ? 4 : 1;
+    let lastErr;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        return await this.api(`/api/conversations/${id}`);
+      } catch (err) {
+        lastErr = err;
+        const retryable = /не найдена/i.test(err?.message || '');
+        if (!retryable || attempt >= maxAttempts - 1) {
+          throw err;
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 60 * (attempt + 1));
+        });
+      }
+    }
+    throw lastErr;
   }
 
   async createConversation() {
@@ -2060,14 +2466,15 @@ class ChatApp {
     const presetId = this.$.newConvPreset.value || null;
     const body = { title };
     if (presetId) body.preset_id = presetId;
+    this.$.newConvModal.close();
     const conv = await this.api('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    this.$.newConvModal.close();
-    await this.loadConversations();
-    await this.selectConversation(conv.id);
+    this._upsertConversationInList(conv);
+    await this.selectConversation(conv.id, { prefetchedConversation: conv });
+    void this.loadConversations();
   }
 
   async selectConversation(id, opts = {}) {
@@ -2085,16 +2492,21 @@ class ChatApp {
       this._saveScrollPosition(this.currentConvId);
     }
 
+    this._setSidebarTab('conversations');
     this._cancelPendingDelete();
+    this._cancelPendingMessageDelete();
     this._closeConvSearchPanel();
     this.disconnectSocket();
     this.log?.info('chat', `Беседа ${id}`);
+    const prevConvId = this.currentConvId && this.currentConvId !== id
+      ? this.currentConvId
+      : null;
     this.currentConvId = id;
     localStorage.setItem('webchat_conv_id', id);
 
     this._beginConvSwitchOverlay();
     try {
-      this.currentConv = await this.api(`/api/conversations/${id}`);
+      this.currentConv = await this._fetchConversationMeta(id, opts);
 
       this._setSettingsChatTitle(this.currentConv.title);
       this.populateConvPresetSelect(this.currentConv.preset_id);
@@ -2144,13 +2556,21 @@ class ChatApp {
       }
       this._syncComposerSendState();
     } catch (err) {
+      if (prevConvId && prevConvId !== id) {
+        this.currentConvId = prevConvId;
+        localStorage.setItem('webchat_conv_id', prevConvId);
+      } else {
+        this.currentConvId = null;
+        this.currentConv = null;
+        localStorage.removeItem('webchat_conv_id');
+        this.$.placeholder.classList.remove('hidden');
+        this.$.chatHistory.classList.add('hidden');
+        this.$.chatComposer.classList.add('hidden');
+      }
       this.showError(err.message || 'Не удалось открыть беседу');
       this.log?.error('chat', err.message || 'selectConversation failed');
     } finally {
       this._endConvSwitchOverlay();
-      if (this.currentConvId && !this.socket) {
-        this.connectSocket();
-      }
     }
   }
 
@@ -2403,7 +2823,7 @@ class ChatApp {
       onGenerationUpdate: (msg) => this.onGenerationUpdate(msg),
       onAck: (msg) => this.onAck(msg),
       onDone: (msg) => this.onTurnDone(msg),
-      onWsError: (message, code) => this.onWsError(message, code),
+      onWsError: (message, code, errorId) => this.onWsError(message, code, errorId),
       onConnected: (msg) => this._onWsConnected(msg),
       onAssistantDraft: (msg) => this._onAssistantDraft(msg),
     });
@@ -3224,18 +3644,24 @@ class ChatApp {
     }
   }
 
-  onWsError(message, code) {
+  onWsError(message, code, errorId) {
     this._clearGenerationSyncTimer();
     this._generationResumeActive = false;
     this.hideProgress();
-    this.log?.error('ws', `Ошибка генерации (${code || 'unknown'})`, message);
+    this.log?.error('ws', `Ошибка генерации (${code || 'unknown'})`, {
+      message,
+      code: code || null,
+      error_id: errorId || null,
+      conversation_id: this.currentConvId || null,
+    });
     if (code === 'tool_loop' && this.currentConvId) {
       this.loadMessages().catch(() => {});
     }
+    const opts = errorId ? { errorId } : {};
     if (code !== 'cancelled') {
-      this.showError(message || 'Ошибка генерации');
+      this.showError(message || 'Ошибка генерации', 8000, opts);
     } else {
-      this.showError(message || 'Генерация отменена', 4000);
+      this.showError(message || 'Генерация отменена', 4000, opts);
     }
     if (this.streamRow && !this.streamText) {
       this.streamRow.remove();
@@ -3283,57 +3709,35 @@ class ChatApp {
   _buildMessageActions(role, row) {
     const wrap = document.createElement('div');
     wrap.className = 'message-actions';
-
-    const kebab = document.createElement('button');
-    kebab.type = 'button';
-    kebab.className = 'msg-action-kebab btn-icon';
-    kebab.title = 'Действия с сообщением';
-    kebab.setAttribute('aria-label', 'Действия с сообщением');
-    kebab.setAttribute('aria-haspopup', 'menu');
-    kebab.setAttribute('aria-expanded', 'false');
-    kebab.innerHTML = MSG_ICONS.more;
-
-    const menu = document.createElement('div');
-    menu.className = 'msg-actions-menu hidden';
-    menu.setAttribute('role', 'menu');
+    wrap.setAttribute('role', 'toolbar');
+    wrap.setAttribute('aria-label', 'Действия с сообщением');
 
     for (const key of this._messageActionKeysForRow(role, row)) {
       const def = MESSAGE_ACTION_DEFS.find((d) => d.key === key);
       if (!def) continue;
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = `msg-actions-menu-item${def.danger ? ' danger' : ''}`;
-      item.dataset.action = def.key;
-      item.setAttribute('role', 'menuitem');
-      item.title = def.title;
-      item.innerHTML = `${def.icon}<span class="msg-actions-menu-label">${def.label}</span>`;
-      menu.appendChild(item);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `msg-action-btn btn-icon${def.danger ? ' danger' : ''}`;
+      btn.dataset.action = def.key;
+      btn.title = def.title;
+      btn.setAttribute('aria-label', def.label);
+      btn.innerHTML = def.icon;
+      wrap.appendChild(btn);
     }
 
-    kebab.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const hostRow = wrap.closest('.message-row');
-      if (menu.classList.contains('is-open')) {
-        this._closeMessageActionsMenu(hostRow);
-      } else {
-        this._openMessageActionsMenu(hostRow);
-      }
-    });
-
-    menu.addEventListener('click', (e) => {
+    wrap.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');
       const hostRow = wrap.closest('.message-row');
       if (!btn || !hostRow?.dataset.messageId) return;
+      e.stopPropagation();
       const id = hostRow.dataset.messageId;
       const action = btn.dataset.action;
       if (action === 'copy') this.copyMessageText(id, role, btn);
-      else if (action === 'delete') this.deleteMessage(id, role);
+      else if (action === 'delete') this._onMessageDeleteClick(id, role, btn);
       else if (action === 'edit') this.editMessage(id, role);
       else if (action === 'regenerate') this.regenerateMessage(id);
-      this._closeMessageActionsMenu(hostRow);
     });
 
-    wrap.append(kebab, menu);
     return wrap;
   }
 
@@ -3356,50 +3760,6 @@ class ChatApp {
     if (row.dataset.streamingDraft === 'true' || row.dataset.temp === 'true') return false;
     if (this.streaming && row === this.streamRow) return false;
     return true;
-  }
-
-  _openMessageActionsMenu(row) {
-    if (!row) return;
-    this._closeAllMessageActionMenus(row);
-    const menu = row.querySelector('.msg-actions-menu');
-    const kebab = row.querySelector('.msg-action-kebab');
-    if (!menu || !kebab) return;
-    menu.classList.remove('hidden');
-    menu.classList.add('is-open');
-    kebab.classList.add('is-open');
-    kebab.setAttribute('aria-expanded', 'true');
-  }
-
-  _closeMessageActionsMenu(row) {
-    if (!row) return;
-    const menu = row.querySelector('.msg-actions-menu');
-    const kebab = row.querySelector('.msg-action-kebab');
-    if (!menu) return;
-    menu.classList.add('hidden');
-    menu.classList.remove('is-open');
-    kebab?.classList.remove('is-open');
-    kebab?.setAttribute('aria-expanded', 'false');
-  }
-
-  _closeAllMessageActionMenus(exceptRow = null) {
-    this.$.chatMessages?.querySelectorAll('.msg-actions-menu.is-open').forEach((menu) => {
-      const row = menu.closest('.message-row');
-      if (exceptRow && row === exceptRow) return;
-      this._closeMessageActionsMenu(row);
-    });
-  }
-
-  _initMessageActionsGlobalClose() {
-    document.addEventListener('click', (e) => {
-      if (e.target.closest('.message-actions')) return;
-      this._closeAllMessageActionMenus();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this._closeAllMessageActionMenus();
-    });
-    this._chatHistoryScrollEl()?.addEventListener('scroll', () => {
-      this._closeAllMessageActionMenus();
-    }, { passive: true });
   }
 
   _attachActions(row, role) {
@@ -3539,19 +3899,38 @@ class ChatApp {
     this.log?.info('msg', `Текст сообщения скопирован (${role})`);
   }
 
-  async deleteMessage(messageId, role) {
-    const row = this._findRow(messageId);
-    if (!row) return;
-
-    if (role === 'user') {
-      const hasReplies = row.nextElementSibling !== null;
-      const question = hasReplies
-        ? 'Удалить сообщение и все ответы после него? Контекст беседы будет обрезан.'
-        : 'Удалить это сообщение?';
-      if (!confirm(question)) return;
-    } else if (!confirm('Удалить ответ ассистента из чата и контекста?')) {
+  _onMessageDeleteClick(messageId, role, btn) {
+    if (this._pendingDeleteMessageId === messageId) {
+      void this._executeDeleteMessage(messageId, role);
       return;
     }
+    this._cancelPendingMessageDelete();
+    this._cancelPendingDelete();
+    this._cancelMessageImageDelete();
+    this._pendingDeleteMessageId = messageId;
+    this._pendingDeleteMessageRole = role;
+    this._pendingDeleteMessageBtn = btn;
+    btn.classList.add('delete-armed');
+    btn.title = 'Нажмите ещё раз для удаления';
+    this._findRow(messageId)?.classList.add('delete-pending');
+  }
+
+  _cancelPendingMessageDelete() {
+    if (!this._pendingDeleteMessageId) return;
+    this._pendingDeleteMessageBtn?.classList.remove('delete-armed');
+    if (this._pendingDeleteMessageBtn) {
+      this._pendingDeleteMessageBtn.title = 'Удалить';
+    }
+    this._findRow(this._pendingDeleteMessageId)?.classList.remove('delete-pending');
+    this._pendingDeleteMessageId = null;
+    this._pendingDeleteMessageBtn = null;
+    this._pendingDeleteMessageRole = null;
+  }
+
+  async _executeDeleteMessage(messageId, role) {
+    this._cancelPendingMessageDelete();
+    const row = this._findRow(messageId);
+    if (!row) return;
 
     if (this.editingMessageId === messageId) {
       this._cancelMessageEdit();
@@ -3563,18 +3942,24 @@ class ChatApp {
 
     const cascade = role === 'user';
     this.log?.info('msg', `Удаление ${role} ${messageId} cascade=${cascade}`);
+
+    if (cascade) {
+      this._removeFollowingRows(row, true);
+    } else {
+      row.remove();
+    }
+    this._messagesFingerprint = `opt-del-${Date.now()}`;
+
     try {
       await this.api(
         `/api/conversations/${this.currentConvId}/messages/${messageId}?cascade=${cascade}`,
         { method: 'DELETE' },
       );
-      if (cascade) {
-        this._removeFollowingRows(row, true);
-      } else {
-        row.remove();
-      }
     } catch (err) {
       this.showError(err.message);
+      if (this.currentConvId) {
+        await this.loadMessages({ force: true, preserveScroll: true });
+      }
     }
   }
 
@@ -3814,6 +4199,8 @@ class ChatApp {
       void this._executeMessageImageDelete(frame);
       return;
     }
+    this._cancelPendingMessageDelete();
+    this._cancelPendingDelete();
     this._cancelMessageImageDelete();
     this._pendingImageDeleteKey = key;
     this._pendingImageDeleteBtn = btn;
@@ -3831,6 +4218,15 @@ class ChatApp {
     const path = target.source === 'db'
       ? `/api/gallery/db/${target.id}`
       : `/api/gallery/disk/${encodeURIComponent(target.filename)}`;
+
+    const row = frame.closest('.message-row');
+    const grid = row?.querySelector('.message-images');
+    const msgEl = row?.querySelector('.chat-message');
+    frame.remove();
+    if (grid && !grid.children.length && msgEl) {
+      msgEl.classList.remove('has-images');
+    }
+
     try {
       const res = await fetch(path, { method: 'DELETE' });
       if (res.status === 404) throw new Error('Уже удалено');
@@ -3838,20 +4234,13 @@ class ChatApp {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || res.statusText);
       }
-      const row = frame.closest('.message-row');
-      frame.remove();
-      const grid = row?.querySelector('.message-images');
-      const msgEl = row?.querySelector('.chat-message');
-      if (grid && !grid.children.length && msgEl) {
-        msgEl.classList.remove('has-images');
-      }
-      if (this.currentConvId) {
-        this._messagesFingerprint = '';
-        await this.loadMessages({ preserveScroll: true });
-      }
+      this._messagesFingerprint = `opt-img-${Date.now()}`;
       this.log?.info('chat', `Изображение удалено: ${key}`);
     } catch (err) {
       this.showError(err.message || 'Не удалось удалить');
+      if (this.currentConvId) {
+        await this.loadMessages({ preserveScroll: true });
+      }
     }
   }
 
@@ -4516,9 +4905,13 @@ class ChatApp {
   }
 
   showError(msg, autoHideMs = 8000, options = {}) {
-    this.log?.error('ui', msg);
+    let text = msg;
+    if (options.errorId) {
+      text = `${msg} Код для поддержки: ${options.errorId}`;
+    }
+    this.log?.error('ui', text);
     clearTimeout(this._errorTimer);
-    this.$.errorBannerText.textContent = msg;
+    this.$.errorBannerText.textContent = text;
     this.$.errorBannerRetry?.classList.toggle('hidden', !options.showRetry);
     this.$.errorBanner.classList.remove('hidden');
     if (autoHideMs > 0) {
@@ -4969,6 +5362,53 @@ class ChatApp {
     } else {
       localStorage.removeItem('webchat_sd_webui_url');
     }
+    this._syncTrustedInternalHosts(llm, sd);
+  }
+
+  _updateTrustedInternalHint() {
+    const el = document.getElementById('trusted-internal-hint');
+    if (!el) return;
+    if (!this.config?.auth_enabled) {
+      el.classList.add('hidden');
+      return;
+    }
+    const n = this.config.trusted_internal_ip_count ?? 0;
+    const env = (this.config.trusted_internal_env_hosts || []).filter(Boolean);
+    const ui = (this.config.trusted_internal_ui_hosts || []).filter(Boolean);
+    const parts = [];
+    if (env.length) parts.push(`.env: ${env.join(', ')}`);
+    if (ui.length) parts.push(`настройки чата: ${ui.join(', ')}`);
+    el.textContent = parts.length
+      ? `Доверенные IP (${n}): ${parts.join(' · ')}. LLM/SD получают /media без cookie.`
+      : `Доверенные IP (${n}): укажите адреса LLM/SD — хосты подставятся автоматически.`;
+    el.classList.remove('hidden');
+  }
+
+  async _syncTrustedInternalHosts(llmUrl, sdUrl) {
+    if (!this.config?.auth_enabled) return;
+    const llm = llmUrl
+      ? (llmUrl.includes('/v1') ? llmUrl : `${llmUrl}/v1`)
+      : null;
+    try {
+      const res = await fetch('/api/config/trusted-internal/sync', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ llm_base_url: llm, sd_webui_url: sdUrl || null }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      this.config = {
+        ...this.config,
+        trusted_internal_env_hosts: data.env_hosts,
+        trusted_internal_ui_hosts: data.ui_hosts,
+        trusted_internal_ip_count: data.ip_count,
+      };
+      this._updateTrustedInternalHint();
+      this.log?.debug('settings', 'Доверенные IP синхронизированы', { ip_count: data.ip_count });
+    } catch (err) {
+      this.log?.warn('settings', 'Не удалось синхронизировать доверенные IP', err?.message);
+    }
   }
 
   getMacroContextMode() {
@@ -5329,16 +5769,24 @@ class ChatApp {
 
   async _fetchServerLogs() {
     try {
-      const res = await fetch('/api/logs?limit=300');
+      const res = await fetch('/api/logs?limit=300', { credentials: 'same-origin' });
       if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const body = await res.json();
+          detail = body.detail || detail;
+          if (typeof detail !== 'string') detail = JSON.stringify(detail);
+        } catch { /* ignore */ }
         this._serverLogLines = [];
+        this.log?.error('app', `Серверный журнал: HTTP ${res.status}`, detail);
         return;
       }
       const data = await res.json();
       this._serverLogLines = data.lines || [];
+      this.log?.debug('app', 'Серверный журнал загружен', { lines: this._serverLogLines.length });
     } catch (err) {
       this._serverLogLines = [];
-      this.log?.warn('app', 'Не удалось загрузить серверный журнал', err.message);
+      this.log?.error('app', 'Не удалось загрузить серверный журнал', err);
     }
   }
 

@@ -37,12 +37,15 @@ class ConversationOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     in_progress: bool = False
+    deleted_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
-    @field_serializer("created_at", "updated_at")
+    @field_serializer("created_at", "updated_at", "deleted_at")
     @classmethod
-    def _serialize_utc(cls, dt: datetime) -> str:
+    def _serialize_utc(cls, dt: datetime | None) -> str | None:
+        if dt is None:
+            return None
         return datetime_to_utc_iso(dt)
 
 

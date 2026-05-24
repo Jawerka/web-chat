@@ -38,6 +38,27 @@ async def test_create_conversation_without_preset_id(client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
+async def test_create_conversation_visible_immediately(
+    client: AsyncClient,
+    test_conv_title: str,
+) -> None:
+    """GET сразу после POST — беседа уже в БД (без гонки с commit dependency)."""
+    created = await client.post(
+        "/api/conversations",
+        json={"title": test_conv_title},
+    )
+    assert created.status_code == 201
+    conv_id = record_created_conversation(created.json())["id"]
+
+    one = await client.get(f"/api/conversations/{conv_id}")
+    assert one.status_code == 200
+    assert one.json()["title"] == test_conv_title
+
+    listing = await client.get("/api/conversations")
+    assert any(c["id"] == conv_id for c in listing.json())
+
+
+@pytest.mark.asyncio
 async def test_list_and_get_conversation(
     client: AsyncClient,
     test_conv_title: str,

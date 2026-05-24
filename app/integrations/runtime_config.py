@@ -50,6 +50,8 @@ def parse_optional_url(raw: Any) -> str | None:
 
 def parse_integration_overrides(data: dict[str, Any]) -> IntegrationOverrides:
     """Собрать переопределения из тела WS-сообщения."""
+    from app.security.trusted_internal import register_integration_urls
+
     raw_model = data.get("model")
     llm_model = None
     if raw_model is not None:
@@ -57,10 +59,13 @@ def parse_integration_overrides(data: dict[str, Any]) -> IntegrationOverrides:
         llm_model = text or None
     raw_rag = data.get("document_rag")
     document_rag = raw_rag is True or raw_rag in (1, "1", "true", "True")
+    llm_base_url = parse_optional_url(data.get("llm_base_url"))
+    sd_webui_url = parse_optional_url(data.get("sd_webui_url"))
+    register_integration_urls(llm_base_url, sd_webui_url)
     return IntegrationOverrides(
         llm_model=llm_model,
-        llm_base_url=parse_optional_url(data.get("llm_base_url")),
-        sd_webui_url=parse_optional_url(data.get("sd_webui_url")),
+        llm_base_url=llm_base_url,
+        sd_webui_url=sd_webui_url,
         macro_context=parse_macro_context_mode(data.get("macro_context")),
         document_rag=document_rag,
     )

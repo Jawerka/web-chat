@@ -43,6 +43,7 @@ from app.integrations.media_utils import (
     resolve_trusted_generated_source,
     save_image_from_base64,
 )
+from app.integrations.sd_http import SdUnavailableError, sd_post_json
 from app.integrations.runtime_config import resolve_sd_webui_url
 
 if TYPE_CHECKING:
@@ -135,8 +136,17 @@ def generate_image(
     session = get_sd_session()
     url = f"{sd_base}/sdapi/v1/txt2img"
     try:
-        resp = session.post(url, json=payload, timeout=settings.request_timeout)
-        resp.raise_for_status()
+        resp = sd_post_json(
+            session,
+            url,
+            payload,
+            timeout=settings.request_timeout,
+            operation="txt2img",
+        )
+    except SdUnavailableError:
+        elapsed = time.monotonic() - t0
+        logger.error("SD txt2img недоступен за %.1fs (url=%s)", elapsed, url)
+        raise
     except requests.RequestException as exc:
         elapsed = time.monotonic() - t0
         logger.error(
@@ -339,8 +349,16 @@ def _post_img2img_once(
         prompt[:80],
     )
     try:
-        resp = session.post(url, json=payload, timeout=settings.request_timeout)
-        resp.raise_for_status()
+        resp = sd_post_json(
+            session,
+            url,
+            payload,
+            timeout=settings.request_timeout,
+            operation="img2img",
+        )
+    except SdUnavailableError as exc:
+        logger.error("SD img2img недоступен (url=%s)", url)
+        raise RuntimeError(str(exc)) from exc
     except requests.RequestException as exc:
         msg = sd_error_message(exc)
         logger.error("SD img2img ошибка: %s (url=%s)", msg, url)
@@ -557,19 +575,21 @@ def upscale_images(
         last_error = None
         for payload in payloads:
             try:
-                resp = session.post(
+                resp = sd_post_json(
+                    session,
                     f"{sd_base}/sdapi/v1/extra-single-image",
-                    json=payload,
+                    payload,
                     timeout=settings.request_timeout,
+                    operation="upscale",
                 )
-                if not resp.ok:
-                    last_error = resp.text
-                    continue
                 data = resp.json()
                 upscaled_b64 = data.get("image")
                 if upscaled_b64:
                     break
                 last_error = "WebUI не вернул изображение"
+            except SdUnavailableError as exc:
+                last_error = str(exc)
+                break
             except requests.RequestException as exc:
                 last_error = str(exc)
 

@@ -171,13 +171,37 @@ class ConversationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    @staticmethod
+    def _active_only(stmt):
+        return stmt.where(Conversation.deleted_at.is_(None))
+
+    @staticmethod
+    def _trash_only(stmt):
+        return stmt.where(Conversation.deleted_at.isnot(None))
+
     async def list_all(
         self,
         *,
         owner_user_id: uuid.UUID | None = None,
     ) -> list[Conversation]:
-        """Список бесед, новые сверху (updated_at DESC)."""
-        stmt = select(Conversation).order_by(Conversation.updated_at.desc())
+        """Список активных бесед, новые сверху (updated_at DESC)."""
+        stmt = self._active_only(
+            select(Conversation).order_by(Conversation.updated_at.desc()),
+        )
+        if owner_user_id is not None:
+            stmt = stmt.where(Conversation.owner_user_id == owner_user_id)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_trash(
+        self,
+        *,
+        owner_user_id: uuid.UUID | None = None,
+    ) -> list[Conversation]:
+        """Беседы в корзине, недавно удалённые сверху."""
+        stmt = self._trash_only(
+            select(Conversation).order_by(Conversation.deleted_at.desc()),
+        )
         if owner_user_id is not None:
             stmt = stmt.where(Conversation.owner_user_id == owner_user_id)
         result = await self._session.execute(stmt)
@@ -192,6 +216,7 @@ class ConversationRepository:
         conversation_id: uuid.UUID,
         *,
         owner_user_id: uuid.UUID | None,
+        include_deleted: bool = False,
     ) -> Conversation | None:
         """Беседа по id с проверкой владельца (P2.2). owner_user_id=None — без фильтра."""
         conversation = await self.get_by_id(conversation_id)
@@ -199,14 +224,18 @@ class ConversationRepository:
             return None
         if owner_user_id is not None and conversation.owner_user_id != owner_user_id:
             return None
+        if conversation.deleted_at is not None and not include_deleted:
+            return None
         return conversation
 
     async def count_by_owner(self, owner_user_id: uuid.UUID) -> int:
-        """Число бесед пользователя."""
+        """Число активных бесед пользователя."""
         result = await self._session.execute(
-            select(func.count())
-            .select_from(Conversation)
-            .where(Conversation.owner_user_id == owner_user_id),
+            self._active_only(
+                select(func.count())
+                .select_from(Conversation)
+                .where(Conversation.owner_user_id == owner_user_id),
+            ),
         )
         return int(result.scalar() or 0)
 
@@ -260,11 +289,11 @@ class ConversationRepository:
         if not words:
             return []
         filters = [func.lower(Conversation.title).contains(w.lower()) for w in words]
-        stmt = (
+        stmt = self._active_only(
             select(Conversation)
             .where(or_(*filters))
             .order_by(Conversation.updated_at.desc())
-            .limit(limit)
+            .limit(limit),
         )
         if owner_user_id is not None:
             stmt = stmt.where(Conversation.owner_user_id == owner_user_id)
@@ -288,16 +317,66 @@ class ConversationRepository:
         await self._session.refresh(conversation)
         return conversation
 
-    async def delete(self, conversation: Conversation) -> None:
-        """Удалить беседу (каскад messages)."""
+    async def move_to_trash(self, conversation: Conversation) -> Conversation:
+        """Переместить беседу в корзину (soft delete)."""
+        conversation.deleted_at = datetime.now(UTC)
+        await self._session.flush()
+        await self._session.refresh(conversation)
+        return conversation
+
+    async def restore_from_trash(self, conversation: Conversation) -> Conversation:
+        """Восстановить беседу из корзины."""
+        conversation.deleted_at = None
+        conversation.updated_at = datetime.now(UTC)
+        await self._session.flush()
+        await self._session.refresh(conversation)
+        return conversation
+
+    async def delete_permanent(self, conversation: Conversation) -> None:
+        """Окончательно удалить беседу (каскад messages)."""
         await self._session.delete(conversation)
 
-    async def list_with_title_prefix(self, prefix: str) -> list[Conversation]:
-        """Беседы, заголовок которых начинается с prefix."""
+    async def empty_trash_for_owner(
+        self,
+        *,
+        owner_user_id: uuid.UUID | None = None,
+    ) -> int:
+        """Окончательно удалить все беседы в корзине текущего владельца."""
+        stmt = self._trash_only(select(Conversation))
+        if owner_user_id is not None:
+            stmt = stmt.where(Conversation.owner_user_id == owner_user_id)
+        result = await self._session.execute(stmt)
+        rows = list(result.scalars().all())
+        for conv in rows:
+            await self._session.delete(conv)
+        if rows:
+            await self._session.flush()
+        return len(rows)
+
+    async def purge_trash_older_than(self, *, days: int) -> int:
+        """Окончательно удалить беседы в корзине старше days суток."""
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         result = await self._session.execute(
-            select(Conversation)
-            .where(Conversation.title.startswith(prefix))
-            .order_by(Conversation.updated_at.desc())
+            select(Conversation).where(
+                Conversation.deleted_at.isnot(None),
+                Conversation.deleted_at < cutoff,
+            ),
+        )
+        rows = list(result.scalars().all())
+        for conv in rows:
+            await self._session.delete(conv)
+        if rows:
+            await self._session.flush()
+        return len(rows)
+
+    async def list_with_title_prefix(self, prefix: str) -> list[Conversation]:
+        """Активные беседы, заголовок которых начинается с prefix."""
+        result = await self._session.execute(
+            self._active_only(
+                select(Conversation)
+                .where(Conversation.title.startswith(prefix))
+                .order_by(Conversation.updated_at.desc()),
+            ),
         )
         return list(result.scalars().all())
 
@@ -653,6 +732,7 @@ class MessageRepository:
             select(Message, Conversation)
             .join(Conversation, Message.conversation_id == Conversation.id)
             .where(
+                Conversation.deleted_at.is_(None),
                 Message.role.in_([MessageRole.USER, MessageRole.ASSISTANT]),
                 Message.content_text.is_not(None),
                 or_(*word_filters),

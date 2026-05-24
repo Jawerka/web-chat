@@ -38,6 +38,10 @@ class JsonLogFormatter(logging.Formatter):
         }
         if record.exc_info and record.exc_info[1] is not None:
             payload["exception"] = self.formatException(record.exc_info)
+        for key in ("event", "error_id", "error_code", "tool", "duration_ms", "user_id"):
+            val = getattr(record, key, None)
+            if val is not None and val != "":
+                payload[key] = val
         return json.dumps(payload, ensure_ascii=False)
 
 

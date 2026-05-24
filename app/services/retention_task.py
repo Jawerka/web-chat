@@ -9,6 +9,7 @@ import logging
 
 from app.db import session as db_session
 from app.services.cleanup_service import run_full_cleanup
+from app.services.trash_service import purge_expired_trash
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ async def _run_once() -> None:
     """Один проход очистки в отдельной сессии БД."""
     async with db_session.async_session_factory() as session:
         stats = await run_full_cleanup(session)
+        stats["trash_purged"] = await purge_expired_trash(session)
         await session.commit()
     if any(stats.values()):
         logger.info("Retention cleanup: %s", stats)

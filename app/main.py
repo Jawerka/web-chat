@@ -24,6 +24,7 @@ from app.api.websocket import router as ws_router
 from app.config import settings
 from app.db.session import init_db
 from app.integrations.mcp_server import start_mcp_background
+from app.logging_buffer import ensure_log_buffer_attached, set_main_event_loop
 from app.logging_setup import setup_logging
 from app.middleware.access_control import AccessControlMiddleware
 from app.middleware.session_auth import SessionAuthMiddleware
@@ -31,6 +32,8 @@ from app.middleware.public_base_url import PublicBaseUrlMiddleware
 from app.public_url import public_base_url_lan, public_base_url_vpn
 from app.services.job_queue import heavy_job_queue
 from app.services.retention_task import start_retention_background
+from app.security.trusted_internal import refresh_trusted_internal_from_settings
+from app.services.shutdown_service import graceful_shutdown
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,6 +44,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Инициализация при старте и остановка при выключении."""
+    set_main_event_loop(asyncio.get_running_loop())
+    ensure_log_buffer_attached()
+    refresh_trusted_internal_from_settings()
     settings.validate_timeouts()
     await init_db()
     await heavy_job_queue.start()
@@ -54,7 +60,7 @@ async def lifespan(app: FastAPI):
         settings.effective_mcp_port,
     )
     yield
-    await heavy_job_queue.stop()
+    await graceful_shutdown()
     retention_stop.set()
     if isinstance(retention_task, asyncio.Task):
         retention_task.cancel()

@@ -64,10 +64,15 @@ async def _flush_logs_batch() -> None:
 
 def schedule_logs_append(line: str) -> None:
     """Поставить строку лога в очередь WS (из sync logging.Handler)."""
+    from app.logging_buffer import get_main_event_loop
+
     global _logs_flush_task
+    loop: asyncio.AbstractEventLoop | None = None
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        loop = get_main_event_loop()
+    if loop is None:
         return
     _logs_batch.append(line)
     if _logs_flush_task is not None and not _logs_flush_task.done():

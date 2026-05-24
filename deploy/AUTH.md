@@ -10,6 +10,7 @@ AUTH_SECRET=<случайная строка ≥32 байт, openssl rand -hex 3
 AUTH_BOOTSTRAP_ADMIN_LOGIN=admin
 AUTH_BOOTSTRAP_ADMIN_PASSWORD=admin   # сменить сразу после первого входа
 AUTH_COOKIE_SECURE=true               # только HTTPS в production
+WEB_CHAT_ENV=production               # отказ старта при слабом bootstrap-пароле
 ```
 
 Перезапуск: `systemctl restart web-chat`
@@ -38,6 +39,26 @@ python -m app.scripts.assign_conversation_owners --user admin
 При `AUTH_ENABLED=true` включена изоляция бесед (`effective_multi_user`):
 - список/CRUD только своих бесед;
 - WS и upload с чужим `conversation_id` → отказ.
+
+## Доверенные внутренние сервисы (LLM, SD)
+
+При `AUTH_ENABLED=true` браузер ходит с cookie, а **llama-server / SD** — без cookie.
+
+Автоматически в доверенные IP попадают хосты из:
+
+- `.env`: `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL`, `PUBLIC_BASE_URL_VPN`
+- **Настройки чата** (адреса LLM/SD в localStorage): при сохранении и при первом WS-сообщении
+
+Дополнительно в `.env`:
+
+```env
+TRUSTED_INTERNAL_IPS=192.168.88.100
+TRUSTED_INTERNAL_ALLOW_LOOPBACK=true
+```
+
+С доверенного IP без сессии доступны: `GET /media/asset/*`, `GET /api/health/logs`.
+
+В настройках чата отображается подсказка «Доверенные IP (N)…».
 
 ## Безопасность (реализовано)
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import deque
 from threading import Lock
@@ -11,6 +12,7 @@ from threading import Lock
 _BUFFER: deque[str] = deque(maxlen=2000)
 _LOCK = Lock()
 _HANDLER: logging.Handler | None = None
+_MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 class RingBufferHandler(logging.Handler):
@@ -32,6 +34,27 @@ class RingBufferHandler(logging.Handler):
             pass
 
 
+def set_main_event_loop(loop: asyncio.AbstractEventLoop | None) -> None:
+    """Сохранить event loop приложения для WS-рассылки логов из sync-кода."""
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
+
+
+def get_main_event_loop() -> asyncio.AbstractEventLoop | None:
+    return _MAIN_LOOP
+
+
+def ensure_log_buffer_attached() -> None:
+    """Переподключить буфер к root (uvicorn может сбросить handlers)."""
+    global _HANDLER
+    if _HANDLER is None:
+        install_log_buffer()
+        return
+    root = logging.getLogger()
+    if _HANDLER not in root.handlers:
+        root.addHandler(_HANDLER)
+
+
 def install_log_buffer(
     *,
     formatter: logging.Formatter | None = None,
@@ -40,6 +63,7 @@ def install_log_buffer(
     """Подключить буфер к корневому логгеру (один раз)."""
     global _HANDLER
     if _HANDLER is not None:
+        ensure_log_buffer_attached()
         return
     handler = RingBufferHandler()
     handler.setLevel(logging.INFO)

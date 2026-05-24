@@ -17,6 +17,7 @@ from openai import APIStatusError, AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from app.config import settings
+from app.diag_logging import log_event, redact_url
 from app.integrations.runtime_config import resolve_llm_base_url
 from app.integrations.tool_definitions import TOOL_DEFINITIONS
 
@@ -288,6 +289,15 @@ class LLMClient:
                 stream=True,
             )
         except Exception as exc:
+            log_event(
+                logger,
+                "llm_error",
+                "LLM stream request failed",
+                level=logging.ERROR,
+                model=model_name,
+                base_url=redact_url(self._base_url),
+                error=str(exc)[:500],
+            )
             raise LLMError(f"Ошибка стриминга LLM: {exc}") from exc
 
         content_parts: list[str] = []

@@ -569,6 +569,23 @@ class GalleryApp {
       ? `/api/gallery/db/${item.id}`
       : `/api/gallery/disk/${encodeURIComponent(item.filename)}`;
 
+    const snapshot = {
+      items: [...this.items],
+      lightboxIndex: this.lightboxIndex,
+    };
+    this.items = this.items.filter((i) => i.id !== item.id);
+    this.itemById.delete(item.id);
+    this.renderGrid();
+    this.updateCount(this.items.length);
+    if (this.els.lightbox && !this.els.lightbox.classList.contains('hidden')) {
+      if (!this.items.length) this.closeLightbox();
+      else if (this.lightboxIndex >= this.items.length) {
+        this.showLightboxAt(this.items.length - 1);
+      } else {
+        this.showLightboxAt(this.lightboxIndex);
+      }
+    }
+
     try {
       const res = await fetch(path, { method: 'DELETE' });
       if (res.status === 404) throw new Error('Уже удалено');
@@ -576,20 +593,18 @@ class GalleryApp {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || res.statusText);
       }
-      this.items = this.items.filter((i) => i.id !== item.id);
-      this.itemById.delete(item.id);
+      this.flashStatus('Удалено');
+    } catch (err) {
+      this.items = snapshot.items;
+      this.itemById.clear();
+      for (const i of this.items) this.itemById.set(i.id, i);
       this.renderGrid();
       this.updateCount(this.items.length);
-      this.flashStatus('Удалено');
       if (this.els.lightbox && !this.els.lightbox.classList.contains('hidden')) {
-        if (!this.items.length) this.closeLightbox();
-        else if (this.lightboxIndex >= this.items.length) {
-          this.showLightboxAt(this.items.length - 1);
-        } else {
-          this.showLightboxAt(this.lightboxIndex);
-        }
+        const idx = this.items.findIndex((i) => i.id === item.id);
+        if (idx >= 0) this.showLightboxAt(idx);
+        else this.closeLightbox();
       }
-    } catch (err) {
       this.flashStatus(err.message, true);
     }
   }

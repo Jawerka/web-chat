@@ -40,20 +40,26 @@ class AppError(Exception):
     def __str__(self) -> str:
         return self.user_message
 
-    def to_ws_payload(self) -> dict[str, Any]:
-        return {
+    def to_ws_payload(self, *, error_id: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "type": "error",
             "message": self.user_message,
             "code": self.code,
             "retryable": self.retryable,
         }
+        if error_id:
+            payload["error_id"] = error_id
+        return payload
 
-    def to_http_body(self, *, status_code: int = 400) -> dict[str, Any]:
-        return {
+    def to_http_body(self, *, status_code: int = 400, error_id: str | None = None) -> dict[str, Any]:
+        body: dict[str, Any] = {
             "detail": self.user_message,
             "code": self.code,
             "retryable": self.retryable,
         }
+        if error_id:
+            body["error_id"] = error_id
+        return body
 
 
 def app_error_from_code(

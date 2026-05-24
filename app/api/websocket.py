@@ -27,6 +27,7 @@ from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import IntegrationOverrides, parse_integration_overrides
 from app.public_url import bind_request_public_base_url, reset_request_public_base_url
 from app.errors import AppError, ErrorCode, app_error_from_code
+from app.services.job_queue import heavy_job_queue
 from app.services.agent_orchestrator import (
     AgentOrchestrator,
     ToolLoopExceeded,
@@ -45,8 +46,22 @@ def _ws_error_payload(
     retryable: bool | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
+    error_id = str(uuid.uuid4()) if code == ErrorCode.INTERNAL else None
     err = app_error_from_code(code, message, retryable=retryable)
-    return err.to_ws_payload() | extra
+    payload = err.to_ws_payload(error_id=error_id) | extra
+    if error_id:
+        logger.error(
+            "ws_error error_id=%s code=%s message=%s",
+            error_id,
+            code,
+            message,
+            extra={
+                "event": "ws_error",
+                "error_id": error_id,
+                "error_code": code,
+            },
+        )
+    return payload
 
 
 async def _emit_error(

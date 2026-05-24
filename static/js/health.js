@@ -166,6 +166,7 @@ class HealthDashboard {
       onOpen: () => {
         this._eventsLive = true;
         this._schedule();
+        this.fetchLogs().catch(() => {});
       },
       onClose: () => {
         this._eventsLive = false;
@@ -188,9 +189,7 @@ class HealthDashboard {
 
   async refreshAll() {
     await this.fetchHealth();
-    if (!this._eventsLive) {
-      await this.fetchLogs();
-    }
+    await this.fetchLogs();
   }
 
   async fetchHealth() {
@@ -225,14 +224,32 @@ class HealthDashboard {
 
   async fetchLogs() {
     try {
-      const res = await fetch('/api/health/logs?limit=800');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch('/api/health/logs?limit=800', { credentials: 'same-origin' });
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const body = await res.json();
+          detail = body.detail || detail;
+          if (typeof detail !== 'string') detail = JSON.stringify(detail);
+        } catch { /* ignore */ }
+        throw new Error(`HTTP ${res.status}: ${detail}`);
+      }
       const data = await res.json();
-      this._logText = (data.lines || []).join('\n');
-      this.$.logsView.textContent = this._logText || '(журнал пуст)';
-      this.$.logsCount.textContent = `${data.line_count ?? 0} строк`;
+      const lines = data.lines || [];
+      this._logText = lines.join('\n');
+      const count = data.line_count ?? lines.length;
+      if (count === 0) {
+        this.$.logsView.textContent = '(журнал пуст — выполните действие в чате или перезапустите сервер)';
+      } else {
+        this.$.logsView.textContent = this._logText;
+      }
+      this.$.logsCount.textContent = `${count} строк`;
+      window.appLog?.debug?.('health', 'Журнал загружен', { line_count: count });
     } catch (err) {
-      this.$.logsView.textContent = `Ошибка загрузки лога: ${err.message}`;
+      const msg = err?.message || String(err);
+      this.$.logsView.textContent = `Ошибка загрузки лога: ${msg}`;
+      this.$.logsCount.textContent = 'ошибка';
+      window.appLog?.error?.('health', 'fetchLogs failed', msg);
     }
   }
 

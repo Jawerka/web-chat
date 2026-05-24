@@ -20,6 +20,7 @@ from app.api.ws_manager import manager
 from app.config import settings
 from app.db import session as db_session
 from app.logging_buffer import get_log_lines
+from app.services.job_queue import heavy_job_queue
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,8 @@ class HealthReport(BaseModel):
     services: list[ServiceProbe]
     history: list[HealthHistoryPoint]
     active_generations: int
+    ws_connections: int = 0
+    job_queue_pending: int = 0
 
 
 _HISTORY: deque[HealthHistoryPoint] = deque(maxlen=90)
@@ -444,6 +447,8 @@ async def build_health_report() -> HealthReport:
         services=services,
         history=list(_HISTORY),
         active_generations=len(manager.busy_conversation_ids()),
+        ws_connections=manager.websocket_count(),
+        job_queue_pending=heavy_job_queue.pending_count,
     )
 
 

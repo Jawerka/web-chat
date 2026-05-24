@@ -23,6 +23,25 @@ def test_app_error_from_code_rate_limit_retryable() -> None:
     assert err.retryable is True
 
 
+def test_app_error_ws_payload_with_error_id() -> None:
+    err = AppError(
+        code=ErrorCode.INTERNAL,
+        user_message="Сбой",
+        retryable=True,
+    )
+    payload = err.to_ws_payload(error_id="eid-123")
+    assert payload["error_id"] == "eid-123"
+
+
+def test_ws_internal_error_payload_has_error_id() -> None:
+    from app.api.websocket import _ws_error_payload
+
+    payload = _ws_error_payload(ErrorCode.INTERNAL, "Внутренняя ошибка")
+    assert payload["code"] == ErrorCode.INTERNAL
+    assert "error_id" in payload
+    assert len(payload["error_id"]) >= 32
+
+
 def test_error_codes_stable() -> None:
     assert ErrorCode.BUSY == "busy"
     assert ErrorCode.TOOL_LOOP == "tool_loop"

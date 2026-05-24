@@ -59,6 +59,7 @@ async def test_serve_asset_llm_endpoint(client) -> None:
     """GET /media/asset/{id}/llm отдаёт тело ≤ лимита для большого asset."""
     from app.db import session as db_session
     from app.services.media_service import MediaService
+    from app.config import settings as app_settings
 
     raw = _rgb_png_bytes(2200, 2200)
     async with db_session.async_session_factory() as session:
@@ -66,6 +67,13 @@ async def test_serve_asset_llm_endpoint(client) -> None:
         asset = await service.create_from_bytes(raw, "image/png")
         await session.commit()
         asset_id = asset.id
+
+    # Vision URL скачивается LLM без cookie — с доверенного IP (loopback в тестах).
+    app_settings.auth_enabled = True
+    app_settings.trusted_internal_allow_loopback = True
+    from app.security.trusted_internal import refresh_trusted_internal_from_settings
+
+    refresh_trusted_internal_from_settings()
 
     resp = await client.get(f"/media/asset/{asset_id}/llm")
     assert resp.status_code == 200

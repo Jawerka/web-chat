@@ -264,6 +264,41 @@ class ConnectionManager:
     def system_websocket_count(self) -> int:
         return len(self._system_websockets)
 
+    async def close_all(
+        self,
+        *,
+        code: int = 1001,
+        reason: str = "server_shutdown",
+        notify: dict | None = None,
+    ) -> None:
+        """Закрыть все WS с уведомлением (graceful shutdown)."""
+        if self._sweeper_task is not None and not self._sweeper_task.done():
+            self._sweeper_task.cancel()
+            try:
+                await self._sweeper_task
+            except asyncio.CancelledError:
+                pass
+            self._sweeper_task = None
+
+        all_ws: list[WebSocket] = list(self._system_websockets)
+        for state in self._sessions.values():
+            all_ws.extend(list(state.websockets))
+
+        reason_bytes = reason[:123]
+        for ws in all_ws:
+            try:
+                if notify is not None:
+                    await ws.send_json(notify)
+                await ws.close(code=code, reason=reason_bytes)
+            except Exception:
+                pass
+
+        self._system_websockets.clear()
+        for cid, state in list(self._sessions.items()):
+            state.websockets.clear()
+            self._cleanup_session_state(cid, state, reason="shutdown")
+        logger.info("WS: закрыто %d подключений (code=%s)", len(all_ws), code)
+
     def active_turn_count(self) -> int:
         """Число бесед с незавершённой фоновой задачей."""
         return len(self.busy_conversation_ids())

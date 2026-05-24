@@ -177,7 +177,7 @@ async def delete_test_conversations_in_session(
             to_delete.append(conv)
 
     for conv in to_delete:
-        await repo.delete(conv)
+        await repo.delete_permanent(conv)
     if to_delete:
         await session.commit()
     return len(to_delete)

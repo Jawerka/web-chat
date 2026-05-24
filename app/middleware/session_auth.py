@@ -11,6 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.config import settings
+from app.security.trusted_internal import is_trusted_internal_request
 from app.services.auth_service import session_user_id_from_request
 
 _PUBLIC_PREFIXES = (
@@ -44,10 +45,13 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         if _is_public_path(path):
             return await call_next(request)
 
+        if is_trusted_internal_request(request):
+            return await call_next(request)
+
         if session_user_id_from_request(request) is not None:
             return await call_next(request)
 
-        if path.startswith("/api/"):
+        if path.startswith("/api/") or path.startswith("/media/"):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Требуется вход", "code": "auth_required"},

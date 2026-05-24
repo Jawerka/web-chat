@@ -12,6 +12,7 @@
 3. **Origin для WebSocket**: `TRUSTED_WS_ORIGINS` — список через запятую, например  
    `http://192.168.88.44:8090,http://10.99.99.9:8090`.
 4. **Доверенный proxy**: `TRUSTED_PROXY_IPS` — IP nginx/Caddy, если используете `X-Forwarded-For`.
+5. **Доверенные внутренние сервисы**: хосты из `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL` (+ VPN) автоматически резолвятся в IP; дополнительно `TRUSTED_INTERNAL_IPS`. Адреса из **настроек чата** (LLM/SD) регистрируются при сохранении и в WebSocket. С этих IP доступны без cookie: `/media/asset/*`, `/api/health/logs`. По умолчанию разрешён loopback (`TRUSTED_INTERNAL_ALLOW_LOOPBACK=true`).
 
 Пустые `API_ACCESS_KEY` и `TRUSTED_WS_ORIGINS` отключают соответствующие проверки (режим разработки в LAN).
 

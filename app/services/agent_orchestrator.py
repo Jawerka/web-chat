@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.diag_logging import log_event, summarize_llm_messages
 from app.db.models import Conversation, Message, MessageRole
 from app.db.repositories import (
     AttachmentRepository,
@@ -28,7 +29,7 @@ from app.db.repositories import (
 )
 from app.integrations.llm_client import LLMClient
 from app.integrations.tool_definitions import tools_for_preset_slug
-from app.integrations.media_utils import rewrite_image_url_for_llm
+from app.integrations.media_utils import asset_llm_media_url, rewrite_image_url_for_llm
 from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.services.attachment_service import AttachmentService
 from app.services.conversation_title_service import maybe_generate_conversation_title
@@ -38,6 +39,7 @@ from app.services.message_builder import (
     build_user_content,
     finalize_assistant_text,
     history_to_llm_messages,
+    refresh_user_parts_for_regenerate,
 )
 from app.services.prompt_macro_service import (
     alias_map_from_macros,
@@ -408,7 +410,17 @@ class AgentOrchestrator:
         """Копия parts с URL для vision API (/media/asset/{id}/llm при необходимости)."""
         llm_parts = deepcopy(parts)
         for part in llm_parts:
-            if part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
+            if part.get("type") != "image_url":
+                continue
+            raw_asset = part.get("asset_id")
+            if raw_asset and not (part.get("image_url") or {}).get("url"):
+                try:
+                    part["image_url"] = {
+                        "url": asset_llm_media_url(uuid.UUID(str(raw_asset)), absolute=True),
+                    }
+                except ValueError:
+                    pass
+            elif part.get("image_url", {}).get("url"):
                 part["image_url"] = dict(part["image_url"])
                 part["image_url"]["url"] = rewrite_image_url_for_llm(
                     part["image_url"]["url"],
@@ -567,6 +579,15 @@ class AgentOrchestrator:
             async def _on_delta(chunk: str) -> None:
                 await stream_draft.on_delta(chunk)
 
+            log_event(
+                logger,
+                "llm_request",
+                "LLM complete_with_stream",
+                turn="conversation",
+                round=round_idx + 1,
+                model=llm_model or "",
+                **summarize_llm_messages(llm_messages),
+            )
             completion = await self._llm.complete_with_stream(
                 llm_messages,
                 on_text_delta=_on_delta,
@@ -782,12 +803,17 @@ class AgentOrchestrator:
             llm_messages.append({"role": "system", "content": system_prompt})
         llm_messages.extend(history_to_llm_messages(history, alias_to_body=alias_to_body))
         if isinstance(user_parts, list):
-            regen_parts = expand_parts_for_llm(user_parts, alias_to_body)
+            regen_parts = refresh_user_parts_for_regenerate(
+                user_parts,
+                user_attachments,
+                fallback_text=user_message.content_text or "",
+            )
+            regen_parts = expand_parts_for_llm(regen_parts, alias_to_body)
             if preset and preset.slug == "img2img":
                 regen_parts = append_img2img_init_hints(
                     regen_parts,
                     user_attachments,
-                    image_parts=user_parts,
+                    image_parts=regen_parts,
                 )
             llm_messages.append(
                 {
@@ -833,6 +859,15 @@ class AgentOrchestrator:
             async def _on_delta(chunk: str) -> None:
                 await stream_draft.on_delta(chunk)
 
+            log_event(
+                logger,
+                "llm_request",
+                "LLM complete_with_stream (regenerate)",
+                turn="regenerate",
+                round=round_idx + 1,
+                model=llm_model or "",
+                **summarize_llm_messages(llm_messages),
+            )
             completion = await self._llm.complete_with_stream(
                 llm_messages,
                 on_text_delta=_on_delta,

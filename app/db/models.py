@@ -150,6 +150,11 @@ class Conversation(Base):
         server_default=func.now(),
         nullable=False,
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
     preset: Mapped[Preset] = relationship(back_populates="conversations")
     owner: Mapped[User | None] = relationship(back_populates="conversations")

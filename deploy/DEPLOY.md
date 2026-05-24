@@ -186,6 +186,24 @@ mkdir -p data/db data/uploads data/generated/thumbs logs
 | `SD_WEBUI_URL` | Базовый URL WebUI, **без** `/sdapi` |
 | `MCP_TIMEOUT` | Должен быть **>** `REQUEST_TIMEOUT` (`timeouts_ok` в health) |
 
+### Таблица таймаутов (BE-2)
+
+Согласованность таймаутов критична: внешний клиент (браузер/MCP) не должен обрываться раньше, чем внутренний вызов SD/LLM.
+
+| Слой | Переменная / место | По умолчанию | Назначение |
+|------|-------------------|--------------|------------|
+| SD HTTP | `REQUEST_TIMEOUT` | 600 с | txt2img, img2img, upscale, png-info |
+| MCP (внешний) | `MCP_TIMEOUT` | 900 с | Должен быть **больше** `REQUEST_TIMEOUT` |
+| LLM API | `LLM_TIMEOUT_SEC` | 300 с | OpenAI-compatible chat/completions |
+| Извлечение PDF | `EXTRACT_TIMEOUT_SEC` | 120 с | `extract_text` в thread pool |
+| Ожидание модели LLM | `LLM_MODEL_LOAD_WAIT_SEC` | 120 с | Повтор при 503 «Loading model» |
+| Graceful shutdown | `SHUTDOWN_DRAIN_SEC` | 30 с | Ожидание завершения heavy jobs при SIGTERM |
+| SD retry | `SD_HTTP_RETRIES` | 2 | Повторы при сетевых сбоях / 502–504 |
+| SD circuit | `SD_CIRCUIT_BREAKER_THRESHOLD` | 3 | Сбоев подряд до «временно недоступен» |
+| SD circuit cooldown | `SD_CIRCUIT_BREAKER_COOLDOWN_SEC` | 60 с | Пауза перед новыми попытками |
+
+При `systemctl restart web-chat` активные WS закрываются с кодом **1001** (`server_shutdown`); клиент показывает баннер и может переподключиться после старта.
+
 ### Vision (большие фото)
 
 | Переменная | По умолчанию |
@@ -276,7 +294,15 @@ sudo systemctl list-timers web-chat-cleanup.timer
 sudo systemctl start web-chat-cleanup.service   # разовый прогон
 ```
 
-Retention: `UPLOAD_RETENTION_DAYS`, `GENERATED_RETENTION_DAYS` в `.env`.
+Retention в `.env`:
+
+| Переменная | Назначение |
+|------------|------------|
+| `UPLOAD_RETENTION_DAYS` | Старые загрузки вложений |
+| `GENERATED_RETENTION_DAYS` | Сгенерированные медиа |
+| `TRASH_RETENTION_DAYS` | Беседы в **корзине** UI (по умолчанию 3): после удаления из списка их можно восстановить; по истечении срока timer `web-chat-cleanup` удаляет окончательно |
+
+В интерфейсе: секция **«Корзина»** внизу списка бесед — восстановление, удаление одной беседы навсегда (двойное нажатие) или **«Очистить корзину»** (тоже двойное нажатие).
 
 ---
 

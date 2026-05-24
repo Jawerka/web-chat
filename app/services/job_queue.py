@@ -24,6 +24,10 @@ class JobCancelled(Exception):
     """Операция отменена через cancel_event до или после выполнения."""
 
 
+class ShutdownInProgress(Exception):
+    """Сервер завершает работу — новые heavy jobs не принимаются."""
+
+
 @dataclass
 class _Job:
     fn: Callable[..., T]
@@ -45,6 +49,11 @@ class HeavyJobQueue:
         )
         self._worker_tasks: list[asyncio.Task[None]] = []
         self._started = False
+        self._shutting_down = False
+
+    def begin_shutdown(self) -> None:
+        """Запретить постановку новых задач (graceful shutdown)."""
+        self._shutting_down = True
 
     async def start(self) -> None:
         if self._started:
@@ -54,16 +63,47 @@ class HeavyJobQueue:
             self._worker_tasks.append(asyncio.create_task(self._worker_loop(index)))
         logger.info("HeavyJobQueue: %d worker(s)", self._workers)
 
-    async def stop(self) -> None:
+    async def stop(self, *, drain_timeout: float | None = None) -> None:
         if not self._started:
             return
+        self._shutting_down = True
+        timeout = (
+            settings.shutdown_drain_sec
+            if drain_timeout is None
+            else drain_timeout
+        )
+
+        if timeout > 0 and self._queue.qsize() > 0:
+            try:
+                await asyncio.wait_for(self._queue.join(), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "HeavyJobQueue: drain timeout (≈%d в очереди)",
+                    self._queue.qsize(),
+                )
+                self._fail_queued_jobs()
+
         for _ in self._worker_tasks:
             await self._queue.put(None)
         await asyncio.gather(*self._worker_tasks, return_exceptions=True)
         self._worker_tasks.clear()
         self._executor.shutdown(wait=False, cancel_futures=True)
         self._started = False
+        self._shutting_down = False
         logger.info("HeavyJobQueue: остановлена")
+
+    def _fail_queued_jobs(self) -> None:
+        while True:
+            try:
+                job = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if job is None:
+                self._queue.task_done()
+                continue
+            if not job.future.done():
+                job.future.set_exception(JobCancelled())
+            self._queue.task_done()
 
     async def _ensure_started(self) -> None:
         if not self._started:
@@ -96,6 +136,11 @@ class HeavyJobQueue:
                 self._queue.task_done()
         logger.debug("HeavyJobQueue worker %d exit", worker_id)
 
+    @property
+    def pending_count(self) -> int:
+        """Число задач в очереди (ожидают worker)."""
+        return self._queue.qsize()
+
     async def run_sync(
         self,
         fn: Callable[..., T],
@@ -106,6 +151,8 @@ class HeavyJobQueue:
         **kwargs: Any,
     ) -> T:
         """Поставить синхронную функцию в очередь и дождаться результата."""
+        if self._shutting_down:
+            raise ShutdownInProgress()
         await self._ensure_started()
         if cancel_event is not None and cancel_event.is_set():
             raise JobCancelled()

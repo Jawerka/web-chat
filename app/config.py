@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     extract_timeout_sec: int = 120
     # Параллельные потоки для SD / extract (P1.2)
     job_queue_workers: int = 2
+    shutdown_drain_sec: float = 30.0
+    # SD HTTP: retry и circuit breaker (BE-2)
+    sd_http_retries: int = 2
+    sd_circuit_breaker_threshold: int = 3
+    sd_circuit_breaker_cooldown_sec: float = 60.0
+    # production — усиленная проверка AUTH при старте (SEC-1)
+    web_chat_env: str = ""
     # Сброс буфера стрима в БД при накоплении N байт (дополнение к debounce 350 ms)
     stream_flush_min_bytes: int = 2048
     max_files_per_message: int = 10
@@ -100,6 +107,8 @@ class Settings(BaseSettings):
 
     upload_retention_days: int = 7
     generated_retention_days: int = 30
+    # Корзина бесед: окончательное удаление через N дней после soft delete
+    trash_retention_days: int = 3
     # P2.4: удалять orphan-файлы в data/generated/ (не в БД по original_name), старше N часов
     orphan_generated_min_age_hours: float = 24.0
     orphan_media_min_age_hours: float = 24.0
@@ -122,6 +131,10 @@ class Settings(BaseSettings):
     trusted_ws_origins: str = ""
     # IP reverse proxy, которым доверяем X-Forwarded-For (через запятую)
     trusted_proxy_ips: str = ""
+    # Доп. IP/хосты внутренних сервисов; хосты LLM_BASE_URL, SD_WEBUI_URL, PUBLIC_BASE_URL — автоматически
+    trusted_internal_ips: str = ""
+    # 127.0.0.1 / ::1 — LLM на том же хосте, dev
+    trusted_internal_allow_loopback: bool = True
     rate_limit_enabled: bool = True
     rate_limit_requests: int = 60
     rate_limit_window_sec: int = 60
@@ -192,7 +205,31 @@ class Settings(BaseSettings):
                 "AUTH_SECRET обязателен при AUTH_ENABLED=true (минимум 32 символа, "
                 "случайная строка; не коммитить в git)",
             )
+        self._validate_production_auth()
         return self
+
+    def _validate_production_auth(self) -> None:
+        """Отказ старта в production при слабом bootstrap-пароле (SEC-1)."""
+        if self.web_chat_env.strip().lower() != "production":
+            return
+        if not self.auth_enabled:
+            return
+        weak = frozenset(
+            {
+                "",
+                "admin",
+                "password",
+                "123456",
+                "changeme",
+                self.auth_bootstrap_admin_login.strip().lower(),
+            },
+        )
+        pwd = self.auth_bootstrap_admin_password.strip().lower()
+        if pwd in weak or len(self.auth_bootstrap_admin_password) < 12:
+            raise ValueError(
+                "WEB_CHAT_ENV=production: задайте надёжный AUTH_BOOTSTRAP_ADMIN_PASSWORD "
+                "(≥12 символов, не admin/password/123456)",
+            )
 
     @property
     def effective_multi_user(self) -> bool:

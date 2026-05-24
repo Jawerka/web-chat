@@ -51,6 +51,9 @@
   --type-meta-size: 0.8125rem;
   --type-hint-size: 0.75rem;
 
+  /* Motion */
+  --ease-ui: 150ms ease;
+
   /* Focus */
   --focus-ring-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
   --focus-ring: 0 0 0 3px var(--focus-ring-color);

@@ -4,20 +4,25 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from copy import deepcopy
 from typing import Any
 
 from app.db.models import Attachment, Message, MessageRole
+from app.diag_logging import log_event
 from app.integrations.media_utils import (
     absolute_media_url,
+    asset_llm_media_url,
     asset_media_url,
     parse_asset_id_from_url,
     rewrite_image_url_for_llm,
 )
 from app.services.attachment_service import AttachmentService
 from app.services.prompt_macro_service import expand_macro_text, expand_parts_for_llm
+
+logger = logging.getLogger(__name__)
 
 # Markdown-изображения в тексте ассистента не используем — картинки в content_json + UI.
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
@@ -36,12 +41,64 @@ def _public_url_from_image_part(part: dict[str, Any]) -> str | None:
         return None
     asset_id = parse_asset_id_from_url(url)
     if asset_id is not None:
-        return asset_media_url(asset_id, absolute=True, for_llm=True)
+        return asset_llm_media_url(asset_id, absolute=True)
     if url.startswith("/media/"):
-        return absolute_media_url(url.split("/llm")[0].rstrip("/"), for_llm=True)
+        return rewrite_image_url_for_llm(url)
     if url.startswith("http://") or url.startswith("https://"):
-        return absolute_media_url(url.split("/llm")[0].rstrip("/"), for_llm=True)
+        return rewrite_image_url_for_llm(url)
     return url
+
+
+_IMG2IMG_HINT_MARK = "[Для img2img"
+
+
+def _text_from_parts(parts: list[dict[str, Any]], *, skip_img2img_hints: bool = True) -> str:
+    """Собрать текстовое содержимое из parts (без старых подсказок img2img)."""
+    chunks: list[str] = []
+    for part in parts:
+        if part.get("type") != "text":
+            continue
+        text = str(part.get("text") or "")
+        if skip_img2img_hints and text.strip().startswith(_IMG2IMG_HINT_MARK):
+            continue
+        if text.strip():
+            chunks.append(text)
+    return "\n\n".join(chunks)
+
+
+def refresh_user_parts_for_regenerate(
+    parts: list[dict[str, Any]],
+    attachments: list[Attachment],
+    *,
+    fallback_text: str = "",
+) -> list[dict[str, Any]]:
+    """
+    Пересобрать multimodal parts перед перегенерацией.
+
+    Вложения — источник истины для image_url; устаревшие подсказки img2img убираются.
+    """
+    text = (fallback_text or "").strip() or _text_from_parts(parts)
+    if attachments:
+        rebuilt = build_user_content(text, attachments)
+        image_n = sum(1 for p in rebuilt if p.get("type") == "image_url")
+        log_event(
+            logger,
+            "regenerate_parts",
+            "rebuilt user parts from attachments",
+            attachment_count=len(attachments),
+            image_parts=image_n,
+        )
+        return rebuilt
+    kept: list[dict[str, Any]] = []
+    for part in parts:
+        if part.get("type") == "text":
+            t = str(part.get("text") or "")
+            if t.strip().startswith(_IMG2IMG_HINT_MARK):
+                continue
+        kept.append(deepcopy(part))
+    if text and not any(p.get("type") == "text" for p in kept):
+        kept.insert(0, {"type": "text", "text": text})
+    return kept or [{"type": "text", "text": text or ""}]
 
 
 def collect_img2img_init_lines(
@@ -59,9 +116,7 @@ def collect_img2img_init_lines(
     for att in attachments:
         if not att.mime_type.startswith("image/"):
             continue
-        url = AttachmentService.public_url(att)
-        if url.startswith("/media/"):
-            url = absolute_media_url(url, for_llm=True)
+        url = AttachmentService.llm_image_url(att)
         seen_urls.add(url)
         lines.append(f"attachment_id={att.id}")
         lines.append(f"init_image_url={url}")

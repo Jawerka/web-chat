@@ -31,7 +31,8 @@ from app.integrations.media_utils import (
 from app.integrations.sd_progress import fetch_sd_progress
 from app.integrations.sd_tools import generate_image, get_gallery, img2img, upscale_images
 from app.services.attachment_service import AttachmentService
-from app.services.job_queue import JobCancelled, heavy_job_queue
+from app.services.job_queue import JobCancelled, ShutdownInProgress, heavy_job_queue
+from app.integrations.sd_http import SdUnavailableError
 from app.services.media_service import MediaService
 from app.services.user_progress import (
     STAGE_SAVE_MEDIA,
@@ -375,6 +376,10 @@ class ToolExecutor:
                 content="Генерация отменена",
                 image_urls=[],
             )
+        except SdUnavailableError as exc:
+            return ToolResult(content=str(exc), image_urls=[])
+        except RuntimeError as exc:
+            return ToolResult(content=str(exc), image_urls=[])
         finally:
             poll_stop.set()
             if poll_task is not None:

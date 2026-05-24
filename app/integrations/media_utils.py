@@ -16,6 +16,7 @@ from pathlib import Path
 from PIL import Image
 
 from app.config import settings
+from app.diag_logging import log_event, redact_url
 from app.public_url import (
     absolute_media_path,
     all_public_base_urls,
@@ -276,18 +277,43 @@ def rewrite_image_url_for_llm(url: str) -> str:
     """
     if not url:
         return url
-    asset_id = parse_asset_id_from_url(url)
+    original = url.strip()
+    out = original
+
+    asset_id = parse_asset_id_from_url(out)
     if asset_id is not None:
-        return asset_llm_media_url(asset_id, absolute=True)
-    if url.startswith("http://") or url.startswith("https://"):
-        return url
-    if url.startswith("/media/"):
-        return absolute_media_url(url, for_llm=True)
-    if is_trusted_media_url(url):
-        path = strip_public_base(url)
-        if path.startswith("/media/"):
-            return absolute_media_url(path, for_llm=True)
-    return url
+        out = asset_llm_media_url(asset_id, absolute=True)
+    elif is_trusted_media_url(out):
+        path = strip_public_base(out)
+        aid = parse_asset_id_from_url(path)
+        if aid is not None:
+            out = asset_llm_media_url(aid, absolute=True)
+        elif path.startswith("/media/"):
+            out = absolute_media_url(path, for_llm=True)
+    elif out.startswith("http://") or out.startswith("https://"):
+        if is_trusted_media_url(out):
+            return rewrite_image_url_for_llm(strip_public_base(out))
+        logger.warning(
+            "LLM vision: неподдерживаемый внешний URL (пропуск): %s",
+            redact_url(out),
+        )
+        return out
+    elif out.startswith("/media/"):
+        aid = parse_asset_id_from_url(out)
+        if aid is not None:
+            out = asset_llm_media_url(aid, absolute=True)
+        else:
+            out = absolute_media_url(out, for_llm=True)
+
+    if out != original:
+        log_event(
+            logger,
+            "llm_vision_url",
+            "image URL rewritten for LLM vision",
+            src=redact_url(original),
+            dst=redact_url(out),
+        )
+    return out
 
 
 def compress_image_for_llm(

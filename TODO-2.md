@@ -73,7 +73,7 @@
    - [x] Базовый `.ui-card` + применение к composer; далее — settings/gallery/modals.
 3. **Типографика**
    - [x] Токены `--type-*` в `tokens.css`, утилиты `.type-title`, `.type-meta`, `.type-hint` (placeholder).
-   - [ ] Полное применение уровней по всем экранам; согласование с `--font-size` в настройках.
+   - [x] Применение `.type-title` / `.type-meta` на gallery, macros, login, заголовок settings.
 4. **Кнопки и icon-buttons**
    - [x] Добавлены `.btn-danger`, `.btn-icon` (базовые состояния).
    - [x] Composer: attach, @macro, «Ещё», send/cancel на общих классах; focus-visible rings.
@@ -150,16 +150,18 @@
    - [x] Нет бесед (`#conv-empty`); placeholder с подсказками; пустая галерея с CTA.
    - [x] Нет результатов поиска (rich empty + skeleton при загрузке).
    - [x] RAG: подсказка при &lt;3 символов и при пустом поиске (загрузите PDF/DOCX).
-   - [ ] Первый вход после login (polish copy).
+   - [x] Первый вход после login: intro + подсказка про беседу, вложения, `@alias`.
 2. **Motion**
    - [x] Глобальный `prefers-reduced-motion`; анимации пузырей/sidebar/скелетов уважают настройку.
-   - [ ] Точечные transition для hover (частично через tokens/ease).
+   - [x] `--ease-ui` в tokens; hover на conv-item / кнопках (существующие transition).
 3. **Визуальная иерархия**
    - [x] Активная беседа: inset-accent на `.conv-item.active`.
    - [ ] Системные сообщения тише пользовательских (в UI почти нет system-role rows).
 4. **Адаптив**
    - [x] Mobile: composer padding, меню не вылезают за экран; sidebar overlay (существующий).
    - [ ] Tablet landscape — ручная проверка.
+5. **A11y**
+   - [x] Focus-trap в модалке «Новая беседа» (`_bindDialogFocusTrap`).
 
 ### Опорная точка (gate) UX-3
 
@@ -179,11 +181,11 @@
 ### Задачи
 
 1. **Structured logging**
-   - [ ] Стандартизировать поля: `event`, `conversation_id`, `user_id`, `tool`, `duration_ms`, `error_id` где уместно.
+   - [x] JsonLogFormatter: опциональные поля `event`, `error_id`, `error_code`, `tool`, `duration_ms`, `user_id`.
 2. **`error_id` в WS/API**
-   - [ ] При `internal_error` генерировать UUID; отдавать клиенту; логировать с тем же ID.
+   - [x] При `internal` генерировать UUID; отдавать клиенту в WS; логировать с тем же ID; показ в баннере чата.
 3. **Расширение health**
-   - [ ] Опциональные поля: активные WS, длина очереди heavy jobs, диск — согласовать с ops-нуждами без утечки чувствительных данных наружу (см. [SECURITY.md](SECURITY.md)).
+   - [x] Поля `ws_connections`, `job_queue_pending` в `HealthReport`.
 
 ### Опорная точка (gate) BE-1
 
@@ -199,11 +201,11 @@
 ### Задачи
 
 1. **Graceful shutdown**
-   - [ ] При SIGTERM: останов приёма новых heavy jobs, drain с таймаутом, закрытие WS с понятным кодом, flush логов.
+   - [x] При остановке: отмена turn, закрытие WS (1001 `server_shutdown`), drain heavy jobs (`SHUTDOWN_DRAIN_SEC`), flush логов.
 2. **Единый слой таймаутов**
-   - [ ] Таблица: LLM, SD, MCP, внешние загрузки — документировать в `DEPLOY.md` или отдельном runbook.
+   - [x] Таблица в [deploy/DEPLOY.md](deploy/DEPLOY.md); переменные в `.env.example`.
 3. **Retry / circuit breaker для SD**
-   - [ ] Ограниченные retry на сетевых сбоях; при повторном падении — «инструмент временно недоступен» вместо каскада.
+   - [x] `sd_http.py`: retry на сеть/502–504, circuit breaker; дружелюбное сообщение в tool result.
 
 ### Опорная точка (gate) BE-2
 
@@ -239,7 +241,7 @@
 ### Задачи
 
 1. **Жёсткая валидация production-конфига**
-   - [ ] При `AUTH_ENABLED=true` — отказ старта при слабом `AUTH_SECRET`, дефолтных паролях (конкретные правила описать в `deploy/AUTH.md`).
+   - [x] При `WEB_CHAT_ENV=production` + `AUTH_ENABLED` — отказ старта при слабом bootstrap-пароле; документировано в [deploy/AUTH.md](deploy/AUTH.md).
 2. **Cookie flags**
    - [ ] Secure/HttpOnly/SameSite по умолчанию для prod; документировать исключение для чистого HTTP в LAN.
 3. **Аудит WS auth**
@@ -307,7 +309,6 @@
 
 ### Задачи
 
-- [ ] `CONTRIBUTING.md`: setup, pytest §14.4, миграции, стиль Ruff.
 - [ ] Опционально `.devcontainer` / `docker-compose.dev.yml` для новых разработчиков.
 - [ ] Без обязательного разбиения JS на «компоненты» в npm — достаточно **логических файлов** и соглашения об импортах (совместимо с [TODO.md §0.3](TODO.md#03-не-цели-версии-1-v1)).
 

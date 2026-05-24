@@ -82,7 +82,78 @@ async def create_conversation(
         preset_id=preset.id,
         owner_user_id=owner_user_id_for_request(user),
     )
+    await db.commit()
     return ConversationOut.model_validate(conversation)
+
+
+@router.get("/trash", response_model=list[ConversationOut])
+async def list_trash_conversations(
+    db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
+) -> list[ConversationOut]:
+    """Беседы в корзине (хранятся trash_retention_days, затем удаляются)."""
+    repo = ConversationRepository(db)
+    rows = await repo.list_trash(owner_user_id=owner_user_id_for_request(user))
+    return [ConversationOut.model_validate(c) for c in rows]
+
+
+@router.delete("/trash")
+async def empty_trash(
+    db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
+) -> dict[str, int]:
+    """Окончательно удалить все беседы в корзине текущего пользователя."""
+    repo = ConversationRepository(db)
+    deleted = await repo.empty_trash_for_owner(
+        owner_user_id=owner_user_id_for_request(user),
+    )
+    await db.commit()
+    return {"deleted": deleted}
+
+
+@router.post("/{conversation_id}/restore", response_model=ConversationOut)
+async def restore_conversation(
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
+) -> ConversationOut:
+    """Восстановить беседу из корзины."""
+    repo = ConversationRepository(db)
+    conversation = await repo.get_by_id_for_owner(
+        conversation_id,
+        owner_user_id=owner_user_id_for_request(user),
+        include_deleted=True,
+    )
+    if conversation is None or conversation.deleted_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Беседа не найдена в корзине",
+        )
+    conversation = await repo.restore_from_trash(conversation)
+    await db.commit()
+    return ConversationOut.model_validate(conversation)
+
+
+@router.delete("/{conversation_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_conversation_permanent(
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
+) -> None:
+    """Окончательно удалить беседу из корзины."""
+    repo = ConversationRepository(db)
+    conversation = await repo.get_by_id_for_owner(
+        conversation_id,
+        owner_user_id=owner_user_id_for_request(user),
+        include_deleted=True,
+    )
+    if conversation is None or conversation.deleted_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Беседа не найдена в корзине",
+        )
+    await repo.delete_permanent(conversation)
+    await db.commit()
 
 
 @router.get("/{conversation_id}/generation-status")
@@ -166,10 +237,15 @@ async def start_conversation_turn(
             detail="Уже выполняется генерация",
         )
 
+    from app.security.trusted_internal import register_integration_urls
+
+    llm_base_url = parse_optional_url(body.llm_base_url)
+    sd_webui_url = parse_optional_url(body.sd_webui_url)
+    register_integration_urls(llm_base_url, sd_webui_url)
     integration = IntegrationOverrides(
         llm_model=body.model.strip() if body.model else None,
-        llm_base_url=parse_optional_url(body.llm_base_url),
-        sd_webui_url=parse_optional_url(body.sd_webui_url),
+        llm_base_url=llm_base_url,
+        sd_webui_url=sd_webui_url,
         macro_context=parse_macro_context_mode(body.macro_context),
         document_rag=bool(body.document_rag),
     )
@@ -271,7 +347,7 @@ async def delete_conversation(
     db: AsyncSession = Depends(get_db),
     user: RequestUser | None = Depends(get_request_user),
 ) -> None:
-    """Удалить беседу и связанные сообщения."""
+    """Переместить беседу в корзину (окончательное удаление через trash_retention_days)."""
     repo = ConversationRepository(db)
     conversation = await get_accessible_conversation(db, conversation_id, user)
     if conversation is None:
@@ -279,4 +355,5 @@ async def delete_conversation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Беседа не найдена",
         )
-    await repo.delete(conversation)
+    await repo.move_to_trash(conversation)
+    await db.commit()
