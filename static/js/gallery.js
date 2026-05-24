@@ -53,6 +53,7 @@ class GalleryApp {
 
   init() {
     this.bindEvents();
+    this._showGallerySkeleton();
     this.refresh(true);
     this._startPoll(POLL_MS);
     this._connectSystemEvents();
@@ -215,6 +216,20 @@ class GalleryApp {
     }
   }
 
+  _showGallerySkeleton(count = 8) {
+    if (!this.els.grid) return;
+    this.els.empty?.classList.add('hidden');
+    this.els.grid.classList.remove('hidden');
+    this.els.grid.innerHTML = '';
+    for (let i = 0; i < count; i += 1) {
+      const card = document.createElement('div');
+      card.className = 'gallery-skeleton-card';
+      card.setAttribute('aria-hidden', 'true');
+      this.els.grid.appendChild(card);
+    }
+    this.els.grid.setAttribute('aria-busy', 'true');
+  }
+
   async refresh(initial) {
     try {
       const res = await fetch(`/api/gallery?limit=${GALLERY_LIMIT}`);
@@ -265,6 +280,7 @@ class GalleryApp {
   renderGrid() {
     if (!this.els.grid) return;
     this._cancelPendingDelete();
+    this.els.grid.removeAttribute('aria-busy');
     this.els.grid.innerHTML = '';
     const frag = document.createDocumentFragment();
     for (const item of this.items) {

@@ -22,6 +22,7 @@ const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
 const ACCEPTED_UPLOAD_ACCEPT =
   'image/jpeg,image/png,image/webp,image/gif,application/pdf,.docx,text/plain,text/csv';
 const PRESET_LAST_EDIT_STORAGE_KEY = 'webchat_preset_last_edit_id';
+const WS_MAX_RECONNECT_ATTEMPTS = 5;
 
 /** Короткие подписи в плавающем селекте пресета чата */
 const CHAT_PRESET_SHORT_LABELS = {
@@ -34,18 +35,46 @@ const CHAT_PRESET_SHORT_LABELS = {
 /** Подписи по этапу (согласованы с app/services/user_progress.py). */
 const PROGRESS_STAGE_LABELS = {
   submit: 'Сообщение принято',
-  llm_thinking: 'Размышление',
-  llm_typing: 'Печатаю ответ',
-  llm_tools: 'Выбираю действие',
-  sd_render: 'Рисую изображение',
-  sd_upscale: 'Увеличиваю',
-  doc_read: 'Читаю документ',
-  gallery: 'Галерея',
-  save_media: 'Сохраняю',
+  llm_thinking: 'Размышляю…',
+  llm_typing: 'Печатаю ответ…',
+  llm_tools: 'Выбираю действие…',
+  sd_render: 'Генерация изображения…',
+  sd_upscale: 'Увеличение изображения…',
+  doc_read: 'Чтение документа…',
+  gallery: 'Поиск в галерее…',
+  save_media: 'Сохраняю результат…',
 };
 
-const IMG2IMG_PRESET_SLUG = 'img2img';
-const DEFAULT_CONV_TITLE = 'Новая беседа';
+/** Человекочитаемые подписи MCP tools (не показывать snake_case в UI). */
+const TOOL_USER_LABELS = {
+  generate_image: 'Генерация изображения…',
+  img2img: 'Перерисовка изображения…',
+  upscale_images: 'Увеличение изображения…',
+  extract_text: 'Чтение документа…',
+  get_gallery: 'Поиск в галерее…',
+};
+
+/** Состояния UI чата (доминирующее для индикаторов). */
+const CHAT_UI_STATE = {
+  CONNECTING: 'connecting',
+  READY: 'ready',
+  STREAMING: 'streaming',
+  TOOL_RUNNING: 'tool_running',
+  RECONNECTING: 'reconnecting',
+  OFFLINE: 'offline',
+  ERROR: 'error',
+};
+
+const TOOL_ACTIVITY_STAGES = new Set([
+  'sd_render',
+  'sd_upscale',
+  'doc_read',
+  'gallery',
+  'llm_tools',
+  'save_media',
+]);
+
+const MESSAGE_SKELETON_ROWS = 4;
 
 const MSG_IMAGE_ICON_ATTACH =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
@@ -139,7 +168,16 @@ const MSG_ICONS = {
   edit: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
   regen: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
   delete: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  more: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
 };
+
+/** Действия над сообщением (pin/quote/retry — отложены, см. TODO-2 UX-2). */
+const MESSAGE_ACTION_DEFS = [
+  { key: 'copy', label: 'Копировать', title: 'Скопировать текст', icon: MSG_ICONS.copy },
+  { key: 'edit', label: 'Редактировать', title: 'Редактировать', icon: MSG_ICONS.edit },
+  { key: 'regenerate', label: 'Перегенерировать', title: 'Перегенерировать', icon: MSG_ICONS.regen },
+  { key: 'delete', label: 'Удалить', title: 'Удалить', icon: MSG_ICONS.delete, danger: true },
+];
 
 class ChatSocket {
   constructor(conversationId, handlers) {
@@ -152,6 +190,7 @@ class ChatSocket {
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
     this._shouldReconnect = true;
+    this._maxReconnectAttempts = WS_MAX_RECONNECT_ATTEMPTS;
   }
 
   connect() {
@@ -197,9 +236,18 @@ class ChatSocket {
 
   _scheduleReconnect() {
     if (!this._shouldReconnect) return;
+    if (this._reconnectAttempt >= this._maxReconnectAttempts) {
+      this._shouldReconnect = false;
+      this.handlers.onReconnectExhausted?.(
+        this._reconnectAttempt,
+        this._maxReconnectAttempts,
+      );
+      return;
+    }
+    const attempt = this._reconnectAttempt + 1;
     const delay = Math.min(1000 * 2 ** this._reconnectAttempt, 15000);
-    this._reconnectAttempt += 1;
-    this.handlers.onReconnecting?.(delay);
+    this._reconnectAttempt = attempt;
+    this.handlers.onReconnecting?.(delay, attempt, this._maxReconnectAttempts);
     this._reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
@@ -284,6 +332,11 @@ class ChatApp {
     this._generationResumeActive = false;
     this._generationWatchRunning = false;
     this._generationHadImages = false;
+    this._wsOfflineBannerShown = false;
+    this._wsReconnecting = false;
+    this._uiState = CHAT_UI_STATE.READY;
+    this._uiActivityStage = null;
+    this._messagesLoading = false;
     this._conversationsFingerprint = '';
     this._messagesFingerprint = '';
     this._scrollRaf = null;
@@ -332,6 +385,8 @@ class ChatApp {
       macroInsertBtn: document.getElementById('macro-insert-btn'),
       macroContextFullBtn: document.getElementById('macro-context-full-btn'),
       documentRagBtn: document.getElementById('document-rag-btn'),
+      composerMoreBtn: document.getElementById('composer-more-btn'),
+      composerToolsMenu: document.getElementById('composer-tools-menu'),
       documentRagPreview: document.getElementById('document-rag-preview'),
       settingsChatTitle: document.getElementById('settings-chat-title'),
       exportConversationBtn: document.getElementById('export-conversation-btn'),
@@ -362,6 +417,7 @@ class ChatApp {
       attachmentStrip: document.getElementById('attachment-strip'),
       errorBanner: document.getElementById('error-banner'),
       errorBannerText: document.getElementById('error-banner-text'),
+      errorBannerRetry: document.getElementById('error-banner-retry'),
       scrollBtn: document.getElementById('scroll-to-bottom-btn'),
       loadingOverlay: document.getElementById('loading-overlay'),
       newConvModal: document.getElementById('new-conv-modal'),
@@ -469,6 +525,8 @@ class ChatApp {
       }
     });
     this._initMacroContextToggle();
+    this._initComposerToolsMenu();
+    this._initMessageActionsGlobalClose();
     document.addEventListener('click', (e) => {
       const pop = document.getElementById('macro-picker-popover');
       if (!pop || pop.classList.contains('hidden')) return;
@@ -485,10 +543,11 @@ class ChatApp {
     document.getElementById('logs-copy-all')?.addEventListener('click', () => this.copyAllLogs());
     document.getElementById('logs-clear-all')?.addEventListener('click', () => this.clearAllLogs());
     document.getElementById('error-banner-close').addEventListener('click', () => this.hideError());
-    this.$.sendBtn.addEventListener('click', () => this.sendMessage());
-    this.$.cancelBtn.addEventListener('click', () => this.cancelGeneration());
+    this.$.errorBannerRetry?.addEventListener('click', () => this._retrySocketConnection());
+    this.$.sendBtn?.addEventListener('click', () => this.sendMessage());
+    this.$.cancelBtn?.addEventListener('click', () => this.cancelGeneration());
 
-    this.$.userInput.addEventListener('keydown', (e) => {
+    this.$.userInput?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         if (this.promptMacros.isAutocompleteOpen()) {
           e.preventDefault();
@@ -499,12 +558,12 @@ class ChatApp {
         this.sendMessage();
       }
     });
-    this.$.userInput.addEventListener('input', () => {
+    this.$.userInput?.addEventListener('input', () => {
       this.autoResizeInput();
       this._scheduleComposerDraftSave();
       this._scheduleRagPreview();
     });
-    this.$.userInput.addEventListener('paste', (e) => this._onComposerPaste(e));
+    this.$.userInput?.addEventListener('paste', (e) => this._onComposerPaste(e));
     window.addEventListener('resize', () => this.autoResizeInput());
     requestAnimationFrame(() => {
       this.autoResizeInput();
@@ -868,16 +927,125 @@ class ChatApp {
     this._syncFloatingSettingsVisibility();
   }
 
-  setConnStatus(state) {
+  setConnStatus(state, labelOverride) {
     this.$.connStatus.className = `conn-status ${state}`;
     const labels = {
       connected: 'Подключено',
       connecting: 'Подключение…',
       disconnected: 'Офлайн',
     };
-    const label = labels[state] || '—';
+    const label = labelOverride || labels[state] || '—';
     this.$.connStatus.title = label;
     if (this.$.connStatusLabel) this.$.connStatusLabel.textContent = label;
+  }
+
+  /** Подпись этапа/инструмента для пузыря ассистента (без сырых имён tools). */
+  _resolveProgressLabel(text, opts = {}) {
+    if (opts.tool && TOOL_USER_LABELS[opts.tool]) {
+      return TOOL_USER_LABELS[opts.tool];
+    }
+    if (opts.stage && PROGRESS_STAGE_LABELS[opts.stage]) {
+      return PROGRESS_STAGE_LABELS[opts.stage];
+    }
+    const raw = (text || '').trim();
+    if (raw && !/^[a-z][a-z0-9_]*$/i.test(raw)) {
+      return raw;
+    }
+    return 'Выполняется…';
+  }
+
+  _setUiActivityStage(stage) {
+    this._uiActivityStage = stage || null;
+    this._recomputeUiState();
+  }
+
+  _recomputeUiState() {
+    const rs = this.socket?.ws?.readyState;
+    const wsOpen = rs === WebSocket.OPEN;
+    const wsConnecting = rs === WebSocket.CONNECTING;
+
+    let state = CHAT_UI_STATE.READY;
+    if (this._wsOfflineBannerShown) {
+      state = CHAT_UI_STATE.OFFLINE;
+    } else if (this._wsReconnecting || (wsConnecting && !wsOpen)) {
+      state = CHAT_UI_STATE.RECONNECTING;
+    } else if (this.streaming || this._generationResumeActive) {
+      state = (
+        this._uiActivityStage
+        && TOOL_ACTIVITY_STAGES.has(this._uiActivityStage)
+      )
+        ? CHAT_UI_STATE.TOOL_RUNNING
+        : CHAT_UI_STATE.STREAMING;
+    } else if (this.currentConvId && !wsOpen) {
+      state = CHAT_UI_STATE.CONNECTING;
+    }
+
+    this._uiState = state;
+    document.body.dataset.chatUiState = state;
+    this._applyUiStateConnPill(state);
+  }
+
+  _applyUiStateConnPill(state) {
+    const connLabels = {
+      [CHAT_UI_STATE.OFFLINE]: ['disconnected', 'Офлайн'],
+      [CHAT_UI_STATE.RECONNECTING]: ['connecting', 'Переподключение…'],
+      [CHAT_UI_STATE.CONNECTING]: ['connecting', 'Подключение…'],
+      [CHAT_UI_STATE.TOOL_RUNNING]: ['connected', 'Выполнение задачи…'],
+      [CHAT_UI_STATE.STREAMING]: ['connected', 'Генерация ответа…'],
+      [CHAT_UI_STATE.READY]: ['connected', 'Подключено'],
+      [CHAT_UI_STATE.ERROR]: ['disconnected', 'Ошибка'],
+    };
+    const [conn, label] = connLabels[state] || connLabels[CHAT_UI_STATE.READY];
+    this.setConnStatus(conn, label);
+  }
+
+  _isMessagesSkeletonVisible() {
+    return Boolean(this.$.chatMessages?.querySelector('.messages-skeleton'));
+  }
+
+  _showMessagesSkeleton() {
+    if (!this.$.chatMessages) return;
+    this._messagesLoading = true;
+    this.$.chatMessages.classList.add('is-loading');
+    const wrap = document.createElement('div');
+    wrap.className = 'messages-skeleton';
+    wrap.setAttribute('aria-hidden', 'true');
+    wrap.setAttribute('aria-busy', 'true');
+    for (let i = 0; i < MESSAGE_SKELETON_ROWS; i += 1) {
+      wrap.appendChild(this._createMessageSkeletonRow(i % 2 === 0));
+    }
+    this.$.chatMessages.replaceChildren(wrap);
+  }
+
+  _createMessageSkeletonRow(isUser) {
+    const row = document.createElement('div');
+    row.className = `message-skeleton-row${isUser ? ' user' : ' assistant'}`;
+    const bubble = document.createElement('div');
+    bubble.className = 'message-skeleton-bubble';
+    row.appendChild(bubble);
+    return row;
+  }
+
+  async _syncAfterReconnect() {
+    if (!this.currentConvId) return;
+    try {
+      const status = await this.api(
+        `/api/conversations/${this.currentConvId}/generation-status`,
+      );
+      if (status.in_progress) {
+        await this._refreshStreamingBubbleFromServer(status);
+        if (!this._generationWatchRunning) {
+          this._watchGenerationUntilDone();
+        }
+        return;
+      }
+      if (this.streaming || this._generationResumeActive) {
+        await this.loadMessages({ force: true, preserveScroll: true });
+        this._completeGenerationUi({ preserveScroll: true }).catch(() => {});
+      }
+    } catch (err) {
+      this.log?.warn('ws', `Синхронизация после reconnect: ${err.message}`);
+    }
   }
 
   onAck(msg) {
@@ -1712,13 +1880,27 @@ class ChatApp {
     if (this.$.convSearchResults) this.$.convSearchResults.innerHTML = '';
   }
 
+  _showConvSearchSkeleton() {
+    const el = this.$.convSearchResults;
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.innerHTML = Array.from({ length: 3 }, () => (
+      `<li class="conv-search-skeleton" aria-hidden="true">
+        <div class="conv-search-skeleton-line conv-search-skeleton-line--title"></div>
+        <div class="conv-search-skeleton-line conv-search-skeleton-line--snippet"></div>
+      </li>`
+    )).join('');
+  }
+
   async _runConvSearch(q) {
     if (!this.$.convSearchResults) return;
+    this._showConvSearchSkeleton();
     try {
       const hits = await this.api(`/api/search?q=${encodeURIComponent(q)}`);
       this._renderSearchResults(hits, q);
     } catch (err) {
       this.showError(err.message);
+      this._clearConvSearch();
     }
   }
 
@@ -1727,7 +1909,10 @@ class ChatApp {
     if (!el) return;
     el.classList.remove('hidden');
     if (!hits.length) {
-      el.innerHTML = '<li class="conv-search-empty" role="listitem">Ничего не найдено</li>';
+      el.innerHTML = `<li class="conv-search-empty" role="listitem">
+        <p class="conv-search-empty-title">Ничего не найдено</p>
+        <p class="conv-search-empty-hint">Попробуйте другие слова или проверьте орфографию</p>
+      </li>`;
       return;
     }
     el.innerHTML = hits
@@ -1857,8 +2042,11 @@ class ChatApp {
     if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = true;
     if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = true;
     if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = true;
+    if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = true;
+    this._closeComposerToolsMenu();
     this._hideRagPreview();
     if (this.streaming) this.endStreaming();
+    this._syncComposerSendState();
   }
 
   openNewConvModal() {
@@ -1920,36 +2108,49 @@ class ChatApp {
       if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = false;
       if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = false;
       if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = false;
+      if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = false;
 
       this._resetComposerUi();
       this._updateDocumentRagToggleUi();
       this._scheduleRagPreview();
+      this.connectSocket();
 
       const scrollToMessageId = opts.scrollToMessageId || null;
-      if (scrollToMessageId) {
-        this._scrollStuckToBottom = false;
-        await this.loadMessages({ scrollToEnd: false, preserveScroll: false });
-        this._highlightMessage(scrollToMessageId);
-      } else {
-        const scrollEntry = this._getScrollPositionEntry(id);
-        const restoreScroll = scrollEntry
-          && !scrollEntry.atBottom
-          && (scrollEntry.anchorMessageId || Number.isFinite(scrollEntry.scrollTop));
-        this._scrollStuckToBottom = !restoreScroll;
-        await this.loadMessages({
-          scrollToEnd: !restoreScroll,
-          preserveScroll: false,
-          restoreScrollEntry: restoreScroll ? scrollEntry : null,
-        });
-      }
+      try {
+        if (scrollToMessageId) {
+          this._scrollStuckToBottom = false;
+          await this.loadMessages({ scrollToEnd: false, preserveScroll: false });
+          this._highlightMessage(scrollToMessageId);
+        } else {
+          const scrollEntry = this._getScrollPositionEntry(id);
+          const restoreScroll = scrollEntry
+            && !scrollEntry.atBottom
+            && (scrollEntry.anchorMessageId || Number.isFinite(scrollEntry.scrollTop));
+          this._scrollStuckToBottom = !restoreScroll;
+          await this.loadMessages({
+            scrollToEnd: !restoreScroll,
+            preserveScroll: false,
+            restoreScrollEntry: restoreScroll ? scrollEntry : null,
+          });
+        }
 
-      await this._resumeOngoingGeneration();
-      this._restoreComposerDraft(id);
-      this._restorePendingAttachmentsFromSession();
-      this.renderConvList();
-      this.connectSocket();
+        await this._resumeOngoingGeneration();
+        this._restoreComposerDraft(id);
+        this._restorePendingAttachmentsFromSession();
+        this.renderConvList();
+      } catch (err) {
+        this.showError(err.message || 'Не удалось загрузить беседу');
+        this.log?.error('chat', err.message || 'selectConversation failed');
+      }
+      this._syncComposerSendState();
+    } catch (err) {
+      this.showError(err.message || 'Не удалось открыть беседу');
+      this.log?.error('chat', err.message || 'selectConversation failed');
     } finally {
       this._endConvSwitchOverlay();
+      if (this.currentConvId && !this.socket) {
+        this.connectSocket();
+      }
     }
   }
 
@@ -1980,12 +2181,24 @@ class ChatApp {
     const scrollTopBefore = scrollEl?.scrollTop ?? 0;
     const scrollHeightBefore = scrollEl?.scrollHeight ?? 0;
 
+    const showSkeleton = !preserve
+      && !opts.force
+      && !this._messagesFingerprint
+      && !this.streaming
+      && !this._generationResumeActive;
+    if (showSkeleton) {
+      this._showMessagesSkeleton();
+    }
+
     const messages = await this.api(`/api/conversations/${this.currentConvId}/messages?limit=100`);
+    this._messagesLoading = false;
+    this.$.chatMessages?.classList.remove('is-loading');
+    const mustRenderDom = showSkeleton || this._isMessagesSkeletonVisible();
     const listFp = this._messagesFingerprintFromList(messages);
     const structureKey = this._messagesStructureKey(messages);
     const activeStreamingId = this._activeStreamingIdFromList(messages);
 
-    if (!opts.force && listFp === this._messagesFingerprint) {
+    if (!opts.force && listFp === this._messagesFingerprint && !mustRenderDom) {
       return;
     }
 
@@ -2015,7 +2228,7 @@ class ChatApp {
         }
         if (this._patchMessageRowIfNeeded(m, { activeStreamingId })) changed = true;
       }
-      if (domComplete) {
+      if (domComplete && !mustRenderDom) {
         this.$.chatMessages.dataset.structureKey = structureKey;
         this._messagesFingerprint = listFp;
         if (changed || restoreEntry) afterLayout();
@@ -2137,24 +2350,49 @@ class ChatApp {
     if (this.socket) {
       this.disconnectSocket();
     }
-    this.setConnStatus('connecting');
+    this._wsReconnecting = false;
+    this._recomputeUiState();
     this.log?.info('ws', `Подключение к беседе ${this.currentConvId}`);
     this.socket = new ChatSocket(this.currentConvId, {
-      onConnecting: () => this.setConnStatus('connecting'),
+      onConnecting: () => {
+        this._wsReconnecting = false;
+        this._recomputeUiState();
+      },
       onOpen: () => {
-        this.setConnStatus('connected');
+        this._wsReconnecting = false;
+        if (this._wsOfflineBannerShown) {
+          this.hideError();
+          this._wsOfflineBannerShown = false;
+        }
         this.log?.info('ws', 'Соединение установлено');
+        if (this.streaming || this._generationResumeActive) {
+          void this._syncAfterReconnect();
+        }
+        this._recomputeUiState();
+        this._syncComposerSendState();
       },
       onClose: () => {
-        if (!this.streaming && !this._generationResumeActive) {
-          this.setConnStatus('disconnected');
-        }
         this.log?.warn('ws', 'Соединение закрыто');
+        this._recomputeUiState();
       },
-      onReconnecting: (delay) => {
-        if (this.streaming || this._generationResumeActive) return;
-        this.setConnStatus('connecting');
-        this.log?.warn('ws', `Переподключение через ${delay} мс`);
+      onReconnecting: (delay, attempt, maxAttempts) => {
+        this._wsReconnecting = true;
+        this._recomputeUiState();
+        this.log?.warn('ws', `Переподключение ${attempt}/${maxAttempts} через ${delay} мс`);
+        if (this.streaming || this._generationResumeActive) {
+          void this._syncAfterReconnect();
+        }
+      },
+      onReconnectExhausted: (attempts, maxAttempts) => {
+        this._wsReconnecting = false;
+        this._wsOfflineBannerShown = true;
+        this._recomputeUiState();
+        this.showError(
+          'Соединение с сервером потеряно. Проверьте сеть и попробуйте подключиться снова.',
+          0,
+          { showRetry: true },
+        );
+        this.log?.error('ws', `Переподключение остановлено (${attempts}/${maxAttempts})`);
       },
       onError: () => this.log?.error('ws', 'Ошибка WebSocket'),
       onTextDelta: (chunk) => this.onTextDelta(chunk),
@@ -2175,15 +2413,87 @@ class ChatApp {
   disconnectSocket() {
     this._clearGenerationSyncTimer();
     this._generationResumeActive = false;
+    this._wsReconnecting = false;
     this.socket?.disconnect();
     this.socket = null;
-    this.setConnStatus('disconnected');
+    this._recomputeUiState();
+    this._syncComposerSendState();
+  }
+
+  _composerHasPayload(text) {
+    const trimmed = (text ?? this.$.userInput?.value ?? '').trim();
+    return Boolean(trimmed || this.pendingAttachments.length);
+  }
+
+  _isComposerBusy() {
+    return Boolean(this.streaming || this._generationResumeActive);
+  }
+
+  _syncComposerSendState() {
+    const sendBtn = this.$.sendBtn;
+    const cancelBtn = this.$.cancelBtn;
+    if (!sendBtn) return;
+
+    const busy = this._isComposerBusy();
+    if (busy) {
+      sendBtn.classList.add('hidden');
+      sendBtn.disabled = true;
+      cancelBtn?.classList.remove('hidden');
+      return;
+    }
+
+    cancelBtn?.classList.add('hidden');
+    sendBtn.classList.remove('hidden');
+    const inputDisabled = Boolean(this.$.userInput?.disabled);
+    sendBtn.disabled = !this.currentConvId || inputDisabled;
+  }
+
+  async _ensureSocketReady(timeoutMs = 8000) {
+    if (!this.currentConvId) return false;
+    if (!this.socket) this.connectSocket();
+    if (this.socket?.ws?.readyState === WebSocket.OPEN) return true;
+
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        if (this.socket?.ws?.readyState === WebSocket.OPEN) {
+          resolve(true);
+          return;
+        }
+        if (Date.now() - started >= timeoutMs) {
+          resolve(false);
+          return;
+        }
+        setTimeout(tick, 80);
+      };
+      tick();
+    });
+  }
+
+  _sendBlockedReason(text) {
+    if (!this.currentConvId) return 'Сначала выберите или создайте беседу';
+    if (this.$.userInput?.disabled) return 'Поле ввода недоступно';
+    if (this._isComposerBusy()) return 'Дождитесь окончания генерации';
+    if (!this._composerHasPayload(text)) return null;
+    if (!this.socket) return 'Подключение к серверу…';
+    if (this.socket.ws?.readyState === WebSocket.CONNECTING) return 'Подключение к серверу…';
+    if (this.socket.ws?.readyState !== WebSocket.OPEN) return 'Нет соединения с сервером';
+    return null;
   }
 
   async sendMessage() {
-    const text = this.$.userInput.value.trim();
-    if (!text || this.streaming) return;
-    if (!this.socket) return;
+    const text = this.$.userInput?.value?.trim() ?? '';
+    const blocked = this._sendBlockedReason(text);
+    if (blocked) {
+      if (blocked !== null) this.showError(blocked, 3500);
+      return;
+    }
+
+    if (!(await this._ensureSocketReady())) {
+      this.showError('Не удалось подключиться к серверу. Проверьте сеть или нажмите «Повторить».', 5000, { showRetry: true });
+      return;
+    }
+
     this._generationHadImages = false;
 
     if (this.editingMessageId) {
@@ -2328,10 +2638,9 @@ class ChatApp {
 
   startStreaming() {
     this.streaming = true;
+    this._setUiActivityStage('llm_thinking');
     this.streamText = '';
-    this.$.sendBtn.classList.add('hidden');
-    this.$.sendBtn.disabled = true;
-    this.$.cancelBtn.classList.remove('hidden');
+    this._syncComposerSendState();
 
     const el = document.createElement('div');
     el.className = 'chat-message assistant streaming waiting';
@@ -2351,7 +2660,7 @@ class ChatApp {
     this.streamRow = row;
     this.streamEl = el;
     this.streamImagesEl = el.querySelector('.message-images');
-    this.showProgress('Размышление', { stage: 'llm_thinking' });
+    this.showProgress(null, { stage: 'llm_thinking' });
     this.scrollToBottom(true);
   }
 
@@ -2382,6 +2691,7 @@ class ChatApp {
 
   onTextDelta(chunk) {
     if (!this._ensureStreamTarget()) return;
+    this._setUiActivityStage('llm_typing');
     this.hideProgress();
     this.streamEl.classList.remove('waiting');
     this._renderStreamTextToBubble((this.streamText || '') + chunk);
@@ -2411,7 +2721,8 @@ class ChatApp {
         )
       )
     );
-    this.showProgress(PROGRESS_STAGE_LABELS[stage] || name, { stage, tool: name });
+    this._setUiActivityStage(stage);
+    this.showProgress(null, { stage, tool: name });
     this._scheduleScrollToBottom();
   }
 
@@ -2421,7 +2732,7 @@ class ChatApp {
       && !this.streamText
       && !this.streamImagesEl?.children.length
     ) {
-      this.showProgress('Размышление', { stage: 'llm_thinking' });
+      this.showProgress(null, { stage: 'llm_thinking' });
     } else if (!this.streamText) {
       this.hideProgress();
     }
@@ -2430,10 +2741,10 @@ class ChatApp {
   onProgress(msg) {
     if (!msg) return;
     this._ensureStreamTarget();
-    const label = msg.label
-      || PROGRESS_STAGE_LABELS[msg.stage]
-      || 'Выполняется…';
-    this.showProgress(label, {
+    if (msg.stage) {
+      this._setUiActivityStage(msg.stage);
+    }
+    this.showProgress(msg.label, {
       stage: msg.stage,
       tool: msg.tool,
       percent: msg.percent,
@@ -2543,9 +2854,7 @@ class ChatApp {
       this.streamEl.classList.toggle('has-content', Boolean(displayText));
     }
     this.streamEl.classList.toggle('has-images', hasImages);
-    this.$.sendBtn.classList.add('hidden');
-    this.$.sendBtn.disabled = true;
-    this.$.cancelBtn.classList.remove('hidden');
+    this._syncComposerSendState();
   }
 
   _bindStreamToMessageId(messageId) {
@@ -2570,7 +2879,8 @@ class ChatApp {
     const hasImages = Boolean(this.streamImagesEl?.children.length);
 
     if (status.progress_label || status.progress_stage) {
-      this.showProgress(status.progress_label || PROGRESS_STAGE_LABELS[status.progress_stage], {
+      this._setUiActivityStage(status.progress_stage);
+      this.showProgress(status.progress_label, {
         stage: status.progress_stage,
         percent: status.progress_percent,
         detail: status.progress_detail,
@@ -2581,21 +2891,24 @@ class ChatApp {
 
     if (status.phase === 'tool' && status.active_tool) {
       const stage = status.active_tool === 'upscale_images' ? 'sd_upscale' : 'sd_render';
-      this.showProgress(PROGRESS_STAGE_LABELS[stage] || status.active_tool, {
+      this._setUiActivityStage(stage);
+      this.showProgress(null, {
         stage,
         tool: status.active_tool,
       });
       return;
     }
     if (hasText && !hasImages && status.in_progress) {
-      this.showProgress('Печатаю ответ', { stage: 'llm_typing' });
+      this._setUiActivityStage('llm_typing');
+      this.showProgress(null, { stage: 'llm_typing' });
       return;
     }
     if (hasText || hasImages) {
       this.hideProgress();
       return;
     }
-    this.showProgress('Размышление', { stage: 'llm_thinking' });
+    this._setUiActivityStage('llm_thinking');
+    this.showProgress(null, { stage: 'llm_thinking' });
   }
 
   async _resumeOngoingGeneration(serverMsg = {}) {
@@ -2935,9 +3248,9 @@ class ChatApp {
     this._clearGenerationSyncTimer();
     this._generationResumeActive = false;
     this.streaming = false;
-    this.$.sendBtn.classList.remove('hidden', 'loading');
-    this.$.sendBtn.disabled = false;
-    this.$.cancelBtn.classList.add('hidden');
+    this._uiActivityStage = null;
+    this._recomputeUiState();
+    this._syncComposerSendState();
     if (!this.$.userInput.disabled) {
       this.$.userInput.focus();
     }
@@ -2967,39 +3280,132 @@ class ChatApp {
     }
   }
 
-  _buildActions() {
-    const bar = document.createElement('div');
-    bar.className = 'message-actions';
-    for (const a of [
-      { key: 'copy', title: 'Скопировать текст', icon: MSG_ICONS.copy },
-      { key: 'edit', title: 'Редактировать', icon: MSG_ICONS.edit },
-      { key: 'regenerate', title: 'Перегенерировать', icon: MSG_ICONS.regen },
-      { key: 'delete', title: 'Удалить', icon: MSG_ICONS.delete, danger: true },
-    ]) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `msg-action-btn${a.danger ? ' danger' : ''}`;
-      btn.dataset.action = a.key;
-      btn.title = a.title;
-      btn.innerHTML = a.icon;
-      bar.appendChild(btn);
+  _buildMessageActions(role, row) {
+    const wrap = document.createElement('div');
+    wrap.className = 'message-actions';
+
+    const kebab = document.createElement('button');
+    kebab.type = 'button';
+    kebab.className = 'msg-action-kebab btn-icon';
+    kebab.title = 'Действия с сообщением';
+    kebab.setAttribute('aria-label', 'Действия с сообщением');
+    kebab.setAttribute('aria-haspopup', 'menu');
+    kebab.setAttribute('aria-expanded', 'false');
+    kebab.innerHTML = MSG_ICONS.more;
+
+    const menu = document.createElement('div');
+    menu.className = 'msg-actions-menu hidden';
+    menu.setAttribute('role', 'menu');
+
+    for (const key of this._messageActionKeysForRow(role, row)) {
+      const def = MESSAGE_ACTION_DEFS.find((d) => d.key === key);
+      if (!def) continue;
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = `msg-actions-menu-item${def.danger ? ' danger' : ''}`;
+      item.dataset.action = def.key;
+      item.setAttribute('role', 'menuitem');
+      item.title = def.title;
+      item.innerHTML = `${def.icon}<span class="msg-actions-menu-label">${def.label}</span>`;
+      menu.appendChild(item);
     }
-    return bar;
+
+    kebab.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const hostRow = wrap.closest('.message-row');
+      if (menu.classList.contains('is-open')) {
+        this._closeMessageActionsMenu(hostRow);
+      } else {
+        this._openMessageActionsMenu(hostRow);
+      }
+    });
+
+    menu.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      const hostRow = wrap.closest('.message-row');
+      if (!btn || !hostRow?.dataset.messageId) return;
+      const id = hostRow.dataset.messageId;
+      const action = btn.dataset.action;
+      if (action === 'copy') this.copyMessageText(id, role, btn);
+      else if (action === 'delete') this.deleteMessage(id, role);
+      else if (action === 'edit') this.editMessage(id, role);
+      else if (action === 'regenerate') this.regenerateMessage(id);
+      this._closeMessageActionsMenu(hostRow);
+    });
+
+    wrap.append(kebab, menu);
+    return wrap;
+  }
+
+  _messageActionKeysForRow(role, row) {
+    const keys = [];
+    if (this._hasCopyableMessageText(row, role)) keys.push('copy');
+    if (!this.streaming) {
+      keys.push('edit', 'regenerate');
+    }
+    keys.push('delete');
+    return keys;
+  }
+
+  _hasCopyableMessageText(row, role) {
+    return Boolean(this._extractMessagePlainText(row, role));
+  }
+
+  _shouldAttachMessageActions(row) {
+    if (!row) return false;
+    if (row.dataset.streamingDraft === 'true' || row.dataset.temp === 'true') return false;
+    if (this.streaming && row === this.streamRow) return false;
+    return true;
+  }
+
+  _openMessageActionsMenu(row) {
+    if (!row) return;
+    this._closeAllMessageActionMenus(row);
+    const menu = row.querySelector('.msg-actions-menu');
+    const kebab = row.querySelector('.msg-action-kebab');
+    if (!menu || !kebab) return;
+    menu.classList.remove('hidden');
+    menu.classList.add('is-open');
+    kebab.classList.add('is-open');
+    kebab.setAttribute('aria-expanded', 'true');
+  }
+
+  _closeMessageActionsMenu(row) {
+    if (!row) return;
+    const menu = row.querySelector('.msg-actions-menu');
+    const kebab = row.querySelector('.msg-action-kebab');
+    if (!menu) return;
+    menu.classList.add('hidden');
+    menu.classList.remove('is-open');
+    kebab?.classList.remove('is-open');
+    kebab?.setAttribute('aria-expanded', 'false');
+  }
+
+  _closeAllMessageActionMenus(exceptRow = null) {
+    this.$.chatMessages?.querySelectorAll('.msg-actions-menu.is-open').forEach((menu) => {
+      const row = menu.closest('.message-row');
+      if (exceptRow && row === exceptRow) return;
+      this._closeMessageActionsMenu(row);
+    });
+  }
+
+  _initMessageActionsGlobalClose() {
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.message-actions')) return;
+      this._closeAllMessageActionMenus();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this._closeAllMessageActionMenus();
+    });
+    this._chatHistoryScrollEl()?.addEventListener('scroll', () => {
+      this._closeAllMessageActionMenus();
+    }, { passive: true });
   }
 
   _attachActions(row, role) {
     if (row.querySelector('.message-actions')) return;
-    const bar = this._buildActions();
-    bar.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-action]');
-      if (!btn || !row.dataset.messageId) return;
-      const id = row.dataset.messageId;
-      if (btn.dataset.action === 'copy') this.copyMessageText(id, role, btn);
-      else if (btn.dataset.action === 'delete') this.deleteMessage(id, role);
-      else if (btn.dataset.action === 'edit') this.editMessage(id, role);
-      else if (btn.dataset.action === 'regenerate') this.regenerateMessage(id);
-    });
-    row.appendChild(bar);
+    if (!this._shouldAttachMessageActions(row)) return;
+    row.appendChild(this._buildMessageActions(role, row));
   }
 
   _wrapMessage(role, messageEl, messageId) {
@@ -3338,7 +3744,7 @@ class ChatApp {
       : '';
     frame.insertAdjacentHTML(
       'beforeend',
-      `<button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl message-image-attach" data-full-url="${this.escapeAttr(full)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${MSG_IMAGE_ICON_ATTACH}</button>
+      `<button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl message-image-attach" data-full-url="${this.escapeAttr(full)}" title="Прикрепить это изображение к сообщению" aria-label="Прикрепить к сообщению">${MSG_IMAGE_ICON_ATTACH}</button>
       <div class="gallery-card-actions">
         <button type="button" class="gallery-card-action gallery-card-save message-image-save" data-full-url="${this.escapeAttr(full)}" title="Сохранить" aria-label="Сохранить">${MSG_IMAGE_ICON_SAVE}</button>
         ${deleteBtn}
@@ -3356,7 +3762,7 @@ class ChatApp {
       if (attachBtn) {
         e.preventDefault();
         e.stopPropagation();
-        void this._attachImageToNewChat(attachBtn.dataset.fullUrl, attachBtn);
+        void this.attachImageUrlToComposer(attachBtn.dataset.fullUrl, attachBtn);
         return;
       }
       const saveBtn = e.target.closest('.message-image-save');
@@ -3469,58 +3875,6 @@ class ChatApp {
     }
   }
 
-  async _attachImageToNewChat(url, btn) {
-    const full = mediaFullUrl(url);
-    const target = parseMediaGalleryTarget(full);
-    if (!full) return;
-    const prevDisabled = btn?.disabled;
-    if (btn) btn.disabled = true;
-    try {
-      const presetsRes = await fetch('/api/presets');
-      if (!presetsRes.ok) throw new Error('Не удалось загрузить пресеты');
-      const presets = await presetsRes.json();
-      const img2imgPreset = presets.find((p) => p.slug === IMG2IMG_PRESET_SLUG);
-      const convBody = { title: DEFAULT_CONV_TITLE };
-      if (img2imgPreset?.id) convBody.preset_id = img2imgPreset.id;
-      const convRes = await fetch('/api/conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(convBody),
-      });
-      if (!convRes.ok) {
-        const errBody = await convRes.json().catch(() => ({}));
-        throw new Error(errBody.detail || convRes.statusText);
-      }
-      const conv = await convRes.json();
-      const imgRes = await fetch(full);
-      if (!imgRes.ok) throw new Error('Не удалось загрузить изображение');
-      const blob = await imgRes.blob();
-      const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
-      const name = target?.filename || this._filenameFromLightboxUrl(full);
-      const file = new File([blob], name, { type: mime });
-      const fd = new FormData();
-      fd.append('files', file);
-      fd.append('conversation_id', conv.id);
-      const upRes = await fetch('/api/upload', { method: 'POST', body: fd });
-      if (!upRes.ok) {
-        const errBody = await upRes.json().catch(() => ({}));
-        throw new Error(errBody.detail || 'Ошибка загрузки вложения');
-      }
-      const uploadData = await upRes.json();
-      sessionStorage.setItem(
-        PENDING_ATTACHMENTS_KEY,
-        JSON.stringify({
-          conversation_id: conv.id,
-          attachments: uploadData.attachments || [],
-        }),
-      );
-      localStorage.setItem('webchat_conv_id', conv.id);
-      window.location.href = '/';
-    } catch (err) {
-      this.showError(err.message || 'Ошибка');
-      if (btn) btn.disabled = prevDisabled ?? false;
-    }
-  }
 
   _bindImageClicks(container) {
     container.querySelectorAll('.message-bubble img, .md-inline-img').forEach((img) => {
@@ -3789,6 +4143,7 @@ class ChatApp {
     this.pendingAttachments = [];
     this.$.attachmentStrip.innerHTML = '';
     this.$.attachmentStrip.classList.add('hidden');
+    this._closeComposerToolsMenu();
     if (this.$.userInput) {
       this.$.userInput.value = '';
       this.autoResizeInput();
@@ -4160,10 +4515,11 @@ class ChatApp {
     }, 4000);
   }
 
-  showError(msg, autoHideMs = 8000) {
+  showError(msg, autoHideMs = 8000, options = {}) {
     this.log?.error('ui', msg);
     clearTimeout(this._errorTimer);
     this.$.errorBannerText.textContent = msg;
+    this.$.errorBannerRetry?.classList.toggle('hidden', !options.showRetry);
     this.$.errorBanner.classList.remove('hidden');
     if (autoHideMs > 0) {
       this._errorTimer = setTimeout(() => this.hideError(), autoHideMs);
@@ -4172,7 +4528,17 @@ class ChatApp {
 
   hideError() {
     this.$.errorBanner.classList.add('hidden');
+    this.$.errorBannerRetry?.classList.add('hidden');
     clearTimeout(this._errorTimer);
+  }
+
+  _retrySocketConnection() {
+    if (!this.currentConvId) return;
+    this.hideError();
+    this._wsOfflineBannerShown = false;
+    this._wsReconnecting = false;
+    this.log?.info('ws', 'Ручной перезапуск подключения');
+    this.connectSocket();
   }
 
   showProgress(text, opts = {}) {
@@ -4183,9 +4549,7 @@ class ChatApp {
     const percentEl = this.streamEl.querySelector('.message-status-percent');
     if (!status || !labelEl) return;
 
-    const resolvedLabel = text
-      || PROGRESS_STAGE_LABELS[opts.stage]
-      || 'Выполняется…';
+    const resolvedLabel = this._resolveProgressLabel(text, opts);
     labelEl.textContent = resolvedLabel;
 
     const detail = (opts.detail || '').trim();
@@ -4342,34 +4706,39 @@ class ChatApp {
     }
   }
 
-  async attachLightboxImageToComposer() {
-    const url = mediaFullUrl(this._lightboxCurrentUrl());
-    if (!url) return;
+  async attachImageUrlToComposer(url, btn = null, { closeLightbox = false } = {}) {
+    const resolved = mediaFullUrl(url);
+    if (!resolved) return;
     if (!this.currentConvId) {
       this.showError('Сначала выберите или создайте беседу');
       return;
     }
-    const key = imageUrlKey(url);
+    const key = imageUrlKey(resolved);
     if (this.pendingAttachments.some((a) => imageUrlKey(mediaFullUrl(a.preview_url)) === key)) {
       this.showError('Это изображение уже прикреплено', 3000);
       return;
     }
-    const btn = this.$.lightboxAttachCurrent;
     if (btn) btn.disabled = true;
     try {
-      const res = await fetch(url);
+      const res = await fetch(resolved);
       if (!res.ok) throw new Error('Не удалось загрузить изображение');
       const blob = await res.blob();
       const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
-      const file = new File([blob], this._filenameFromLightboxUrl(url), { type: mime });
+      const file = new File([blob], this._filenameFromLightboxUrl(resolved), { type: mime });
       await this.uploadFiles([file]);
-      this.closeLightbox();
+      if (closeLightbox) this.closeLightbox();
       this.$.userInput?.focus();
     } catch (err) {
       this.showError(err.message || 'Ошибка прикрепления');
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  async attachLightboxImageToComposer() {
+    const url = this._lightboxCurrentUrl();
+    if (!url) return;
+    await this.attachImageUrlToComposer(url, this.$.lightboxAttachCurrent, { closeLightbox: true });
   }
 
   openLightbox(url) {
@@ -4492,7 +4861,7 @@ class ChatApp {
 
   _chatInputMetrics() {
     const ta = this.$.userInput;
-    const box = ta?.closest('.chat-input-container');
+    const box = ta?.closest('.composer-input-row') || ta?.closest('.chat-input-container');
     const taStyle = ta ? getComputedStyle(ta) : null;
     const boxStyle = box ? getComputedStyle(box) : null;
     const lineHeight = parseFloat(taStyle?.lineHeight) || 20;
@@ -4619,6 +4988,66 @@ class ChatApp {
     return order[(idx + 1) % order.length];
   }
 
+  _isComposerToolsMenuOpen() {
+    return this.$.composerToolsMenu?.classList.contains('is-open') ?? false;
+  }
+
+  _openComposerToolsMenu() {
+    const menu = this.$.composerToolsMenu;
+    const btn = this.$.composerMoreBtn;
+    if (!menu || !btn || btn.disabled) return;
+    menu.classList.remove('hidden');
+    menu.classList.add('is-open');
+    btn.classList.add('is-open');
+    btn.setAttribute('aria-expanded', 'true');
+  }
+
+  _closeComposerToolsMenu() {
+    const menu = this.$.composerToolsMenu;
+    const btn = this.$.composerMoreBtn;
+    if (!menu || menu.classList.contains('hidden')) return;
+    menu.classList.add('hidden');
+    menu.classList.remove('is-open');
+    btn?.classList.remove('is-open');
+    btn?.setAttribute('aria-expanded', 'false');
+  }
+
+  _toggleComposerToolsMenu() {
+    if (this._isComposerToolsMenuOpen()) {
+      this._closeComposerToolsMenu();
+    } else {
+      this._openComposerToolsMenu();
+    }
+  }
+
+  _initComposerToolsMenu() {
+    const btn = this.$.composerMoreBtn;
+    const menu = this.$.composerToolsMenu;
+    if (!btn || !menu) return;
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleComposerToolsMenu();
+    });
+
+    menu.querySelectorAll('.composer-tools-menu-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        requestAnimationFrame(() => this._closeComposerToolsMenu());
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!this._isComposerToolsMenuOpen()) return;
+      const t = e.target;
+      if (btn.contains(t) || menu.contains(t)) return;
+      this._closeComposerToolsMenu();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this._closeComposerToolsMenu();
+    });
+  }
+
   _initMacroContextToggle() {
     const btn = this.$.macroContextFullBtn;
     if (!btn) return;
@@ -4647,6 +5076,13 @@ class ChatApp {
     btn.classList.toggle('active', mode !== 'selected');
     btn.classList.toggle('semantic', mode === 'semantic');
     btn.setAttribute('aria-pressed', mode !== 'selected' ? 'true' : 'false');
+    const labels = {
+      selected: 'Каталог @alias',
+      full: 'Каталог @alias · полный',
+      semantic: 'Каталог @alias · semantic',
+    };
+    const labelEl = btn.querySelector('.composer-tools-menu-label');
+    if (labelEl) labelEl.textContent = labels[mode] || labels.selected;
     const titles = {
       selected: 'Контекст @alias: только из текста (нажмите — полный каталог)',
       full: 'Контекст @alias: полный каталог (нажмите — semantic top-K)',
@@ -4698,6 +5134,10 @@ class ChatApp {
     const on = this.getDocumentRagEnabled();
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    const labelEl = btn.querySelector('.composer-tools-menu-label');
+    if (labelEl) {
+      labelEl.textContent = on ? 'Поиск по документам · вкл' : 'Поиск по документам';
+    }
     btn.title = on
       ? 'RAG по документам: вкл (фрагменты в контексте модели)'
       : 'RAG по документам: выкл (нажмите для поиска по PDF/DOCX беседы)';
@@ -4710,7 +5150,17 @@ class ChatApp {
     }
     const q = (this.$.userInput?.value || '').trim();
     if (q.length < 3) {
-      this._hideRagPreview();
+      const el = this.$.documentRagPreview;
+      if (!el) return;
+      el.classList.remove('hidden');
+      el.replaceChildren();
+      const title = document.createElement('p');
+      title.className = 'document-rag-preview-title';
+      title.textContent = 'Поиск по документам';
+      const hint = document.createElement('p');
+      hint.className = 'document-rag-preview-empty';
+      hint.textContent = 'Введите не менее 3 символов — покажем фрагменты из PDF и DOCX беседы';
+      el.append(title, hint);
       return;
     }
     clearTimeout(this._ragPreviewTimer);
@@ -4759,7 +5209,7 @@ class ChatApp {
     if (!hits?.length) {
       const empty = document.createElement('p');
       empty.className = 'document-rag-preview-empty';
-      empty.textContent = `Нет совпадений для «${query.slice(0, 40)}»`;
+      empty.textContent = `Нет фрагментов для «${query.slice(0, 40)}». Прикрепите PDF или DOCX к сообщению.`;
       el.appendChild(empty);
       return;
     }

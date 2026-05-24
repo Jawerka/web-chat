@@ -1,0 +1,78 @@
+/* web-chat design tokens (UX-1 foundation) */
+
+:root {
+  color-scheme: light;
+
+  /* Core surfaces */
+  --color-bg: #f0f2f5;
+  --color-bg-elevated: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-2: #f7f8fb;
+
+  /* Text */
+  --color-text: #1a1d21;
+  --color-text-muted: #5f6368;
+
+  /* Semantic */
+  --color-border: #e2e5ea;
+  --color-primary: #1a73e8;
+  --color-primary-hover: #1557b0;
+  --color-success: #34a853;
+  --color-danger: #ea4335;
+
+  /* Accent */
+  --color-accent-cyan: #06b6d4;
+  --color-accent-violet: #8b5cf6;
+
+  /* Radius scale */
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 22px;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.12);
+
+  /* Typography scale */
+  --type-title-size: 1.25rem;
+  --type-title-weight: 600;
+  --type-section-size: 0.6875rem;
+  --type-section-weight: 700;
+  --type-body-size: var(--font-size, 14px);
+  --type-meta-size: 0.8125rem;
+  --type-hint-size: 0.75rem;
+
+  /* Focus */
+  --focus-ring-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
+  --focus-ring: 0 0 0 3px var(--focus-ring-color);
+}
+
+body.dark-theme {
+  color-scheme: dark;
+
+  --color-bg: #0f1419;
+  --color-bg-elevated: #192734;
+  --color-surface: #192734;
+  --color-surface-2: #223242;
+
+  --color-text: #e7e9ea;
+  --color-text-muted: #8b98a5;
+
+  --color-border: #38444d;
+  --color-primary: #6995c5;
+  --color-primary-hover: #5a82b0;
+  --color-success: #34a853;
+  --color-danger: #ea4335;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.45);
+}

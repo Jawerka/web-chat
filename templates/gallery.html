@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} — web-chat</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/chat.css">
   <script>
     (function () {
@@ -47,9 +48,11 @@
       </div>
     </header>
 
-    <p id="gallery-empty" class="gallery-empty hidden">
-      Пока нет сгенерированных изображений. Создайте картинку в чате — она появится здесь.
-    </p>
+    <div id="gallery-empty" class="gallery-empty empty-state hidden" role="status">
+      <p class="empty-state-title">Галерея пуста</p>
+      <p class="empty-state-text type-hint">Сгенерируйте изображение в чате — оно появится здесь автоматически</p>
+      <a href="/" class="btn btn-primary btn-sm gallery-empty-cta">Перейти в чат</a>
+    </div>
     <div id="gallery-grid" class="gallery-grid hidden"></div>
   </div>
 
