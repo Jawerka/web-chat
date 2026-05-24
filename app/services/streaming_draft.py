@@ -40,6 +40,7 @@ class AssistantStreamDraft:
         self._message: Message | None = None
         self._json_cache: dict[str, Any] = {}
         self._buffer = ""
+        self._reasoning_buffer = ""
         self._flush_lock = asyncio.Lock()
         self._pending_flush = False
         self._last_flushed_len = 0
@@ -51,6 +52,10 @@ class AssistantStreamDraft:
     @property
     def text(self) -> str:
         return self._buffer
+
+    @property
+    def reasoning(self) -> str:
+        return self._reasoning_buffer
 
     def _content_json(self) -> dict[str, Any]:
         """Только in-memory кэш — не читать ORM после commit (MissingGreenlet)."""
@@ -114,6 +119,14 @@ class AssistantStreamDraft:
         )
         await self._conv_repo.touch(self._conversation)
         await self._session.commit()
+
+    async def on_reasoning_delta(self, chunk: str) -> None:
+        if not chunk:
+            return
+        self._reasoning_buffer += chunk
+        if self._message is None:
+            await self._ensure_message()
+        await self._emit("reasoning_delta", {"content": chunk})
 
     async def on_delta(self, chunk: str) -> None:
         if not chunk:

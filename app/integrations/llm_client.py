@@ -39,6 +39,16 @@ class LLMCompletion:
     content: str | None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = None
+    reasoning: str | None = None
+
+
+def _stream_delta_reasoning(delta: Any) -> str | None:
+    """Фрагмент reasoning из stream delta (OpenAI-compatible extensions)."""
+    for attr in ("reasoning_content", "reasoning"):
+        raw = getattr(delta, attr, None)
+        if isinstance(raw, str) and raw:
+            return raw
+    return None
 
 
 def _is_model_loading_error(exc: BaseException) -> bool:
@@ -270,6 +280,7 @@ class LLMClient:
         messages: list[dict[str, Any]],
         *,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         cancel_event: asyncio.Event | None = None,
         tools: list[dict] | None = None,
         model: str | None = None,
@@ -277,7 +288,7 @@ class LLMClient:
         """
         Стриминг с накоплением content и tool_calls.
 
-        Вызывает on_text_delta для каждого фрагмента текста.
+        Вызывает on_text_delta / on_reasoning_delta для фрагментов ответа.
         """
         model_name = await self.resolve_model(model)
         try:
@@ -301,6 +312,7 @@ class LLMClient:
             raise LLMError(f"Ошибка стриминга LLM: {exc}") from exc
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls_acc: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
 
@@ -313,6 +325,12 @@ class LLMClient:
             delta = choice.delta
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+
+            reasoning_piece = _stream_delta_reasoning(delta)
+            if reasoning_piece:
+                reasoning_parts.append(reasoning_piece)
+                if on_reasoning_delta is not None:
+                    await on_reasoning_delta(reasoning_piece)
 
             if delta.content:
                 content_parts.append(delta.content)
@@ -338,10 +356,12 @@ class LLMClient:
                             acc["function"]["arguments"] += tc.function.arguments
 
         tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+        reasoning_text = "".join(reasoning_parts).strip() or None
         return LLMCompletion(
             content="".join(content_parts) or None,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
+            reasoning=reasoning_text,
         )
 
     async def stream(

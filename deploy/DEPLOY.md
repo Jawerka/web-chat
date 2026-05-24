@@ -254,7 +254,7 @@ curl -s http://127.0.0.1:8090/api/presets | jq '.[].slug'
 ```bash
 source .venv/bin/activate
 pytest -q
-# ожидается: 155+ passed (см. TODO.md §14)
+# ожидается: все passed (см. HANDBOOK.md §14, BACKLOG.md §0)
 ```
 
 ### После перезагрузки ОС
@@ -266,7 +266,7 @@ sudo systemctl is-enabled web-chat.service   # enabled
 sudo systemctl status web-chat
 ```
 
-При активной генерации SD/LLM UI после F5 **восстанавливает** черновик из БД (см. TODO.md §20).
+При активной генерации SD/LLM UI после F5 **восстанавливает** черновик из БД (см. HANDBOOK.md §20).
 
 ---
 
@@ -393,9 +393,9 @@ sudo ./deploy/install.sh --skip-tests
 Для доступа **вне доверенной LAN** не открывайте `8090` напрямую. Используйте HTTPS и аутентификацию на proxy.
 
 Шаблон: **[deploy/nginx-web-chat.conf.template](nginx-web-chat.conf.template)**  
-Документация: **[SECURITY.md](../SECURITY.md)** · вход: **[AUTH.md](AUTH.md)** · multi-user: **[MULTI-USER.md](MULTI-USER.md)** · план работ: **[TODO.md §22](../TODO.md#22-планируемые-действия)**
+Документация: **[SECURITY.md](../SECURITY.md)** · вход: **[AUTH.md](AUTH.md)** · multi-user: **[MULTI-USER.md](MULTI-USER.md)** · план работ: **[BACKLOG.md](../BACKLOG.md)** · архитектура: **[HANDBOOK.md](../HANDBOOK.md)**
 
-**Автотесты (2026-05-23):** `pytest -q` → **254** passed.
+**Автотесты:** `pytest -q` → **283 passed** (см. [HANDBOOK.md](../HANDBOOK.md)).
 
 Минимальные шаги:
 
@@ -406,6 +406,16 @@ sudo ./deploy/install.sh --skip-tests
    - `TRUSTED_WS_ORIGINS=https://ваш-хост`
    - `API_ACCESS_KEY=...` (дополнительно к Basic Auth)
 4. `PUBLIC_BASE_URL` — **внешний** URL браузера (`https://…`), не внутренний IP:8090.
+
+### Trusted internal (LLM / SD без cookie)
+
+При `AUTH_ENABLED=true` llama-server и SD качают `/media/asset/{id}/llm` без сессии браузера.
+
+- В `.env`: хосты из `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL` резолвятся автоматически; при необходимости `TRUSTED_INTERNAL_IPS`.
+- В чате: адреса LLM/SD из настроек → `POST /api/config/trusted-internal/sync`.
+- Проверка: с IP LLM `curl -s -o /dev/null -w "%{http_code}" http://<web-chat>:8090/media/asset/<uuid>/llm` → `200`.
+
+Подробнее: [AUTH.md](AUTH.md), [HANDBOOK.md §1.12](../HANDBOOK.md#112-безопасность).
 
 Альтернатива: **Caddy** с `basicauth` и автоматическим TLS — принцип тот же (proxy → `127.0.0.1:8090`, WebSocket upgrade).
 
@@ -426,15 +436,17 @@ sudo ./deploy/install.sh --skip-tests
 
 ### Чеклист перед production
 
-- [ ] Reverse proxy + HTTPS (§11) или доступ только по VPN
-- [ ] С хоста web-chat доступны LLM и SD (`curl` / health)
+Сверка с [HANDBOOK.md §7](../HANDBOOK.md#7-чеклист-перед-production). Для **личного LAN** достаточно пунктов без nginx/auth (см. [§0.5](../HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки)).
+
+- [ ] С хоста web-chat доступны LLM и SD (`curl` / `/health`)
 - [ ] `PUBLIC_BASE_URL` = URL в браузере
 - [ ] SD с `--api`
 - [ ] `.env` не в git; `chmod 750 data/`
-- [ ] `sudo ./deploy/install.sh` → `enabled` в systemd
-- [ ] Backup в cron
-- [ ] Ручной QA: TODO.md §14.3 и §20
+- [ ] `systemctl is-enabled web-chat` → `enabled`
+- [ ] Backup в cron ([DATABASE-BACKUP.md](DATABASE-BACKUP.md))
+- [ ] (Если не только вы) Reverse proxy + HTTPS (§11), `AUTH_ENABLED`, trusted internal
+- [ ] Ручной QA: HANDBOOK §20.6; инциденты — [docs/RUNBOOK.md](../docs/RUNBOOK.md)
 
 ---
 
-*См. также: [README.md](../README.md), [TODO.md](../TODO.md).*
+*См. также: [README.md](../README.md), [HANDBOOK.md](../HANDBOOK.md), [BACKLOG.md](../BACKLOG.md).*

@@ -3,7 +3,7 @@
 
 Вызывается только из pytest_sessionfinish — не во время тестов.
 
-Безопасность (см. tests/safety.py, TODO.md §14.4):
+Безопасность (см. tests/safety.py, HANDBOOK.md §14.4):
 - SQLite: только зарегистрированные tmp-файлы, никогда production DATABASE_URL;
 - Live HTTP: только WEB_CHAT_TEST_BASE_URL (или PUBLIC + ALLOW_PUBLIC_CLEANUP);
 - Live: только заголовки [pytest]; сироты — только при WEB_CHAT_TEST_CLEANUP_ORPHANS=1;

@@ -185,17 +185,22 @@ class MediaService:
         return await self.get_thumb_bytes(asset_id)
 
     async def get_llm_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
-        """Байты изображения для vision API (сжатие при превышении llm_vision_max_bytes)."""
+        """Байты изображения для vision API (кэш llm_data или сжатие)."""
         asset = await self._repo.get_by_id(asset_id)
         if asset is None:
             return None
+        if asset.llm_data:
+            return asset.llm_data, sniff_image_mime(asset.llm_data) or "image/jpeg"
         if len(asset.data) <= settings.llm_vision_max_bytes:
             return asset.data, asset.mime_type
-        return await asyncio.to_thread(
+        compressed = await asyncio.to_thread(
             compress_image_for_llm,
             asset.data,
             asset.mime_type,
         )
+        asset.llm_data = compressed[0]
+        await self._session.flush()
+        return compressed
 
     async def normalize_image_url(
         self,

@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     llm_model_load_wait_sec: int = 120
     llm_model_load_retry_sec: float = 2.0
 
-    # --- Доступ и лимиты (P0, см. TODO-2.md) ---
+    # --- Доступ и лимиты (P0, см. BACKLOG.md / HANDBOOK §21) ---
     # Пустой API_ACCESS_KEY — без проверки (доверенная LAN)
     api_access_key: str = ""
     # Через запятую: http://192.168.88.44:8090 — пусто = не проверять Origin

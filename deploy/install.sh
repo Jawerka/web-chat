@@ -329,7 +329,7 @@ print_next_steps() {
 
   4. Документация:
      ${INSTALL_ROOT}/deploy/DEPLOY.md
-     ${INSTALL_ROOT}/TODO.md
+     ${INSTALL_ROOT}/HANDBOOK.md
 
 ════════════════════════════════════════════════════════════
 EOF

@@ -1,7 +1,7 @@
 """
 ORM-модели SQLAlchemy 2.0 (async).
 
-Preset, Conversation, Message — см. раздел 1.6 TODO.md.
+Preset, Conversation, Message — см. раздел 1.6 HANDBOOK.md.
 """
 
 from __future__ import annotations
@@ -205,6 +205,11 @@ class MediaAsset(Base):
     mime_type: Mapped[str] = mapped_column(String(127), nullable=False)
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     thumb_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    llm_data: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+        comment="Кэш JPEG для GET /media/asset/{id}/llm (vision)",
+    )
     original_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

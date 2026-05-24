@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 import uuid
 from typing import Any
 
@@ -17,12 +19,14 @@ from app.db.repositories import (
     PromptMacroRepository,
 )
 from app.integrations.tool_definitions import tools_for_preset_slug
-from app.services.message_builder import history_to_llm_messages
 from app.services.macro_search_service import apply_macro_context_to_system
+from app.services.message_builder import history_to_llm_messages
 from app.services.prompt_macro_service import (
     alias_map_from_macros,
     parse_macro_context_mode,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def build_conversation_llm_context(
@@ -65,7 +69,18 @@ async def build_conversation_llm_context(
     )
 
     cap = max_messages or settings.max_history_messages
+    t0 = time.perf_counter()
     history = await msg_repo.list_for_llm(conversation_id, cap)
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    if elapsed_ms > 300:
+        logger.warning(
+            "Сборка истории LLM заняла %.0f ms (conversation=%s, messages=%d, cap=%d). "
+            "При лагах уменьшите MAX_HISTORY_MESSAGES.",
+            elapsed_ms,
+            conversation_id,
+            len(history),
+            cap,
+        )
 
     llm_messages: list[dict[str, Any]] = []
     if system_prompt:

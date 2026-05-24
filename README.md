@@ -2,7 +2,9 @@
 
 
 
-**Локальный веб-чат с AI-агентом**, генерацией изображений через Stable Diffusion WebUI и встроенным MCP. Один процесс FastAPI обслуживает интерфейс в браузере, REST/WebSocket API, оркестрацию LLM, вызов инструментов и раздачу медиа. Рассчитан на домашнюю или офисную сеть (LAN); при необходимости — доступ через WireGuard.
+**Локальный веб-чат с AI-агентом**, генерацией изображений через Stable Diffusion WebUI и встроенным MCP. Один процесс FastAPI обслуживает интерфейс в браузере, REST/WebSocket API, оркестрацию LLM, вызов инструментов и раздачу медиа. Рассчитан на **домашнюю или офисную LAN** (часто — **один оператор**); при необходимости — WireGuard.
+
+> **Для кого:** не публичный сервис. Нет смысла усложнять вход и «enterprise-безопасность» — приоритет у гладкого UX и стабильности генераций. Подробно: [HANDBOOK.md §0.5](HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
 
 <p align="center">
   <a href="docs/images/ui-overview.png" title="Открыть в полном размере">
@@ -56,7 +58,8 @@
 | **RAG** | Поиск по документам беседы (при `RAG_ENABLED`), UI-переключатель |
 | **Пользователи** | Login/password, изоляция бесед, admin API (опционально `AUTH_ENABLED`) |
 | **UX** | Тёмная/светлая тема, lightbox, черновики, resume после F5 |
-| **Операции** | systemd, Postgres/SQLite, backup БД, retention, WireGuard |
+| **Корзина** | Мягкое удаление бесед, восстановление, автоочистка (`TRASH_RETENTION_DAYS`) |
+| **Операции** | systemd, Postgres/SQLite, backup БД, retention, `/health`, WireGuard |
 
 ---
 
@@ -138,10 +141,10 @@ sudo systemctl status web-chat
 
 | Зона | Элементы |
 |------|----------|
-| **Слева** | Список бесед, поиск по истории, кнопка «Новая беседа», удаление (двойной клик) |
+| **Слева** | Вкладки «Беседы» / «Корзина», поиск, «Новая беседа», кнопка удаления в корзину (подтверждение повторным нажатием) |
 | **Центр** | Лента сообщений (user / assistant), статус генерации в пузыре ассистента |
 | **Снизу** | Полоса вложений, скрепка, `@`-макросы, поле ввода (1–10 строк), Send / Stop |
-| **Сверху** | Пресет беседы, шестерёнка (настройки), галерея, журнал |
+| **Сверху** | Пресет беседы, шестерёнка (настройки), галерея, журнал; дашборд — `/health` |
 
 На узком экране боковая панель открывается жестом / кнопкой «меню».
 
@@ -201,6 +204,13 @@ sudo systemctl status web-chat
 
 - **Экспорт** — `GET /api/conversations/{id}/export` → Markdown (кнопка в настройках).
 - **Поиск** — иконка лупы в сайдбаре; ищет по `content_text` во всех беседах.
+
+### Корзина
+
+- Удаление беседы (иконка «×» в списке) — **мягкое**: беседа попадает во вкладку **«Корзина»**.
+- **Восстановление** — кнопка в строке корзины; **окончательное удаление** — повторное нажатие «×» в корзине или «Очистить корзину».
+- Срок хранения в корзине — `TRASH_RETENTION_DAYS` (по умолчанию 3); после этого фоновая задача удаляет беседу из БД.
+- API: `GET /api/conversations/trash`, `POST …/restore`, `DELETE …/trash` (одна или все).
 
 ---
 
@@ -427,7 +437,10 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | GET | `/auth/me` | Текущий пользователь |
 | GET/POST | `/users` | Список / создание (admin) |
 | GET/POST | `/conversations` | Список / создание |
-| GET/PATCH/DELETE | `/conversations/{id}` | Беседа |
+| GET | `/conversations/trash` | Беседы в корзине |
+| DELETE | `/conversations/trash` | Очистить корзину |
+| POST | `/conversations/{id}/restore` | Восстановить из корзины |
+| GET/PATCH/DELETE | `/conversations/{id}` | Беседа (DELETE → в корзину) |
 | GET | `/conversations/{id}/messages` | История (`?limit=`, `?before=`) |
 | GET | `/conversations/{id}/llm-context` | Контекст для LLM из БД (после рестарта сервера) |
 | POST | `/conversations/{id}/turn` | Запуск хода из внешнего приложения (202, без WS) |
@@ -453,6 +466,7 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | `/` | Чат |
 | `/gallery` | Галерея |
 | `/macros` | Редактор макросов |
+| `/health` | Дашборд LLM/SD/диск/WS (HTML) |
 
 ---
 
@@ -486,7 +500,20 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | `LLM_VISION_MAX_BYTES` | 6 MiB | Сжатие для `/llm` URL |
 | `UPLOAD_RETENTION_DAYS` | 7 | Очистка uploads |
 | `GENERATED_RETENTION_DAYS` | 30 | Очистка generated |
+| `TRASH_RETENTION_DAYS` | 3 | Хранение бесед в корзине |
 | `DISPLAY_TIMEZONE` | Europe/Moscow | Время в UI (пусто = TZ браузера) |
+| `TRUSTED_INTERNAL_IPS` | — | Доп. IP для `/media/*` без cookie (LLM/SD) |
+| `TRUSTED_INTERNAL_ALLOW_LOOPBACK` | true | Разрешить 127.0.0.1 для внутренних запросов |
+
+### Trusted internal (LLM и SD без cookie)
+
+При `AUTH_ENABLED=true` браузер ходит с сессией, а **llama-server / SD WebUI** — без cookie. Для vision и скачивания init-картинок сервер разрешает запросы к `/media/*` с доверенных IP:
+
+- хосты из `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL` (и VPN);
+- `TRUSTED_INTERNAL_IPS` в `.env`;
+- адреса LLM/SD из настроек чата (localStorage), синхронизируются через `POST /api/config/trusted-internal/sync`.
+
+Подробнее: [deploy/AUTH.md](deploy/AUTH.md).
 
 ### SD по умолчанию
 
@@ -522,7 +549,7 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 ```bash
 source .venv/bin/activate
 ruff check app tests
-pytest -q          # 254 теста
+pytest -q          # см. BACKLOG.md §0 или HANDBOOK §21
 ```
 
 ### Структура репозитория
@@ -571,8 +598,8 @@ tests/
 
 | Файл | Содержание |
 |------|------------|
-| [TODO.md](TODO.md) | Архитектура, этапы 1–11, §21 выполненное, §22 план |
-| [audit.md](audit.md) | Сводный аудит + таблица статуса (исторические разборы ниже) |
+| [HANDBOOK.md](HANDBOOK.md) | Архитектура, этапы 1–11, журнал, §21–22 |
+| [BACKLOG.md](BACKLOG.md) | План доработок и аудита |
 | [SECURITY.md](SECURITY.md) | Auth, rate limit, proxy |
 | [deploy/AUTH.md](deploy/AUTH.md) | Login, сессии, multi-user |
 | [deploy/POSTGRES.md](deploy/POSTGRES.md) | PostgreSQL, ETL |
@@ -580,14 +607,15 @@ tests/
 | [deploy/DATABASE-BACKUP.md](deploy/DATABASE-BACKUP.md) | Backup/restore БД |
 | [Sys-prompt.md](Sys-prompt.md) | Эталонные системные промпты |
 | [deploy/DEPLOY.md](deploy/DEPLOY.md) | Production, systemd |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | LLM/SD down, диск, зависшая генерация |
 | [docs/images/](docs/images/) | Скриншоты UI |
 
-При изменении системных промптов: сначала **Sys-prompt.md**, затем `app/db/seed.py` и миграция БД (см. TODO.md §6).
+При изменении системных промптов: сначала **Sys-prompt.md**, затем `app/db/seed.py` и миграция БД (см. HANDBOOK.md §6).
 
 ---
 
 ## Статус
 
-- Этапы **1–11** и стабилизация **P0–P2 (пилот)** реализованы.
-- **254** автотеста (`pytest -q`).
-- Для production: включите `AUTH_ENABLED`, `AUTH_SECRET`, reverse proxy; см. [SECURITY.md](SECURITY.md). Не выставляйте порт в открытый интернет без HTTPS и защиты.
+- Этапы **1–11** и стабилизация **P0–P2 (пилот)** реализованы; корзина бесед и trusted internal — в проде.
+- Автотесты: `pytest -q` → **283 passed** (2026-05-24).
+- Для домашнего LAN auth опционален; для общего доступа в сети — `AUTH_ENABLED`, `AUTH_SECRET`, reverse proxy; см. [SECURITY.md](SECURITY.md).

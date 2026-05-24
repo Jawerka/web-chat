@@ -27,7 +27,7 @@ from app.db.repositories import (
     PresetRepository,
     PromptMacroRepository,
 )
-from app.integrations.llm_client import LLMClient
+from app.integrations.llm_client import LLMClient, LLMCompletion
 from app.integrations.tool_definitions import tools_for_preset_slug
 from app.integrations.media_utils import asset_llm_media_url, rewrite_image_url_for_llm
 from app.integrations.tool_executor import ToolExecutor, ToolResult
@@ -173,6 +173,14 @@ class AgentOrchestrator:
             "Ниже все изображения, созданные на этом этапе."
         )
 
+    @staticmethod
+    def _turn_reasoning(
+        stream_draft: AssistantStreamDraft,
+        completion: LLMCompletion,
+    ) -> str | None:
+        text = (stream_draft.reasoning or completion.reasoning or "").strip()
+        return text or None
+
     async def _persist_assistant_message(
         self,
         *,
@@ -186,19 +194,23 @@ class AgentOrchestrator:
         tool_calls_meta: list[dict[str, Any]],
         overflow_note: str | None = None,
         existing_message: Message | None = None,
+        rag_sources: list[dict[str, Any]] | None = None,
+        reasoning: str | None = None,
     ) -> Message:
         body = content_from_llm or ""
         if overflow_note:
             body = f"{overflow_note}\n\n{body}".strip() if body else overflow_note
         text = self._finalize_assistant_text(body, media_url_rewrites)
-        content_json = patch_completed(
-            {
-                "images": all_image_urls,
-                "image_asset_ids": all_image_asset_ids,
-                "tool_calls": tool_calls_meta,
-                "reasoning": None,
-            },
-        )
+        reasoning_text = (reasoning or "").strip() or None
+        payload: dict[str, Any] = {
+            "images": all_image_urls,
+            "image_asset_ids": all_image_asset_ids,
+            "tool_calls": tool_calls_meta,
+            "reasoning": reasoning_text,
+        }
+        if rag_sources:
+            payload["rag_sources"] = rag_sources
+        content_json = patch_completed(payload)
         if existing_message is not None:
             await msg_repo.update_content(
                 existing_message,
@@ -263,6 +275,8 @@ class AgentOrchestrator:
         llm_model: str | None = None,
         existing_message: Message | None = None,
         overflow_note: str | None = None,
+        rag_sources: list[dict[str, Any]] | None = None,
+        reasoning: str | None = None,
     ) -> AgentTurnResult | None:
         """Сохранить частичный ответ, если лимит tools исчерпан, но есть результат."""
         if not all_image_urls and not tool_calls_meta:
@@ -278,6 +292,8 @@ class AgentOrchestrator:
             tool_calls_meta=tool_calls_meta,
             overflow_note=overflow_note,
             existing_message=existing_message,
+            rag_sources=rag_sources,
+            reasoning=reasoning,
         )
         await self._emit_turn_done(
             session,
@@ -314,6 +330,8 @@ class AgentOrchestrator:
         user_message: Message,
         tool_calls_meta: list[dict[str, Any]],
         llm_model: str | None,
+        rag_sources: list[dict[str, Any]] | None = None,
+        reasoning: str | None = None,
     ) -> AgentTurnResult | None:
         """Выполнить tool_calls; при anti-loop — только лог и мягкое завершение хода."""
         for tc in completion.tool_calls:
@@ -357,6 +375,8 @@ class AgentOrchestrator:
                         llm_model=llm_model,
                         existing_message=stream_draft.message,
                         overflow_note=None,
+                        rag_sources=rag_sources,
+                        reasoning=reasoning,
                     )
                     if partial is not None:
                         return partial
@@ -529,7 +549,7 @@ class AgentOrchestrator:
 
         from app.services.document_rag_service import append_document_rag_to_system
 
-        system_prompt = await append_document_rag_to_system(
+        system_prompt, rag_hits = await append_document_rag_to_system(
             session,
             conversation_id,
             user_text,
@@ -579,6 +599,9 @@ class AgentOrchestrator:
             async def _on_delta(chunk: str) -> None:
                 await stream_draft.on_delta(chunk)
 
+            async def _on_reasoning(chunk: str) -> None:
+                await stream_draft.on_reasoning_delta(chunk)
+
             log_event(
                 logger,
                 "llm_request",
@@ -591,6 +614,7 @@ class AgentOrchestrator:
             completion = await self._llm.complete_with_stream(
                 llm_messages,
                 on_text_delta=_on_delta,
+                on_reasoning_delta=_on_reasoning,
                 cancel_event=cancel_event,
                 tools=preset_tools,
                 model=llm_model,
@@ -638,6 +662,8 @@ class AgentOrchestrator:
                     user_message=user_message,
                     tool_calls_meta=tool_calls_meta,
                     llm_model=llm_model,
+                    rag_sources=rag_hits or None,
+                    reasoning=self._turn_reasoning(stream_draft, completion),
                 )
                 if anti_loop_done is not None:
                     return anti_loop_done
@@ -659,6 +685,8 @@ class AgentOrchestrator:
                 media_url_rewrites=media_url_rewrites,
                 tool_calls_meta=tool_calls_meta,
                 existing_message=stream_draft.message,
+                rag_sources=rag_hits or None,
+                reasoning=self._turn_reasoning(stream_draft, completion),
             )
             await self._emit_turn_done(
                 session,
@@ -689,6 +717,8 @@ class AgentOrchestrator:
             llm_model=llm_model,
             existing_message=stream_draft.message,
             overflow_note=self._tool_loop_overflow_note(),
+            rag_sources=rag_hits or None,
+            reasoning=self._turn_reasoning(stream_draft, completion),
         )
         if partial is not None:
             return partial
@@ -781,7 +811,7 @@ class AgentOrchestrator:
 
         from app.services.document_rag_service import append_document_rag_to_system
 
-        system_prompt = await append_document_rag_to_system(
+        system_prompt, rag_hits = await append_document_rag_to_system(
             session,
             conversation_id,
             regen_query,
@@ -859,6 +889,9 @@ class AgentOrchestrator:
             async def _on_delta(chunk: str) -> None:
                 await stream_draft.on_delta(chunk)
 
+            async def _on_reasoning(chunk: str) -> None:
+                await stream_draft.on_reasoning_delta(chunk)
+
             log_event(
                 logger,
                 "llm_request",
@@ -871,6 +904,7 @@ class AgentOrchestrator:
             completion = await self._llm.complete_with_stream(
                 llm_messages,
                 on_text_delta=_on_delta,
+                on_reasoning_delta=_on_reasoning,
                 cancel_event=cancel_event,
                 tools=preset_tools,
                 model=llm_model,
@@ -918,6 +952,8 @@ class AgentOrchestrator:
                     user_message=user_message,
                     tool_calls_meta=tool_calls_meta,
                     llm_model=llm_model,
+                    rag_sources=rag_hits or None,
+                    reasoning=self._turn_reasoning(stream_draft, completion),
                 )
                 if anti_loop_done is not None:
                     return anti_loop_done
@@ -939,6 +975,8 @@ class AgentOrchestrator:
                 media_url_rewrites=media_url_rewrites,
                 tool_calls_meta=tool_calls_meta,
                 existing_message=stream_draft.message,
+                rag_sources=rag_hits or None,
+                reasoning=self._turn_reasoning(stream_draft, completion),
             )
             await self._emit_turn_done(
                 session,
@@ -969,6 +1007,8 @@ class AgentOrchestrator:
             llm_model=llm_model,
             existing_message=stream_draft.message,
             overflow_note=self._tool_loop_overflow_note(),
+            rag_sources=rag_hits or None,
+            reasoning=self._turn_reasoning(stream_draft, completion),
         )
         if partial is not None:
             return partial

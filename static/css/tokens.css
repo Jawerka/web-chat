@@ -24,7 +24,9 @@
   --color-accent-cyan: #06b6d4;
   --color-accent-violet: #8b5cf6;
 
-  /* Radius scale */
+  /* Radius scale (см. HANDBOOK §10.1) */
+  --radius-xs: 4px;   /* хвост пузыря сообщения */
+  --radius-2xs: 6px;  /* inline code, мелкие элементы */
   --radius-sm: 10px;
   --radius-md: 12px;
   --radius-lg: 18px;

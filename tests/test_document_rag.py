@@ -111,3 +111,73 @@ async def test_index_and_search_documents(
     index_res = await client.post(f"/api/attachments/{att_id}/index-rag")
     assert index_res.status_code == 200
     assert index_res.json()["chunks"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_append_document_rag_returns_hits(
+    client: AsyncClient,
+    rag_settings: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import session as db_session
+    from app.db.repositories import AttachmentRepository
+    from app.services.document_rag_service import (
+        append_document_rag_to_system,
+        index_attachment_rag,
+    )
+    from tests.helpers import api_create_conversation
+
+    conv = await api_create_conversation(client, "[pytest] rag hits persist")
+    conv_id = uuid.UUID(str(conv["id"]))
+    att_id = uuid.uuid4()
+
+    async with db_session.async_session_factory() as session:
+        repo = AttachmentRepository(session)
+        await repo.create(
+            attachment_id=att_id,
+            original_name="brief.txt",
+            mime_type="text/plain",
+            size_bytes=50,
+            storage_path="uploads/test/brief.txt",
+            conversation_id=conv_id,
+        )
+        att = await repo.get_by_id(att_id)
+        assert att is not None
+        await repo.update_extracted_text(
+            att,
+            "Quantum computing overview with superposition and entanglement.",
+        )
+        await session.commit()
+
+    async def fake_embed(self, text: str, *, model: str | None = None) -> list[float] | None:
+        return [1.0, 0.0, 0.0]
+
+    from app.integrations.embedding_client import EmbeddingClient
+
+    monkeypatch.setattr(EmbeddingClient, "embed_text", fake_embed)
+
+    async with db_session.async_session_factory() as session:
+        await index_attachment_rag(session, att_id)
+        await session.commit()
+        system, hits = await append_document_rag_to_system(
+            session,
+            conv_id,
+            "quantum computing",
+            "You are helpful.",
+            client_enabled=True,
+        )
+        assert "Quantum" in system or "quantum" in system.lower()
+        assert hits
+        assert hits[0]["file_name"] == "brief.txt"
+
+    async with db_session.async_session_factory() as session:
+        system_short, hits_short = await append_document_rag_to_system(
+            session,
+            conv_id,
+            "ab",
+            "Base.",
+            client_enabled=True,
+        )
+        assert system_short == "Base."
+        assert hits_short == []
+

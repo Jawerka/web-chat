@@ -1,5 +1,7 @@
 # Аутентификация и защита данных (P2.2)
 
+> **Контекст:** для личного LAN auth **не обязателен** (`AUTH_ENABLED=false` на dev). Включайте, если к хосту имеют доступ другие люди. Философия проекта — [HANDBOOK.md §0.5](../HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
+
 ## Включение
 
 В `.env`:
@@ -47,7 +49,7 @@ python -m app.scripts.assign_conversation_owners --user admin
 Автоматически в доверенные IP попадают хосты из:
 
 - `.env`: `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL`, `PUBLIC_BASE_URL_VPN`
-- **Настройки чата** (адреса LLM/SD в localStorage): при сохранении и при первом WS-сообщении
+- **Настройки чата** (адреса LLM/SD в localStorage): `POST /api/config/trusted-internal/sync` при сохранении и при первом WS-сообщении
 
 Дополнительно в `.env`:
 

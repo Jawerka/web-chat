@@ -1,5 +1,5 @@
 """
-Начальные данные пресетов (раздел 16 TODO.md).
+Начальные данные пресетов (раздел 16 HANDBOOK.md).
 """
 
 from __future__ import annotations

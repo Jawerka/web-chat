@@ -1,56 +1,52 @@
-# Безопасность web-chat
+# Безопасность web-chat (домашний / LAN)
 
-Проект рассчитан на **доверенную LAN / VPN** (WireGuard, Tailscale). Не выставляйте порт `8090` в открытый интернет без reverse proxy, HTTPS и аутентификации.
+> **Контекст проекта:** личный инструмент для **одного оператора** в доверенной LAN, без публичного интернета и без хранения критичных секретов. Приоритеты и что **не** усложняем — [HANDBOOK.md §0.5](HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
 
-## Рекомендуемый контур
+## Минимум для домашнего стенда
 
-1. **Reverse proxy** (nginx, Caddy, Traefik): HTTPS, Basic Auth или OAuth2-proxy.  
-   Шаблон nginx: [`deploy/nginx-web-chat.conf.template`](deploy/nginx-web-chat.conf.template), раздел [DEPLOY.md §11](deploy/DEPLOY.md#11-reverse-proxy-nginx).
-2. **API key в приложении** (опционально): переменная `API_ACCESS_KEY` в `.env`.
-   - REST: заголовок `X-API-Key` или `Authorization: Bearer <key>`.
-   - WebSocket: тот же заголовок или query `?api_key=<key>` до upgrade.
-3. **Origin для WebSocket**: `TRUSTED_WS_ORIGINS` — список через запятую, например  
-   `http://192.168.88.44:8090,http://10.99.99.9:8090`.
-4. **Доверенный proxy**: `TRUSTED_PROXY_IPS` — IP nginx/Caddy, если используете `X-Forwarded-For`.
-5. **Доверенные внутренние сервисы**: хосты из `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL` (+ VPN) автоматически резолвятся в IP; дополнительно `TRUSTED_INTERNAL_IPS`. Адреса из **настроек чата** (LLM/SD) регистрируются при сохранении и в WebSocket. С этих IP доступны без cookie: `/media/asset/*`, `/api/health/logs`. По умолчанию разрешён loopback (`TRUSTED_INTERNAL_ALLOW_LOOPBACK=true`).
+1. Сервис **не** пробрасывать в открытый интернет без необходимости.
+2. `PUBLIC_BASE_URL` = URL в браузере (vision и картинки в чате).
+3. `.env` не в git; права на `data/` ограничены.
+4. Периодический backup: `scripts/backup-all.sh` — [deploy/DATABASE-BACKUP.md](deploy/DATABASE-BACKUP.md).
+5. Проверка стенда: `/health`, `GET /api/health`.
 
-Пустые `API_ACCESS_KEY` и `TRUSTED_WS_ORIGINS` отключают соответствующие проверки (режим разработки в LAN).
+На dev можно отключить лишнее: `AUTH_ENABLED=false`, пустой `API_ACCESS_KEY`, мягкий rate limit.
+
+## Если в сети не только вы
+
+Тогда имеет смысл усилить контур (по желанию, не обязательно для «только я»):
+
+| Мера | Назначение |
+|------|------------|
+| [deploy/AUTH.md](deploy/AUTH.md) | Login/password, изоляция бесед |
+| Reverse proxy + HTTPS | Шаблон [nginx](deploy/nginx-web-chat.conf.template), [DEPLOY.md §11](deploy/DEPLOY.md) |
+| `API_ACCESS_KEY` | REST/WS для внешних клиентов |
+| `TRUSTED_WS_ORIGINS` | CSWSH при доступе с нескольких origin |
+| `TRUSTED_PROXY_IPS` | Корректный client IP за nginx |
+
+## Trusted internal (LLM / SD)
+
+Браузер ходит с cookie (при auth), **llama-server и SD** — без cookie. С доверенных IP разрешены `GET /media/asset/*`, `GET /api/health/logs`:
+
+- хосты из `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL` (+ VPN);
+- `TRUSTED_INTERNAL_IPS` в `.env`;
+- адреса из настроек чата → `POST /api/config/trusted-internal/sync`.
+
+Подробнее: [deploy/AUTH.md](deploy/AUTH.md).
 
 ## Rate limiting
 
-In-memory лимит на процесс (см. `.env`):
+In-memory на процесс (`.env`: `RATE_LIMIT_*`). Ограничивает upload, создание бесед, WS `user_message`. Для одного пользователя можно ослабить или отключить (`RATE_LIMIT_ENABLED=false`).
 
-- `RATE_LIMIT_ENABLED=true`
-- `RATE_LIMIT_REQUESTS=60` — запросов в окне
-- `RATE_LIMIT_WINDOW_SEC=60`
+## Что сознательно не в фокусе
 
-Ограничиваются: `POST /api/upload`, `POST /api/conversations`, `DELETE /api/gallery/all`, сообщения WebSocket `user_message`.
+- Prompt-injection hardening, санитизация display_name для LLM.
+- DDoS-защита, Redis-сессии, горизонтальное масштабирование.
 
-Ответ `429` с `code: rate_limit_error`.
+См. [BACKLOG.md](BACKLOG.md) — только то, что реально нужно для UX и стенда.
 
-## PUBLIC_BASE_URL
+## Ссылки
 
-- Должен совпадать с URL в браузере пользователя.
-- Валидатор отклоняет loopback/metadata IP (кроме `localhost` для dev).
-- LLM vision всегда использует LAN-base (`for_llm=True`), не Host из запроса.
-
-## Чеклист перед выходом за LAN
-
-- [ ] Задан `API_ACCESS_KEY` или Basic Auth на proxy
-- [ ] Задан `TRUSTED_WS_ORIGINS`
-- [ ] HTTPS на proxy
-- [ ] `.env` не в git
-- [ ] Firewall: только подсеть VPN/LAN
-- [ ] Регулярный backup: `deploy/backup-data.sh`
-
-## Вход login/password (P2.2)
-
-При `AUTH_ENABLED=true` (рекомендуется в production):
-
-- Сессия HttpOnly cookie, bcrypt, `AUTH_SECRET` ≥ 32 символов.
-- Изоляция бесед по `owner_user_id`.
-- Документация: [deploy/AUTH.md](deploy/AUTH.md).
-
-Дополнительно к proxy/API key: cookie-сессия для браузера, API key — для внешних клиентов.
-
-Подробнее: [TODO.md §7](TODO.md#7-чеклист-перед-production), выполненное — [§21](TODO.md#21-стабилизация-и-платформа-v2-2026-05-23), план — [§22](TODO.md#22-планируемые-действия).
+- Чеклист стенда: [HANDBOOK.md §7](HANDBOOK.md#7-чеклист-перед-production)
+- Реализованная платформа (auth, rate limit, SSRF): [HANDBOOK.md §21](HANDBOOK.md#21-стабилизация-и-платформа-v2-2026-05-23)
+- План работ: [BACKLOG.md](BACKLOG.md)

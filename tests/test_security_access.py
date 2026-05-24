@@ -68,9 +68,31 @@ async def test_rate_limit_on_conversation_create(
     assert body.get("code") == "rate_limit_error"
 
 
+@pytest.fixture
+def isolated_generated_gallery(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """Пустая data/generated для изоляции purge от файлов на диске хоста."""
+    import app.services.gallery_service as gallery_mod
+    from app.integrations import media_utils
+
+    gen = tmp_path / "generated"
+    thumbs = gen / "thumbs"
+    gen.mkdir()
+    thumbs.mkdir()
+    monkeypatch.setattr(media_utils, "GENERATED_ROOT", gen)
+    monkeypatch.setattr(media_utils, "GENERATED_THUMB_ROOT", thumbs)
+    monkeypatch.setattr(gallery_mod, "GENERATED_ROOT", gen)
+    monkeypatch.setattr(gallery_mod, "GENERATED_THUMB_ROOT", thumbs)
+    return gen
+
+
 @pytest.mark.asyncio
-async def test_purge_all_gallery_empty(client: AsyncClient) -> None:
+async def test_purge_all_gallery_empty(
+    client: AsyncClient,
+    isolated_generated_gallery,
+) -> None:
     r = await client.delete("/api/gallery/all")
     assert r.status_code == 200
     data = r.json()
     assert data["total"] == 0
+    assert data["deleted_db"] == 0
+    assert data["deleted_disk"] == 0

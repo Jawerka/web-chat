@@ -78,4 +78,16 @@ async def test_serve_asset_llm_endpoint(client) -> None:
     resp = await client.get(f"/media/asset/{asset_id}/llm")
     assert resp.status_code == 200
     assert len(resp.content) <= settings.llm_vision_max_bytes
+
+    async with db_session.async_session_factory() as session:
+        from app.db.repositories import MediaAssetRepository
+
+        reloaded = await MediaAssetRepository(session).get_by_id(asset_id)
+        assert reloaded is not None
+        assert reloaded.llm_data is not None
+        assert len(reloaded.llm_data) <= settings.llm_vision_max_bytes
+
+    resp2 = await client.get(f"/media/asset/{asset_id}/llm")
+    assert resp2.status_code == 200
+    assert resp2.content == resp.content
     assert resp.headers["content-type"].startswith("image/")

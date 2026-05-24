@@ -32,28 +32,6 @@ const CHAT_PRESET_SHORT_LABELS = {
   document_analysis: 'Docs',
 };
 
-/** Подписи по этапу (согласованы с app/services/user_progress.py). */
-const PROGRESS_STAGE_LABELS = {
-  submit: 'Сообщение принято',
-  llm_thinking: 'Размышляю…',
-  llm_typing: 'Печатаю ответ…',
-  llm_tools: 'Выбираю действие…',
-  sd_render: 'Генерация изображения…',
-  sd_upscale: 'Увеличение изображения…',
-  doc_read: 'Чтение документа…',
-  gallery: 'Поиск в галерее…',
-  save_media: 'Сохраняю результат…',
-};
-
-/** Человекочитаемые подписи MCP tools (не показывать snake_case в UI). */
-const TOOL_USER_LABELS = {
-  generate_image: 'Генерация изображения…',
-  img2img: 'Перерисовка изображения…',
-  upscale_images: 'Увеличение изображения…',
-  extract_text: 'Чтение документа…',
-  get_gallery: 'Поиск в галерее…',
-};
-
 /** Состояния UI чата (доминирующее для индикаторов). */
 const CHAT_UI_STATE = {
   CONNECTING: 'connecting',
@@ -170,7 +148,7 @@ const MSG_ICONS = {
   delete: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
 };
 
-/** Действия над сообщением (pin/quote/retry — отложены, см. TODO-2 UX-2). */
+/** Действия над сообщением (pin/quote/retry — отложены, см. BACKLOG.md фаза 3). */
 const MESSAGE_ACTION_DEFS = [
   { key: 'copy', label: 'Копировать', title: 'Скопировать текст', icon: MSG_ICONS.copy },
   { key: 'edit', label: 'Редактировать', title: 'Редактировать', icon: MSG_ICONS.edit },
@@ -287,6 +265,7 @@ class ChatSocket {
       case 'assistant_draft': h.onAssistantDraft?.(msg); break;
       case 'ack': h.onAck?.(msg); break;
       case 'text_delta': h.onTextDelta?.(msg.content || ''); break;
+      case 'reasoning_delta': h.onReasoningDelta?.(msg.content || ''); break;
       case 'image': h.onImages?.(msg.urls || []); break;
       case 'tool_start': h.onToolStart?.(msg.name, msg.arguments); break;
       case 'tool_done': h.onToolDone?.(msg.name, msg.summary); break;
@@ -314,6 +293,7 @@ class ChatApp {
     this.socket = null;
     this.streaming = false;
     this.streamText = '';
+    this.streamReasoningText = '';
     this.streamEl = null;
     this.streamImagesEl = null;
     this.config = { max_files_per_message: 10 };
@@ -1000,11 +980,13 @@ class ChatApp {
 
   /** Подпись этапа/инструмента для пузыря ассистента (без сырых имён tools). */
   _resolveProgressLabel(text, opts = {}) {
-    if (opts.tool && TOOL_USER_LABELS[opts.tool]) {
-      return TOOL_USER_LABELS[opts.tool];
+    const toolLabels = window.TOOL_USER_LABELS || {};
+    const stageLabels = window.PROGRESS_STAGE_LABELS || {};
+    if (opts.tool && toolLabels[opts.tool]) {
+      return toolLabels[opts.tool];
     }
-    if (opts.stage && PROGRESS_STAGE_LABELS[opts.stage]) {
-      return PROGRESS_STAGE_LABELS[opts.stage];
+    if (opts.stage && stageLabels[opts.stage]) {
+      return stageLabels[opts.stage];
     }
     const raw = (text || '').trim();
     if (raw && !/^[a-z][a-z0-9_]*$/i.test(raw)) {
@@ -1834,12 +1816,16 @@ class ChatApp {
   _messageContentFingerprint(m) {
     const cj = m.content_json || {};
     const imgN = (cj.images || []).length + (cj.image_asset_ids || []).length;
+    const ragN = Array.isArray(cj.rag_sources) ? cj.rag_sources.length : 0;
+    const reasoningLen = typeof cj.reasoning === 'string' ? cj.reasoning.length : 0;
     return [
       m.role,
       cj.streaming ? '1' : '0',
       (m.content_text || '').length,
       imgN,
       cj.turn_phase || '',
+      ragN,
+      reasoningLen,
     ].join(':');
   }
 
@@ -2699,14 +2685,16 @@ class ChatApp {
     if (m.role === 'user') {
       return this._buildUserRow(m.content_text || '', m.id, urls);
     }
+    const ragHits = m.content_json?.rag_sources;
+    const reasoning = m.content_json?.reasoning;
     if (m.role === 'assistant' && m.content_json?.streaming) {
       if (activeStreamingId && m.id !== activeStreamingId) {
-        return this._buildAssistantRow(m.content_text || '', urls, m.id);
+        return this._buildAssistantRow(m.content_text || '', urls, m.id, ragHits, reasoning);
       }
       return this._buildAssistantDraftRow(m, urls);
     }
     if (m.role === 'assistant') {
-      return this._buildAssistantRow(m.content_text || '', urls, m.id);
+      return this._buildAssistantRow(m.content_text || '', urls, m.id, ragHits, reasoning);
     }
     const fallback = document.createElement('div');
     fallback.className = 'message-row';
@@ -2732,11 +2720,19 @@ class ChatApp {
     return el;
   }
 
-  _fillAssistantBubble(el, text, imageUrls) {
+  _fillAssistantBubble(el, text, imageUrls, reasoning = null) {
     const displayText = stripMarkdownImages(text || '');
     const bubble = el.querySelector('.message-bubble');
     const grid = el.querySelector('.message-images');
     el.dataset.rawContent = text || '';
+    const reasoningBlock = this._buildMessageReasoning(reasoning);
+    const existingReasoning = el.querySelector('.message-reasoning');
+    if (reasoningBlock) {
+      if (existingReasoning) existingReasoning.replaceWith(reasoningBlock);
+      else el.insertBefore(reasoningBlock, el.firstChild);
+    } else if (existingReasoning) {
+      existingReasoning.remove();
+    }
     if (displayText && bubble) {
       bubble.innerHTML = formatMarkdown(displayText);
       el.classList.add('has-content');
@@ -2760,7 +2756,7 @@ class ChatApp {
     const el = document.createElement('div');
     el.className = 'chat-message assistant';
     this._ensureAssistantStreamShell(el);
-    this._fillAssistantBubble(el, m.content_text || '', urls);
+    this._fillAssistantBubble(el, m.content_text || '', urls, m.content_json?.reasoning);
     const row = this._wrapMessage('assistant', el, m.id);
     row.dataset.streamingDraft = 'true';
     return row;
@@ -2816,6 +2812,7 @@ class ChatApp {
       },
       onError: () => this.log?.error('ws', 'Ошибка WebSocket'),
       onTextDelta: (chunk) => this.onTextDelta(chunk),
+      onReasoningDelta: (chunk) => this.onReasoningDelta(chunk),
       onImages: (urls) => this.onImages(urls),
       onToolStart: (name) => this.onToolStart(name),
       onToolDone: () => this.onToolDone(),
@@ -2915,7 +2912,6 @@ class ChatApp {
     }
 
     this._generationHadImages = false;
-
     if (this.editingMessageId) {
       await this._submitEdit(text);
       return;
@@ -3060,6 +3056,7 @@ class ChatApp {
     this.streaming = true;
     this._setUiActivityStage('llm_thinking');
     this.streamText = '';
+    this.streamReasoningText = '';
     this._syncComposerSendState();
 
     const el = document.createElement('div');
@@ -3116,6 +3113,41 @@ class ChatApp {
     this.streamEl.classList.remove('waiting');
     this._renderStreamTextToBubble((this.streamText || '') + chunk);
     this._scheduleScrollToBottom();
+  }
+
+  onReasoningDelta(chunk) {
+    if (!chunk || !this._ensureStreamTarget()) return;
+    this._setUiActivityStage('llm_thinking');
+    this.streamReasoningText = (this.streamReasoningText || '') + chunk;
+    this._renderStreamReasoning(this.streamReasoningText);
+    this._scheduleScrollToBottom();
+  }
+
+  _ensureStreamReasoningShell() {
+    if (!this.streamEl) return null;
+    let details = this.streamEl.querySelector('.message-reasoning');
+    if (!details) {
+      details = document.createElement('details');
+      details.className = 'message-reasoning';
+      details.open = true;
+      const summary = document.createElement('summary');
+      summary.className = 'message-reasoning-summary';
+      summary.textContent = 'Размышления модели';
+      const body = document.createElement('pre');
+      body.className = 'message-reasoning-body';
+      details.append(summary, body);
+      this.streamEl.insertBefore(details, this.streamEl.firstChild);
+    }
+    return details.querySelector('.message-reasoning-body');
+  }
+
+  _renderStreamReasoning(text) {
+    const pre = this._ensureStreamReasoningShell();
+    if (!pre) return;
+    pre.textContent = text || '';
+    const details = pre.closest('.message-reasoning');
+    if (details && text) details.open = true;
+    if (text) this.streamEl?.classList.add('has-reasoning');
   }
 
   onImages(urls) {
@@ -3459,10 +3491,7 @@ class ChatApp {
 
     const urls = imageUrlsFromMessage(target);
     if (urls.length && this.streamImagesEl) {
-      this._setGridImages(this.streamImagesEl, urls);
-      if (this.streamImagesEl.children.length) {
-        this.streamEl.classList.add('has-images');
-      }
+      this._syncStreamImagesFromServer(urls);
     }
 
     if (target.id && this.streamRow) {
@@ -3526,6 +3555,7 @@ class ChatApp {
     this._regenerating = false;
 
     const afterReload = () => {
+      void this._attachRagSourcesAfterTurn(assistantMessageId);
       this.endStreaming();
       if (conversationTitle && this.currentConv) {
         this.currentConv.title = conversationTitle;
@@ -3583,8 +3613,25 @@ class ChatApp {
       }
       const urls = imageUrlsFromMessage(target);
       if (urls.length && this.streamImagesEl) {
-        this._setGridImages(this.streamImagesEl, urls);
-        this.streamEl?.classList.add('has-images');
+        this._syncStreamImagesFromServer(urls);
+      }
+      const ragHits = target.content_json?.rag_sources;
+      if (ragHits?.length) {
+        const row = this._findRow(messageId);
+        const msgEl = row?.querySelector('.chat-message.assistant');
+        if (msgEl && !msgEl.querySelector('.message-rag-sources')) {
+          const block = this._buildMessageRagSources(ragHits);
+          if (block) msgEl.appendChild(block);
+        }
+      }
+      const reasoning = target.content_json?.reasoning;
+      if (reasoning?.trim()) {
+        const row = this._findRow(messageId);
+        const msgEl = row?.querySelector('.chat-message.assistant');
+        if (msgEl && !msgEl.querySelector('.message-reasoning')) {
+          const block = this._buildMessageReasoning(reasoning);
+          if (block) msgEl.insertBefore(block, msgEl.firstChild);
+        }
       }
     } catch (err) {
       this.log?.warn('chat', `sync final text: ${err.message}`);
@@ -3689,6 +3736,7 @@ class ChatApp {
       this.streamEl = null;
       this.streamRow = null;
       this.streamImagesEl = null;
+      this.streamReasoningText = '';
     }
     this._settleAllStreamRows();
   }
@@ -3811,12 +3859,14 @@ class ChatApp {
     this._scheduleScrollToBottom(true);
   }
 
-  _buildAssistantRow(text, imageUrls, messageId = null) {
+  _buildAssistantRow(text, imageUrls, messageId = null, ragHits = null, reasoning = null) {
     const el = document.createElement('div');
     el.className = 'chat-message assistant';
     el.dataset.rawContent = text || '';
     const displayText = stripMarkdownImages(text);
     const urls = [...new Set(imageUrls.map(mediaFullUrl).filter(Boolean))];
+    const reasoningBlock = this._buildMessageReasoning(reasoning);
+    if (reasoningBlock) el.appendChild(reasoningBlock);
     if (displayText) {
       const bubble = document.createElement('div');
       bubble.className = 'message-bubble';
@@ -3829,8 +3879,77 @@ class ChatApp {
       for (const url of urls) grid.appendChild(this._createImage(url, { scrollOnLoad: false }));
       el.appendChild(grid);
     }
+    const ragBlock = this._buildMessageRagSources(ragHits);
+    if (ragBlock) el.appendChild(ragBlock);
     this._bindImageClicks(el);
     return this._wrapMessage('assistant', el, messageId);
+  }
+
+  _buildMessageReasoning(reasoning) {
+    const raw = (reasoning || '').trim();
+    if (!raw) return null;
+    const details = document.createElement('details');
+    details.className = 'message-reasoning';
+    const summary = document.createElement('summary');
+    summary.className = 'message-reasoning-summary';
+    summary.textContent = 'Размышления модели';
+    details.appendChild(summary);
+    const body = document.createElement('pre');
+    body.className = 'message-reasoning-body';
+    body.textContent = raw;
+    details.appendChild(body);
+    return details;
+  }
+
+  _buildMessageRagSources(hits) {
+    if (!hits?.length) return null;
+    const details = document.createElement('details');
+    details.className = 'message-rag-sources';
+    const summary = document.createElement('summary');
+    summary.className = 'message-rag-sources-summary';
+    summary.textContent = `Ответ основан на документах (${hits.length})`;
+    details.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'message-rag-sources-list';
+    for (const hit of hits) {
+      const item = document.createElement('div');
+      item.className = 'message-rag-sources-item';
+      const file = document.createElement('div');
+      file.className = 'message-rag-sources-file';
+      const score = typeof hit.score === 'number' ? ` · ${(hit.score * 100).toFixed(0)}%` : '';
+      file.textContent = `${hit.file_name || 'Документ'} #${hit.chunk_index ?? 0}${score}`;
+      const snippet = document.createElement('div');
+      snippet.className = 'message-rag-sources-snippet';
+      snippet.textContent = hit.snippet || '';
+      item.append(file, snippet);
+      list.appendChild(item);
+    }
+    details.appendChild(list);
+    return details;
+  }
+
+  async _attachRagSourcesAfterTurn(assistantMessageId) {
+    if (!assistantMessageId || !this.currentConvId) return;
+
+    const row = this._findRow(assistantMessageId);
+    const msgEl = row?.querySelector('.chat-message.assistant');
+    if (!msgEl || msgEl.querySelector('.message-rag-sources')) return;
+
+    let hits;
+    try {
+      const messages = await this.api(
+        `/api/conversations/${this.currentConvId}/messages?limit=50`,
+      );
+      const target = messages.find((m) => m.id === assistantMessageId);
+      hits = target?.content_json?.rag_sources;
+    } catch (err) {
+      this.log?.warn('rag', err?.message || 'rag sources load failed');
+      return;
+    }
+    if (!hits?.length) return;
+
+    const block = this._buildMessageRagSources(hits);
+    if (block) msgEl.appendChild(block);
   }
 
   _extractMessagePlainText(row, role) {
@@ -4099,6 +4218,21 @@ class ChatApp {
       added += 1;
     }
     return added;
+  }
+
+  /**
+   * Синхронизация картинок при resume/F5: не затирать сетку, если WS уже добавил превью.
+   */
+  _syncStreamImagesFromServer(urls) {
+    if (!this.streamImagesEl || !urls?.length) return;
+    if (this.streamImagesEl.children.length === 0) {
+      this._setGridImages(this.streamImagesEl, urls);
+    } else {
+      this._appendImagesToGrid(this.streamImagesEl, urls);
+    }
+    if (this.streamImagesEl.children.length) {
+      this.streamEl?.classList.add('has-images');
+    }
   }
 
   _createImage(url, { scrollOnLoad = true } = {}) {

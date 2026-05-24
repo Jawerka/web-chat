@@ -187,20 +187,27 @@ async def append_document_rag_to_system(
     system_prompt: str,
     *,
     client_enabled: bool = False,
-) -> str:
-    """Дополнить system prompt top-K фрагментами документов."""
+) -> tuple[str, list[dict]]:
+    """
+    Дополнить system prompt top-K фрагментами документов.
+
+    Returns:
+        (system_prompt, hits) — hits для UI/``content_json.rag_sources`` (пустой, если RAG не применялся).
+    """
     if not settings.rag_enabled:
-        return system_prompt
+        return system_prompt, []
     if not (settings.rag_auto_inject or client_enabled):
-        return system_prompt
-    if not user_text.strip():
-        return system_prompt
+        return system_prompt, []
+    q = user_text.strip()
+    if len(q) < 3:
+        return system_prompt, []
     hits = await search_conversation_documents(session, conversation_id, user_text)
     block = build_rag_context_block(hits)
     if not block:
-        return system_prompt
+        return system_prompt, []
     base = system_prompt.rstrip()
-    return f"{base}\n\n{block}" if base else block
+    merged = f"{base}\n\n{block}" if base else block
+    return merged, hits
 
 
 async def maybe_index_attachment_after_extract(
