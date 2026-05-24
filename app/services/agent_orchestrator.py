@@ -34,6 +34,7 @@ from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.services.attachment_service import AttachmentService
 from app.services.conversation_title_service import maybe_generate_conversation_title
 from app.services.message_builder import (
+    strip_img2img_gen_preset_prefix,
     append_img2img_init_hints,
     build_img2img_init_hint_text,
     build_user_content,
@@ -456,6 +457,7 @@ class AgentOrchestrator:
         emit: EventEmitter,
         cancel_event: asyncio.Event,
         *,
+        display_text: str | None = None,
         llm_model: str | None = None,
         macro_context: str = "selected",
         document_rag: bool = False,
@@ -488,18 +490,24 @@ class AgentOrchestrator:
         att_service = AttachmentService(session)
         attachments = await att_service.prepare_for_llm(attachment_ids)
 
-        user_parts = build_user_content(user_text, attachments)
+        stored_text = (
+            display_text
+            if display_text is not None
+            else strip_img2img_gen_preset_prefix(user_text)
+        )
+        stored_parts = build_user_content(stored_text, attachments)
+        llm_parts = build_user_content(user_text, attachments)
         if preset and preset.slug == "img2img":
-            user_parts = append_img2img_init_hints(
-                user_parts,
+            llm_parts = append_img2img_init_hints(
+                llm_parts,
                 attachments,
-                image_parts=user_parts,
+                image_parts=llm_parts,
             )
         user_message = await msg_repo.create(
             conversation_id=conversation_id,
             role=MessageRole.USER,
-            content_text=user_text,
-            content_json={"parts": user_parts},
+            content_text=stored_text,
+            content_json={"parts": stored_parts},
         )
         if attachment_ids:
             await att_repo.link_to_message(
@@ -535,7 +543,7 @@ class AgentOrchestrator:
             session,
             system_prompt,
             macro_context,
-            user_text=user_text,
+            user_text=stored_text or user_text,
             all_macros=all_macros,
         )
         if macro_context == "full":
@@ -552,7 +560,7 @@ class AgentOrchestrator:
         system_prompt, rag_hits = await append_document_rag_to_system(
             session,
             conversation_id,
-            user_text,
+            stored_text or user_text,
             system_prompt,
             client_enabled=document_rag,
         )
@@ -571,7 +579,7 @@ class AgentOrchestrator:
             {
                 "role": "user",
                 "content": self._llm_user_parts(
-                    expand_parts_for_llm(user_parts, alias_to_body),
+                    expand_parts_for_llm(llm_parts, alias_to_body),
                 ),
             }
         )

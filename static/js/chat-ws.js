@@ -79,16 +79,19 @@
       this._reconnectTimer = setTimeout(() => this.connect(), delay);
     }
 
-    sendUserMessage(text, attachmentIds, integration) {
+    sendUserMessage(llmText, attachmentIds, integration, displayText = null) {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         throw new Error('Нет соединения с сервером');
       }
       const payload = {
         type: 'user_message',
-        text,
+        text: llmText,
         attachment_ids: attachmentIds,
         ...integration,
       };
+      if (displayText != null && displayText !== llmText) {
+        payload.display_text = displayText;
+      }
       this.ws.send(JSON.stringify(payload));
     }
 

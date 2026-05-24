@@ -99,6 +99,7 @@ async def _run_turn_task(
     attachment_ids: list[uuid.UUID],
     cancel_event: asyncio.Event,
     *,
+    display_text: str | None = None,
     integration: IntegrationOverrides | None = None,
 ) -> None:
     """Фоновая задача хода агента с отдельной сессией БД."""
@@ -135,6 +136,7 @@ async def _run_turn_task(
                 attachment_ids,
                 emit,
                 cancel_event,
+                display_text=display_text,
                 llm_model=integration.llm_model if integration else None,
                 macro_context=macro_ctx,
                 document_rag=doc_rag,
@@ -368,6 +370,7 @@ def _schedule_turn_task(
     user_text: str,
     attachment_ids: list[uuid.UUID],
     integration: IntegrationOverrides | None = None,
+    display_text: str | None = None,
 ):
     """Фабрика корутины хода (без замыкания на переменные цикла WS)."""
 
@@ -377,6 +380,7 @@ def _schedule_turn_task(
             user_text,
             attachment_ids,
             cancel_event,
+            display_text=display_text,
             integration=integration,
         )
 
@@ -508,12 +512,19 @@ async def _handle_ws_message(
             )
             return True
 
-        user_text = (data.get("text") or "").strip()
-        if not user_text:
+        llm_text = (data.get("text") or "").strip()
+        if not llm_text:
             await websocket.send_json(
                 _ws_error_payload(ErrorCode.VALIDATION, "Пустое сообщение"),
             )
             return True
+
+        display_raw = data.get("display_text")
+        display_text = (
+            str(display_raw).strip()
+            if display_raw is not None
+            else None
+        )
 
         raw_ids = data.get("attachment_ids") or []
         attachment_ids: list[uuid.UUID] = []
@@ -542,9 +553,10 @@ async def _handle_ws_message(
             conversation_id,
             _schedule_turn_task(
                 conversation_id,
-                user_text,
+                llm_text,
                 list(attachment_ids),
                 integration,
+                display_text=display_text,
             ),
             turn_kind="user_message",
         )

@@ -131,11 +131,94 @@
       </button>
 
       <div class="chat-preset-toolbar hidden" id="chat-preset-toolbar" aria-label="Пресет для следующего сообщения">
-        <div class="preset-select-wrap chat-preset-select-wrap">
-          <select class="preset-select form-input chat-preset-select" id="chat-preset-select" aria-label="Пресет для следующего сообщения" disabled></select>
-          <span class="preset-select-chevron" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-          </span>
+        <div class="chat-preset-toolbar-row">
+          <div class="preset-select-wrap chat-preset-select-wrap">
+            <select class="preset-select form-input chat-preset-select" id="chat-preset-select" aria-label="Пресет для следующего сообщения" disabled></select>
+            <span class="preset-select-chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+          </div>
+          <button type="button" class="img2img-gen-preset-toggle hidden" id="img2img-gen-preset-toggle"
+            title="Параметры img2img" aria-label="Параметры img2img"
+            aria-expanded="false" aria-controls="img2img-gen-preset-panel">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+              <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+              <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+              <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/>
+              <line x1="17" y1="16" x2="23" y2="16"/>
+            </svg>
+          </button>
+        </div>
+        <div class="img2img-gen-preset-panel hidden" id="img2img-gen-preset-panel" aria-label="Параметры img2img">
+          <div class="img2img-gen-preset-inner">
+            <label class="img2img-gen-preset-enable">
+              <input type="checkbox" class="img2img-gen-preset-enable-input" id="img2img-gen-preset-enabled"
+                checked aria-describedby="img2img-gen-preset-enable-hint">
+              <span class="img2img-gen-preset-enable-text">Добавлять параметры в промпт</span>
+            </label>
+            <p class="img2img-gen-preset-enable-hint" id="img2img-gen-preset-enable-hint">
+              Если выключено, значения ниже не меняют отправляемый текст и не сохраняются в сообщении.
+            </p>
+            <div class="img2img-gen-preset-fields" id="img2img-gen-preset-fields">
+            <div class="img2img-gen-preset-row">
+              <span class="img2img-gen-preset-label">Denoising</span>
+              <span class="img2img-gen-range">
+                <span class="img2img-gen-stepper">
+                  <button type="button" class="img2img-gen-step" data-step="-1" tabindex="-1"
+                    aria-label="Уменьшить Denoising (мин)">−</button>
+                  <input type="text" class="form-input img2img-gen-input" id="img2img-denoise-min"
+                    inputmode="decimal" placeholder="0.55" aria-label="Denoising минимум" autocomplete="off" spellcheck="false">
+                  <button type="button" class="img2img-gen-step" data-step="1" tabindex="-1"
+                    aria-label="Увеличить Denoising (мин)">+</button>
+                </span>
+                <span class="img2img-gen-range-sep" aria-hidden="true">–</span>
+                <span class="img2img-gen-stepper">
+                  <button type="button" class="img2img-gen-step" data-step="-1" tabindex="-1"
+                    aria-label="Уменьшить Denoising (макс)">−</button>
+                  <input type="text" class="form-input img2img-gen-input" id="img2img-denoise-max"
+                    inputmode="decimal" placeholder="макс" aria-label="Denoising максимум" autocomplete="off" spellcheck="false">
+                  <button type="button" class="img2img-gen-step" data-step="1" tabindex="-1"
+                    aria-label="Увеличить Denoising (макс)">+</button>
+                </span>
+              </span>
+            </div>
+            <div class="img2img-gen-preset-row">
+              <span class="img2img-gen-preset-label">CFG</span>
+              <span class="img2img-gen-range">
+                <span class="img2img-gen-stepper">
+                  <button type="button" class="img2img-gen-step" data-step="-1" tabindex="-1"
+                    aria-label="Уменьшить CFG (мин)">−</button>
+                  <input type="text" class="form-input img2img-gen-input" id="img2img-cfg-min"
+                    inputmode="decimal" placeholder="4.0" aria-label="CFG минимум" autocomplete="off" spellcheck="false">
+                  <button type="button" class="img2img-gen-step" data-step="1" tabindex="-1"
+                    aria-label="Увеличить CFG (мин)">+</button>
+                </span>
+                <span class="img2img-gen-range-sep" aria-hidden="true">–</span>
+                <span class="img2img-gen-stepper">
+                  <button type="button" class="img2img-gen-step" data-step="-1" tabindex="-1"
+                    aria-label="Уменьшить CFG (макс)">−</button>
+                  <input type="text" class="form-input img2img-gen-input" id="img2img-cfg-max"
+                    inputmode="decimal" placeholder="макс" aria-label="CFG максимум" autocomplete="off" spellcheck="false">
+                  <button type="button" class="img2img-gen-step" data-step="1" tabindex="-1"
+                    aria-label="Увеличить CFG (макс)">+</button>
+                </span>
+              </span>
+            </div>
+            <div class="img2img-gen-preset-row">
+              <span class="img2img-gen-preset-label">Картинок</span>
+              <span class="img2img-gen-stepper img2img-gen-stepper--count">
+                <button type="button" class="img2img-gen-step" data-step="-1" tabindex="-1"
+                  aria-label="Меньше изображений">−</button>
+                <input type="text" class="form-input img2img-gen-input" id="img2img-count"
+                  inputmode="numeric" placeholder="1" aria-label="Число изображений" autocomplete="off" spellcheck="false">
+                <button type="button" class="img2img-gen-step" data-step="1" tabindex="-1"
+                  aria-label="Больше изображений">+</button>
+              </span>
+            </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -575,6 +658,7 @@
   <script src="/static/js/chat-ws.js"></script>
   <script src="/static/js/chat-auth.js"></script>
   <script src="/static/js/chat-composer.js"></script>
+  <script src="/static/js/chat-img2img-preset.js"></script>
   <script src="/static/js/chat.js"></script>
 </body>
 </html>

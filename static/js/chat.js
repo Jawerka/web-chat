@@ -259,6 +259,15 @@ class ChatApp {
       convPresetSelect: document.getElementById('conv-preset-select'),
       chatPresetToolbar: document.getElementById('chat-preset-toolbar'),
       chatPresetSelect: document.getElementById('chat-preset-select'),
+      img2imgGenPresetToggle: document.getElementById('img2img-gen-preset-toggle'),
+      img2imgGenPresetPanel: document.getElementById('img2img-gen-preset-panel'),
+      img2imgGenPresetEnabled: document.getElementById('img2img-gen-preset-enabled'),
+      img2imgGenPresetFields: document.getElementById('img2img-gen-preset-fields'),
+      img2imgDenoiseMin: document.getElementById('img2img-denoise-min'),
+      img2imgDenoiseMax: document.getElementById('img2img-denoise-max'),
+      img2imgCfgMin: document.getElementById('img2img-cfg-min'),
+      img2imgCfgMax: document.getElementById('img2img-cfg-max'),
+      img2imgCount: document.getElementById('img2img-count'),
       presetSelect: document.getElementById('preset-select'),
       presetSystemPrompt: document.getElementById('preset-system-prompt'),
       presetPromptSaveBtn: document.getElementById('preset-prompt-save-btn'),
@@ -330,6 +339,9 @@ class ChatApp {
       this.log?.error('promise', 'unhandled rejection', ev.reason);
     });
     this._bindEvents();
+    if (typeof WebChatImg2imgPreset !== 'undefined') {
+      WebChatImg2imgPreset.init(this);
+    }
     this._loadTheme();
     this._updateThemeToggleLabel();
     this._loadFontSize();
@@ -932,6 +944,14 @@ class ChatApp {
     }
   }
 
+  _userMessageDisplayText(m) {
+    const raw = m?.content_text || '';
+    if (typeof WebChatImg2imgPreset !== 'undefined') {
+      return WebChatImg2imgPreset.stripFromStoredMessage(raw) || raw;
+    }
+    return raw;
+  }
+
   onAck(msg) {
     if (this._regenerating) return;
     const userMessageId = msg?.user_message_id;
@@ -940,7 +960,7 @@ class ChatApp {
     const last = rows[rows.length - 1];
     if (last) {
       last.dataset.messageId = userMessageId;
-      this._attachActions(last, 'user');
+      this._syncMessageActions(last, 'user');
       return;
     }
     if (!this.streaming) {
@@ -1130,17 +1150,24 @@ class ChatApp {
   _updateChatPresetToolbar() {
     const show = Boolean(this.currentConvId) && !this.$.chatHistory?.classList.contains('hidden');
     this.$.chatPresetToolbar?.classList.toggle('hidden', !show);
+    WebChatImg2imgPreset?.syncVisibility?.(this);
   }
 
   async onChatPresetChange() {
     const presetId = this.$.chatPresetSelect?.value;
     if (!presetId || !this.currentConvId) return;
     if (this.$.convPresetSelect) this.$.convPresetSelect.value = presetId;
+    WebChatImg2imgPreset?.syncVisibility?.(this);
     await this._applyConversationPreset(presetId);
+    WebChatImg2imgPreset?.syncVisibility?.(this);
   }
 
   async _applyConversationPreset(presetId) {
-    if (!this.currentConvId || this.currentConv?.preset_id === presetId) return;
+    if (!this.currentConvId) return;
+    if (this.currentConv?.preset_id === presetId) {
+      WebChatImg2imgPreset?.syncVisibility?.(this);
+      return;
+    }
     try {
       this.currentConv = await this.api(`/api/conversations/${this.currentConvId}`, {
         method: 'PATCH',
@@ -1152,6 +1179,8 @@ class ChatApp {
     } catch (err) {
       this.showError(err.message || 'Не удалось сменить пресет');
       this.populateConvPresetSelect(this.currentConv?.preset_id);
+    } finally {
+      WebChatImg2imgPreset?.syncVisibility?.(this);
     }
   }
 
@@ -2445,7 +2474,7 @@ class ChatApp {
   _messageRowFromDb(m, { activeStreamingId = null } = {}) {
     const urls = imageUrlsFromMessage(m);
     if (m.role === 'user') {
-      return this._buildUserRow(m.content_text || '', m.id, urls);
+      return this._buildUserRow(this._userMessageDisplayText(m), m.id, urls);
     }
     const ragHits = m.content_json?.rag_sources;
     const reasoning = m.content_json?.reasoning;
@@ -2461,6 +2490,19 @@ class ChatApp {
     const fallback = document.createElement('div');
     fallback.className = 'message-row';
     return fallback;
+  }
+
+  /** Классы has-content / has-images / has-reasoning — для ширины пузыря и сетки картинок. */
+  _syncAssistantLayoutClasses(el) {
+    if (!el?.classList?.contains('assistant')) return;
+    const bubble = el.querySelector('.message-bubble');
+    const grid = el.querySelector('.message-images');
+    const hasContent = Boolean(bubble?.textContent?.trim());
+    const hasImages = Boolean(grid?.children?.length);
+    const hasReasoning = Boolean(el.querySelector('.message-reasoning'));
+    el.classList.toggle('has-content', hasContent);
+    el.classList.toggle('has-images', hasImages);
+    el.classList.toggle('has-reasoning', hasReasoning);
   }
 
   _ensureAssistantStreamShell(el) {
@@ -2497,15 +2539,13 @@ class ChatApp {
     }
     if (displayText && bubble) {
       bubble.innerHTML = formatMarkdown(displayText);
-      el.classList.add('has-content');
     } else if (bubble) {
       bubble.innerHTML = '';
-      el.classList.remove('has-content');
     }
     if (grid) {
       this._setGridImages(grid, imageUrls || []);
-      el.classList.toggle('has-images', grid.children.length > 0);
     }
+    this._syncAssistantLayoutClasses(el);
     this._bindImageClicks(el);
   }
 
@@ -2622,8 +2662,8 @@ class ChatApp {
   }
 
   async sendMessage() {
-    const text = this.$.userInput?.value?.trim() ?? '';
-    const blocked = WebChatComposer.sendBlockedReason(this, text);
+    const rawText = this.$.userInput?.value?.trim() ?? '';
+    const blocked = WebChatComposer.sendBlockedReason(this, rawText);
     if (blocked) {
       if (blocked !== null) this.showError(blocked, 3500);
       return;
@@ -2636,21 +2676,24 @@ class ChatApp {
 
     this._generationHadImages = false;
     if (this.editingMessageId) {
-      await this._submitEdit(text);
+      await this._submitEdit(rawText);
       return;
     }
 
+    const payloadText = typeof WebChatImg2imgPreset !== 'undefined'
+      ? WebChatImg2imgPreset.getPayloadText(this, rawText)
+      : rawText;
     const ids = this.pendingAttachments.map((a) => a.id);
     const pendingImages = this.pendingAttachments
       .map((a) => mediaFullUrl(a.preview_url))
       .filter(Boolean);
-    this.addUserBubble(text, null, pendingImages);
+    this.addUserBubble(rawText, null, pendingImages);
     WebChatComposer.resetUi(this);
     WebChatComposer.clearDraft(this, this.currentConvId);
     this.startStreaming();
 
     try {
-      this.socket.sendUserMessage(text, ids, this.getWsIntegrationPayload());
+      this.socket.sendUserMessage(payloadText, ids, this.getWsIntegrationPayload(), rawText);
     } catch (err) {
       this.showError(err.message);
       this.endStreaming();
@@ -2662,7 +2705,6 @@ class ChatApp {
     const role = this.editingRole || 'user';
     const row = this._findRow(messageId);
     const pendingForUser = role === 'user' ? [...this.pendingAttachments] : [];
-
     try {
       this.log?.info('msg', `Редактирование ${role} ${messageId}`);
       const body = { content_text: text };
@@ -2814,12 +2856,11 @@ class ChatApp {
     const bubble = this.streamEl.querySelector('.message-bubble');
     const displayText = stripMarkdownImages(body);
     if (displayText && bubble) {
-      this.streamEl.classList.add('has-content');
       bubble.innerHTML = formatMarkdown(displayText);
     } else if (bubble) {
-      this.streamEl.classList.remove('has-content');
       bubble.innerHTML = '';
     }
+    this._syncAssistantLayoutClasses(this.streamEl);
     bubble?.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src');
       if (src) {
@@ -2867,7 +2908,7 @@ class ChatApp {
     const pre = this._ensureStreamReasoningShell();
     if (!pre) return;
     pre.textContent = text || '';
-    if (text) this.streamEl?.classList.add('has-reasoning');
+    this._syncAssistantLayoutClasses(this.streamEl);
   }
 
   onImages(urls) {
@@ -2876,7 +2917,7 @@ class ChatApp {
     if (added > 0) {
       this._generationHadImages = true;
       this.hideProgress();
-      this.streamEl?.classList.add('has-images');
+      this._syncAssistantLayoutClasses(this.streamEl);
     }
     this._scheduleScrollToBottom();
   }
@@ -3019,13 +3060,11 @@ class ChatApp {
     this.streamImagesEl = this.streamEl.querySelector('.message-images');
     this.streamText = this.streamEl.dataset.rawContent || '';
     const bubble = this.streamEl.querySelector('.message-bubble');
-    const hasImages = Boolean(this.streamImagesEl?.children.length);
     if (this.streamText && bubble) {
       const displayText = stripMarkdownImages(this.streamText);
       bubble.innerHTML = formatMarkdown(displayText);
-      this.streamEl.classList.toggle('has-content', Boolean(displayText));
     }
-    this.streamEl.classList.toggle('has-images', hasImages);
+    this._syncAssistantLayoutClasses(this.streamEl);
     WebChatComposer.syncSendState(this);
   }
 
@@ -3220,12 +3259,7 @@ class ChatApp {
       this._attachActions(this.streamRow, 'assistant');
     }
 
-    const hasText = Boolean(stripMarkdownImages(this.streamText || ''));
-    const hasImages = Boolean(this.streamImagesEl?.children.length);
-    if (hasImages || hasText) {
-      this.streamEl.classList.toggle('has-content', hasText);
-      this.streamEl.classList.toggle('has-images', hasImages);
-    }
+    this._syncAssistantLayoutClasses(this.streamEl);
   }
 
   _watchGenerationUntilDone() {
@@ -3379,6 +3413,7 @@ class ChatApp {
     el.classList.remove('streaming', 'waiting', 'is-busy');
     const status = el.querySelector('.message-status');
     status?.classList.add('hidden');
+    this._syncAssistantLayoutClasses(el);
   }
 
   _settleAllStreamRows() {
@@ -3459,6 +3494,7 @@ class ChatApp {
       this.streamReasoningText = '';
     }
     this._settleAllStreamRows();
+    this._syncAllMessageActions();
   }
 
   _findRow(messageId) {
@@ -3512,11 +3548,34 @@ class ChatApp {
   _messageActionKeysForRow(role, row) {
     const keys = [];
     if (this._hasCopyableMessageText(row, role)) keys.push('copy');
-    if (!this.streaming) {
+    const hasId = Boolean(row?.dataset?.messageId);
+    const isActiveStream = this.streaming && row === this.streamRow;
+    if (hasId && !isActiveStream) {
       keys.push('edit', 'regenerate');
     }
     keys.push('delete');
     return keys;
+  }
+
+  _syncMessageActions(row, role) {
+    if (!row || !this._shouldAttachMessageActions(row)) return;
+    const actions = row.querySelector('.message-actions');
+    const keys = this._messageActionKeysForRow(role, row);
+    if (!actions) {
+      row.appendChild(this._buildMessageActions(role, row));
+      return;
+    }
+    const current = [...actions.querySelectorAll('[data-action]')].map((b) => b.dataset.action);
+    if (keys.length === current.length && keys.every((k) => current.includes(k))) return;
+    actions.remove();
+    row.appendChild(this._buildMessageActions(role, row));
+  }
+
+  _syncAllMessageActions() {
+    this.$.chatMessages?.querySelectorAll('.message-row[data-message-id]').forEach((row) => {
+      const role = row.classList.contains('user') ? 'user' : 'assistant';
+      this._syncMessageActions(row, role);
+    });
   }
 
   _hasCopyableMessageText(row, role) {
@@ -3531,9 +3590,8 @@ class ChatApp {
   }
 
   _attachActions(row, role) {
-    if (row.querySelector('.message-actions')) return;
     if (!this._shouldAttachMessageActions(row)) return;
-    row.appendChild(this._buildMessageActions(role, row));
+    this._syncMessageActions(row, role);
   }
 
   _wrapMessage(role, messageEl, messageId) {
@@ -3601,6 +3659,7 @@ class ChatApp {
     }
     const ragBlock = WebChatMessageBlocks.buildMessageRagSources(ragHits);
     if (ragBlock) el.appendChild(ragBlock);
+    this._syncAssistantLayoutClasses(el);
     this._bindImageClicks(el);
     return this._wrapMessage('assistant', el, messageId);
   }
@@ -3907,9 +3966,7 @@ class ChatApp {
     } else {
       this._appendImagesToGrid(this.streamImagesEl, urls);
     }
-    if (this.streamImagesEl.children.length) {
-      this.streamEl?.classList.add('has-images');
-    }
+    this._syncAssistantLayoutClasses(this.streamEl);
   }
 
   _createImage(url, { scrollOnLoad = true } = {}) {

@@ -51,6 +51,38 @@ def _public_url_from_image_part(part: dict[str, Any]) -> str | None:
 
 _IMG2IMG_HINT_MARK = "[Для img2img"
 
+# Скрытый префикс из UI img2img (denoising / CFG / число картинок) — не хранить в БД.
+_IMG2IMG_GEN_PRESET_PART_RE = re.compile(
+    r"^(?:denoising\s+[\d.]+(?:-[\d.]+)?|CFG\s+[\d.]+(?:-[\d.]+)?|"
+    r"Сделай\s+\d+\s+изображен\w*)\.?$",
+    re.IGNORECASE,
+)
+
+
+def is_img2img_gen_preset_instruction_block(text: str) -> bool:
+    """Проверить, что блок — только параметры генерации из панели img2img."""
+    normalized = (text or "").strip().rstrip(".")
+    if not normalized:
+        return False
+    parts = [p.strip() for p in normalized.split(";") if p.strip()]
+    if not parts:
+        return False
+    return all(_IMG2IMG_GEN_PRESET_PART_RE.match(p.rstrip(".")) for p in parts)
+
+
+def strip_img2img_gen_preset_prefix(text: str) -> str:
+    """Убрать префикс denoising/CFG/«Сделай N изображений» (для content_text в БД и UI)."""
+    raw = text or ""
+    trimmed = raw.strip()
+    if not trimmed:
+        return ""
+    sep = trimmed.find("\n\n")
+    if sep == -1:
+        return "" if is_img2img_gen_preset_instruction_block(trimmed) else raw
+    head = trimmed[:sep].strip()
+    rest = trimmed[sep + 2 :]
+    return rest if is_img2img_gen_preset_instruction_block(head) else raw
+
 
 def _text_from_parts(parts: list[dict[str, Any]], *, skip_img2img_hints: bool = True) -> str:
     """Собрать текстовое содержимое из parts (без старых подсказок img2img)."""

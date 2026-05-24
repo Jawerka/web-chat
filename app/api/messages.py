@@ -17,17 +17,20 @@ from app.services.attachment_service import AttachmentService
 from app.services.conversation_access import get_accessible_conversation
 from app.services.request_user import RequestUser, get_request_user
 from app.services.media_service import MediaService
-from app.services.message_builder import build_user_content
+from app.services.message_builder import build_user_content, strip_img2img_gen_preset_prefix
 
 router = APIRouter(prefix="/conversations", tags=["messages"])
 
 
 def _message_out(m) -> MessageOut:
+    content_text = m.content_text
+    if m.role == MessageRole.USER and content_text:
+        content_text = strip_img2img_gen_preset_prefix(content_text)
     return MessageOut(
         id=m.id,
         conversation_id=m.conversation_id,
         role=m.role.value,
-        content_text=m.content_text,
+        content_text=content_text,
         content_json=m.content_json,
         created_at=m.created_at,
     )
@@ -132,6 +135,9 @@ async def update_message(
     text = body.content_text.strip()
     if not text:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Пустой текст")
+
+    if message.role == MessageRole.USER:
+        text = strip_img2img_gen_preset_prefix(text)
 
     content_json = message.content_json
     if message.role == MessageRole.USER:
