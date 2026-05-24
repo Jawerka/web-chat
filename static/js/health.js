@@ -9,6 +9,11 @@ const STATUS_LABELS = {
   unavailable: 'Недоступен',
 };
 
+/** Опрос журнала (независимо от WS). */
+const LOGS_POLL_MS = 5000;
+/** Метрики сервисов. */
+const HEALTH_POLL_MS = 5000;
+
 function formatUptime(sec) {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
@@ -137,27 +142,43 @@ class HealthDashboard {
       btnLogsRefresh: document.getElementById('logs-refresh'),
     };
     this._logText = '';
-    this._timer = null;
+    this._logLineCount = 0;
+    this._healthTimer = null;
+    this._logsTimer = null;
+    this._logsFetchInFlight = false;
     this._eventsSocket = null;
     this._eventsLive = false;
-    this.$.btnRefresh?.addEventListener('click', () => this.refreshAll());
-    this.$.btnLogsRefresh?.addEventListener('click', () => this.fetchLogs());
+    this._stickLogScroll = true;
+
+    this.$.btnRefresh?.addEventListener('click', () => this.refreshHealth());
+    this.$.btnLogsRefresh?.addEventListener('click', () => this.fetchLogs({ force: true }));
     this.$.btnLogsSave?.addEventListener('click', () => this.saveLogs());
-    this.$.autoRefresh?.addEventListener('change', () => this._schedule());
+    this.$.autoRefresh?.addEventListener('change', () => this._schedulePolls());
+    this.$.logsView?.addEventListener('scroll', () => this._onLogsScroll());
+
     window.addEventListener('resize', () => {
       if (this._lastHistory) drawChart(this.$.chart, this._lastHistory);
     });
-    this.refreshAll();
-    this._schedule();
+
+    this.refreshHealth();
+    this.fetchLogs({ force: true });
+    this._schedulePolls();
     this._connectSystemEvents();
   }
 
-  _schedule() {
-    if (this._timer) clearInterval(this._timer);
-    if (this.$.autoRefresh?.checked) {
-      const ms = this._eventsLive ? 30000 : 5000;
-      this._timer = setInterval(() => this.refreshAll(), ms);
-    }
+  _onLogsScroll() {
+    const el = this.$.logsView;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    this._stickLogScroll = dist < 48;
+  }
+
+  _schedulePolls() {
+    if (this._healthTimer) clearInterval(this._healthTimer);
+    if (this._logsTimer) clearInterval(this._logsTimer);
+    if (!this.$.autoRefresh?.checked) return;
+    this._healthTimer = setInterval(() => this.refreshHealth(), HEALTH_POLL_MS);
+    this._logsTimer = setInterval(() => this.fetchLogs(), LOGS_POLL_MS);
   }
 
   _connectSystemEvents() {
@@ -165,34 +186,52 @@ class HealthDashboard {
     this._eventsSocket = new SystemEventsSocket({
       onOpen: () => {
         this._eventsLive = true;
-        this._schedule();
-        this.fetchLogs().catch(() => {});
+        this._updateLogsCountLabel();
+        this.fetchLogs({ force: true }).catch(() => {});
       },
       onClose: () => {
         this._eventsLive = false;
-        this._schedule();
+        this._updateLogsCountLabel();
+      },
+      onError: () => {
+        this._eventsLive = false;
+        this._updateLogsCountLabel();
       },
       onLogsAppend: (lines) => this._appendLogLines(lines),
     });
     this._eventsSocket.connect();
   }
 
+  _updateLogsCountLabel() {
+    if (!this.$.logsCount) return;
+    const n = this._logLineCount;
+    const live = this._eventsLive ? ' · live' : '';
+    this.$.logsCount.textContent = `${n} строк${live}`;
+  }
+
+  _renderLogView() {
+    const count = this._logLineCount;
+    if (count === 0) {
+      this.$.logsView.textContent =
+        '(журнал пуст — выполните действие в чате или перезапустите сервер)';
+    } else {
+      this.$.logsView.textContent = this._logText;
+    }
+    this._updateLogsCountLabel();
+    if (this._stickLogScroll) {
+      this.$.logsView.scrollTop = this.$.logsView.scrollHeight;
+    }
+  }
+
   _appendLogLines(lines) {
     if (!lines?.length) return;
     const chunk = lines.join('\n');
     this._logText = this._logText ? `${this._logText}\n${chunk}` : chunk;
-    this.$.logsView.textContent = this._logText;
-    const n = (this._logText.match(/\n/g) || []).length + (this._logText ? 1 : 0);
-    this.$.logsCount.textContent = `${n} строк`;
-    this.$.logsView.scrollTop = this.$.logsView.scrollHeight;
+    this._logLineCount = (this._logText.match(/\n/g) || []).length + 1;
+    this._renderLogView();
   }
 
-  async refreshAll() {
-    await this.fetchHealth();
-    await this.fetchLogs();
-  }
-
-  async fetchHealth() {
+  async refreshHealth() {
     try {
       const res = await fetch('/api/health');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -222,9 +261,14 @@ class HealthDashboard {
     drawChart(this.$.chart, this._lastHistory);
   }
 
-  async fetchLogs() {
+  async fetchLogs({ force = false } = {}) {
+    if (this._logsFetchInFlight) return;
+    this._logsFetchInFlight = true;
     try {
-      const res = await fetch('/api/health/logs?limit=800', { credentials: 'same-origin' });
+      const res = await fetch(
+        `/api/health/logs?limit=800&_=${Date.now()}`,
+        { credentials: 'same-origin', cache: 'no-store' },
+      );
       if (!res.ok) {
         let detail = res.statusText;
         try {
@@ -236,20 +280,22 @@ class HealthDashboard {
       }
       const data = await res.json();
       const lines = data.lines || [];
-      this._logText = lines.join('\n');
       const count = data.line_count ?? lines.length;
-      if (count === 0) {
-        this.$.logsView.textContent = '(журнал пуст — выполните действие в чате или перезапустите сервер)';
-      } else {
-        this.$.logsView.textContent = this._logText;
+      const newText = lines.join('\n');
+      const changed = force || count !== this._logLineCount || newText !== this._logText;
+      if (changed) {
+        this._logText = newText;
+        this._logLineCount = count;
+        this._renderLogView();
       }
-      this.$.logsCount.textContent = `${count} строк`;
       window.appLog?.debug?.('health', 'Журнал загружен', { line_count: count });
     } catch (err) {
       const msg = err?.message || String(err);
       this.$.logsView.textContent = `Ошибка загрузки лога: ${msg}`;
       this.$.logsCount.textContent = 'ошибка';
       window.appLog?.error?.('health', 'fetchLogs failed', msg);
+    } finally {
+      this._logsFetchInFlight = false;
     }
   }
 

@@ -4406,6 +4406,19 @@ class ChatApp {
     clearTimeout(this._errorTimer);
   }
 
+  showUploadSuccess(message) {
+    const el = this.$.uploadToast;
+    if (!el) return;
+    clearTimeout(this._uploadToastTimer);
+    el.textContent = message;
+    el.classList.remove('hidden');
+    requestAnimationFrame(() => el.classList.add('is-visible'));
+    this._uploadToastTimer = setTimeout(() => {
+      el.classList.remove('is-visible');
+      setTimeout(() => el.classList.add('hidden'), 220);
+    }, 2800);
+  }
+
   _retrySocketConnection() {
     if (!this.currentConvId) return;
     this.hideError();

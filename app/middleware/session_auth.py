@@ -24,6 +24,7 @@ _PUBLIC_PREFIXES = (
 
 _PUBLIC_EXACT = (
     "/api/health",
+    "/api/health/logs",
     "/api/config",
 )
 
