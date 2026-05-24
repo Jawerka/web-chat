@@ -33,6 +33,7 @@ python -m app.scripts.assign_conversation_owners --user admin
 - API: `POST /api/auth/login` → HttpOnly cookie `webchat_session`
 - Выход: `POST /api/auth/logout`
 - Текущий пользователь: `GET /api/auth/me`
+- Смена пароля: `POST /api/auth/change-password` (`current_password`, `new_password` ≥4) — cookie не сбрасывается
 
 Браузер отправляет cookie на REST и WebSocket (same-origin).
 
@@ -78,11 +79,12 @@ TRUSTED_INTERNAL_ALLOW_LOOPBACK=true
 - **Настройки чата** → раздел «Пользователи» (виден только `role=admin`).
 - `GET /api/users` — список учётных записей.
 - `POST /api/users` — создать пользователя (`login`, `password`, опционально `display_name`, `role`: `user`|`admin`).
+- **Смена пароля:** настройки → «Аккаунт» → форма (любой вошедший пользователь).
 - **Выйти:** кнопка в разделе «Аккаунт» или `POST /api/auth/logout`.
 
 ## Дальнейшее развитие
 
-- Смена пароля в UI, деактивация пользователей.
+- Деактивация пользователей, сброс пароля админом.
 - Опционально: Redis-сессии, 2FA, принудительный logout всех сессий.
 
 См. также [MULTI-USER.md](MULTI-USER.md) (legacy-заголовок).

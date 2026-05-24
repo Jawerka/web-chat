@@ -5,7 +5,7 @@
 > **Назначение документа:** единый гайдлайн («библия» проекта) для всех, кто создаёт и сопровождает проект.  
 > Читать последовательно; этапы выполнять **по порядку**, не перескакивая без завершения критериев готовности.
 
-> **Статус (2026-05-24):** этапы **1–11** и стабилизация **P0–P2 (пилот)** выполнены. Автотесты: **`pytest -q` → 289 passed**. Production: **PostgreSQL**, вход **login/password**, multi-user, RAG, корзина бесед, trusted internal. Журнал — [§журнал](#журнал-прогресса); открытые задачи — [BACKLOG.md](BACKLOG.md) и [§22](#22-планируемые-действия). Принципы эксплуатации — [§0.5](#05-модель-эксплуатации-и-приоритеты-разработки).
+> **Статус (2026-05-24):** этапы **1–11** и стабилизация **P0–P2 (пилот)** выполнены. Автотесты: **`pytest -q` → 290 passed**. Production: **PostgreSQL**, вход **login/password**, multi-user, RAG, корзина бесед, trusted internal. Журнал — [§журнал](#журнал-прогресса); открытые задачи — [BACKLOG.md](BACKLOG.md) и [§22](#22-планируемые-действия). Принципы эксплуатации — [§0.5](#05-модель-эксплуатации-и-приоритеты-разработки).
 
 > **Системные промпты:** эталонные тексты пресетов (txt2img, img2img, default, document_analysis) — в [`Sys-prompt.md`](Sys-prompt.md).  
 > При любых правках промптов, инструментов или поведения агента **сначала** сверяйся с `Sys-prompt.md`, затем переноси изменения в `app/db/seed.py` и при необходимости в `app/db/migrate.py` (обновление существующей БД).
@@ -340,7 +340,7 @@ MediaAsset
 │   │   document_extractor.py, media_utils.py, runtime_config.py
 │   └── scripts/    run_cleanup.py, test_agent.py
 ├── static/css/chat.css
-├── static/js/      chat.js, chat-labels.js, markdown.js, prompt-macros.js, gallery.js
+├── static/js/      chat.js, chat-composer.js, chat-ws.js, chat-auth.js, chat-labels.js, …
 ├── templates/      chat.html, gallery.html, macros.html
 ├── tests/          254 pytest (auth, RAG, WS lifecycle, security, img2img, …)
 ├── deploy/
@@ -1068,6 +1068,8 @@ Seed выполнять в `init_db()` только если таблица `pre
 - [x] systemd + **автозапуск после reboot** — `sudo ./deploy/install.sh` (шаблоны `*.service.template`).
 - [x] Логи — journald и/или `deploy/logrotate-web-chat.conf` (`install.sh --logrotate`).
 - [ ] На стенде: `systemctl is-enabled web-chat.service` → `enabled`.
+- [ ] (Рекомендуется) Квартальный пробный restore БД — [docs/RUNBOOK.md](docs/RUNBOOK.md#квартальная-проверка-restore-чеклист).
+- [ ] (Если HTTPS) nginx по [deploy/nginx-web-chat.conf.template](deploy/nginx-web-chat.conf.template) — [RUNBOOK](docs/RUNBOOK.md#nginx--https-если-хост-не-только-в-lan).
 
 ---
 
@@ -1489,6 +1491,27 @@ class ChatSocket {
 - Дедуп картинок: `imageUrlKey()`, `_setGridImages`, `dataset.url` на `<img>`.
 - Поле ввода **не** `disabled` во время генерации; блокируется только **Send** (`streaming`).
 
+### 10.8. Модули `static/js` (без сборки)
+
+Разбиение `chat.js` — по одному concern на файл, подключение в `templates/chat.html` **до** `chat.js`:
+
+| Файл | Содержимое |
+|------|------------|
+| `chat-labels.js` | `PROGRESS_STAGE_LABELS`, `TOOL_USER_LABELS` |
+| `chat-message-blocks.js` | `WebChatMessageBlocks.buildMessageReasoning`, `buildMessageRagSources` |
+| `chat-ws.js` | Класс `ChatSocket` — reconnect, ping, dispatch WS-событий turn |
+| `chat-auth.js` | `WebChatAuth` — аккаунт, смена пароля, admin users |
+| `chat-composer.js` | `WebChatComposer` — ввод, вложения, черновики, send/stop, drag-drop, tools menu |
+| `chat.js` | Класс `ChatApp`: беседы, история, WS-handlers, пресеты, lightbox |
+
+Новые модули — `window.WebChat…` / `window.ChatSocket`, без import/export (vanilla `<script>`).
+
+**Composer (клиент):** черновики в `localStorage` (`webchat_composer_drafts_v1` по `conversation_id`); при **Send** поле и strip очищаются, черновик сбрасывается; **Stop** не блокирует textarea ([§20.3](#203-ux-чата-итерации)). Upload: `POST /api/upload` + chips в `#attachment-strip`. `WebChatComposer.syncSendState` переключает Send/Stop.
+
+**Auth (клиент):** при `auth_enabled` — `GET /api/auth/me`, редирект на `/login` при 401; настройки → «Аккаунт» / «Пользователи» (admin). См. [deploy/AUTH.md](deploy/AUTH.md).
+
+**Протокол WS (клиент):** `connected`, `ack`, `text_delta`, `reasoning_delta`, `image`, `tool_start`/`tool_done`, `progress`, `generation_update`, `done`, `error`; исходящие — `user_message`, `regenerate`, `cancel`, `ping`. Reconnect: до 5 попыток, exponential backoff до 15 с (`chat-ws.js`).
+
 ---
 
 ## 11. REST API: полные контракты
@@ -1589,6 +1612,18 @@ Alias: латиница, цифры, `_`, `-`; в чате — `@alias`.
 ### 12.3. Совместимость URL
 
 Старые сообщения с URL `http://192.168.88.16:8080/images/...` после отключения .16 не загрузят картинки. При миграции не переносить старую историю или принять broken images.
+
+### 12.4. SD WebUI: HTTP-клиент (BE-SD-HTTPX)
+
+Вызовы Automatic1111 идут через **`app/integrations/sd_http.py`**, **`sd_tools.py`**, **`sd_progress.py`** — синхронный **`requests`**, выполняемый в **`HeavyJobQueue`** (пул потоков), чтобы не блокировать event loop FastAPI.
+
+| Подход | Сейчас | После миграции (BACKLOG `BE-SD-HTTPX`) |
+|--------|--------|----------------------------------------|
+| HTTP к SD | `requests` в thread pool | `httpx.AsyncClient` (целевой) |
+| CPU (PIL, PDF) | thread pool | thread pool без изменений |
+| Circuit breaker | `sd_http.py` | сохранить семантику |
+
+**Почему не спешим:** для одного оператора в LAN пул потоков достаточен; миграция — после замера (очередь jobs, время txt2img, исчерпание workers). До замера не менять — риск регрессии SD без выигрыша в UX.
 
 ---
 
@@ -1956,6 +1991,9 @@ MVP считается готовым после завершения **этап
 |-----------|--------|
 | **Composer при генерации** | `#user-input` **остаётся активным** — можно набрать следующий вопрос. **Send** скрыт (`hidden` + `disabled`), показан **Stop** (`_syncComposerSendState`, `_isComposerBusy`). Textarea `disabled` только без выбранной беседы (`clearChatView` / до `selectConversation`). |
 | Подписи статусов | `static/js/chat-labels.js` — `PROGRESS_STAGE_LABELS`, `TOOL_USER_LABELS`; сервер — `app/services/user_progress.py` (при правках сверять оба). |
+| Блоки сообщений | `static/js/chat-message-blocks.js` — reasoning/RAG `<details>`; см. [§10.8](#108-модули-staticjs-без-сборки) |
+| Смена пароля | `chat-auth.js`; `POST /api/auth/change-password` |
+| Composer | `chat-composer.js` — черновики, upload, Send/Stop; `sendMessage()` остаётся в `chat.js` |
 | `data-chat-ui-state` | `body.dataset.chatUiState`: `connecting` \| `ready` \| `streaming` \| `tool_running` \| `reconnecting` \| `offline` — для CSS и pill в настройках. |
 | Lightbox | Download (top-right), attach to composer (top-left); убран upload из lightbox |
 | Runtime config | `integrations/runtime_config.py` — override `llm_base_url`, `sd_webui_url`, `model` из WS |
@@ -2081,6 +2119,12 @@ MVP считается готовым после завершения **этап
 | reasoning_delta | [x] | 2026-05-24 | WS + UI + persist; `llm_client` stream `reasoning_content` |
 | radius sidebar/composer | [x] | 2026-05-24 | `border-radius` → токены в сайдбаре и composer |
 | radius messages/modals | [x] | 2026-05-24 | Пузыри, lightbox, modal, gallery, error-banner; `--radius-xs/2xs` в tokens |
+| change password UI | [x] | 2026-05-24 | `POST /api/auth/change-password`, форма в настройках |
+| chat-message-blocks.js | [x] | 2026-05-24 | Reasoning/RAG DOM вынесены из chat.js — [§10.8](#108-модули-staticjs-без-сборки) |
+| chat-ws.js | [x] | 2026-05-24 | `ChatSocket` вынесен из chat.js |
+| RUNBOOK restore/HTTPS | [x] | 2026-05-24 | Квартальный restore + nginx в [docs/RUNBOOK.md](docs/RUNBOOK.md) |
+| chat-auth.js | [x] | 2026-05-24 | Auth UI вынесен из chat.js |
+| chat-composer.js | [x] | 2026-05-24 | Composer вынесен из chat.js |
 
 ---
 
@@ -2134,7 +2178,7 @@ MVP считается готовым после завершения **этап
 | M2 — Stable runtime | ✅ P1 + Ф1 |
 | M3 — Platform v2 | ✅ P2.1–P2.5, Ф2 |
 
-**Автотесты:** `pytest -q` → **283 passed**. Парадигма и очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов).
+**Автотесты:** `pytest -q` → **290 passed**. Парадигма и очистка: [§14.4](#144-парадигма-pytest-обязательно-для-новых-тестов).
 
 ---
 
@@ -2147,7 +2191,6 @@ MVP считается готовым после завершения **этап
 | Задача | Описание |
 |--------|----------|
 | Basic Auth / HTTPS | [nginx template](deploy/nginx-web-chat.conf.template) — если хост доступен не только вам ([§0.5](#05-модель-эксплуатации-и-приоритеты-разработки)) |
-| Смена пароля в UI | Bootstrap `admin`; см. [BACKLOG.md](BACKLOG.md) |
 | Чеклист §7 на стенде | Пинг LLM/SD, `PUBLIC_BASE_URL`, `systemctl is-enabled`; [RUNBOOK](docs/RUNBOOK.md) |
 
 ### P2 — по необходимости
@@ -2166,7 +2209,7 @@ MVP считается готовым после завершения **этап
 | Расширить security/load тесты | WS reconnect под нагрузкой, concurrent WS |
 | ~~`reasoning_delta` в UI~~ | [x] 2026-05-24 |
 | Расширенный health | disk/generated_count — при необходимости ops |
-| Разбиение `chat.js` | См. [BACKLOG.md](BACKLOG.md) P3 |
+| Разбиение `chat.js` | [x] Модули в §10.8; ядро ~5.2k строк |
 
 > Детальный план — [BACKLOG.md](BACKLOG.md). Инциденты — [docs/RUNBOOK.md](docs/RUNBOOK.md).
 

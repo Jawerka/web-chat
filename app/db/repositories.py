@@ -103,6 +103,10 @@ class UserRepository:
         user.last_login_at = datetime.now(UTC)
         await self._session.flush()
 
+    async def update_password_hash(self, user: User, password_hash: str) -> None:
+        user.password_hash = password_hash
+        await self._session.flush()
+
 
 class PresetRepository:
     """CRUD и операции с пресетами."""

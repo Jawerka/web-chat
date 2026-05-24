@@ -9,20 +9,13 @@ const SCROLL_STICKY_PX = 72;
 const SCROLL_FOLLOW_PX = 28;
 
 const PRESET_DRAFTS_STORAGE_KEY = 'webchat_preset_drafts_v1';
-/** Черновик поля ввода и вложений по беседе (до отправки) */
-const COMPOSER_DRAFTS_STORAGE_KEY = 'webchat_composer_drafts_v1';
 /** Позиция прокрутки истории по беседе */
 const SCROLL_POSITIONS_STORAGE_KEY = 'webchat_scroll_positions_v1';
 const SCROLL_POSITION_SAVE_DEBOUNCE_MS = 400;
 const SCROLL_POSITIONS_MAX_ENTRIES = 80;
 /** Задержка перед оверлеем при смене беседы (быстрые переключения без мигания). */
 const CONV_SWITCH_OVERLAY_DELAY_MS = 140;
-/** Вложения после перехода из галереи (скрепка → новый чат) */
-const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
-const ACCEPTED_UPLOAD_ACCEPT =
-  'image/jpeg,image/png,image/webp,image/gif,application/pdf,.docx,text/plain,text/csv';
 const PRESET_LAST_EDIT_STORAGE_KEY = 'webchat_preset_last_edit_id';
-const WS_MAX_RECONNECT_ATTEMPTS = 5;
 
 /** Короткие подписи в плавающем селекте пресета чата */
 const CHAT_PRESET_SHORT_LABELS = {
@@ -155,128 +148,6 @@ const MESSAGE_ACTION_DEFS = [
   { key: 'regenerate', label: 'Перегенерировать', title: 'Перегенерировать', icon: MSG_ICONS.regen },
   { key: 'delete', label: 'Удалить', title: 'Удалить', icon: MSG_ICONS.delete, danger: true },
 ];
-
-class ChatSocket {
-  constructor(conversationId, handlers) {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    this.url = `${proto}//${window.location.host}/ws/${conversationId}`;
-    this.conversationId = conversationId;
-    this.handlers = handlers;
-    this.ws = null;
-    this._pingTimer = null;
-    this._reconnectTimer = null;
-    this._reconnectAttempt = 0;
-    this._shouldReconnect = true;
-    this._maxReconnectAttempts = WS_MAX_RECONNECT_ATTEMPTS;
-  }
-
-  connect() {
-    if (this.ws) this.disconnect(false);
-    this._shouldReconnect = true;
-    this.handlers.onConnecting?.();
-
-    this.ws = new WebSocket(this.url);
-    this.ws.onopen = () => {
-      this._reconnectAttempt = 0;
-      this._pingTimer = setInterval(() => {
-        if (this.ws?.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ type: 'ping' }));
-        }
-      }, 30000);
-      this.handlers.onOpen?.();
-    };
-    this.ws.onmessage = (e) => {
-      try {
-        this._dispatch(JSON.parse(e.data));
-      } catch (err) {
-        window.appLog?.error('ws', 'Ошибка разбора WS-сообщения', err.message);
-      }
-    };
-    this.ws.onclose = () => {
-      clearInterval(this._pingTimer);
-      this.handlers.onClose?.();
-      this._scheduleReconnect();
-    };
-    this.ws.onerror = () => this.handlers.onError?.();
-  }
-
-  disconnect(stopReconnect = true) {
-    if (stopReconnect) this._shouldReconnect = false;
-    clearInterval(this._pingTimer);
-    clearTimeout(this._reconnectTimer);
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
-      this.ws = null;
-    }
-  }
-
-  _scheduleReconnect() {
-    if (!this._shouldReconnect) return;
-    if (this._reconnectAttempt >= this._maxReconnectAttempts) {
-      this._shouldReconnect = false;
-      this.handlers.onReconnectExhausted?.(
-        this._reconnectAttempt,
-        this._maxReconnectAttempts,
-      );
-      return;
-    }
-    const attempt = this._reconnectAttempt + 1;
-    const delay = Math.min(1000 * 2 ** this._reconnectAttempt, 15000);
-    this._reconnectAttempt = attempt;
-    this.handlers.onReconnecting?.(delay, attempt, this._maxReconnectAttempts);
-    this._reconnectTimer = setTimeout(() => this.connect(), delay);
-  }
-
-  sendUserMessage(text, attachmentIds, integration) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('Нет соединения с сервером');
-    }
-    const payload = {
-      type: 'user_message',
-      text,
-      attachment_ids: attachmentIds,
-      ...integration,
-    };
-    this.ws.send(JSON.stringify(payload));
-  }
-
-  cancel() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'cancel' }));
-    }
-  }
-
-  sendRegenerate(messageId, integration = {}) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('Нет соединения с сервером');
-    }
-    this.ws.send(JSON.stringify({
-      type: 'regenerate',
-      message_id: messageId,
-      ...integration,
-    }));
-  }
-
-  _dispatch(msg) {
-    const h = this.handlers;
-    switch (msg.type) {
-      case 'connected': h.onConnected?.(msg); break;
-      case 'assistant_draft': h.onAssistantDraft?.(msg); break;
-      case 'ack': h.onAck?.(msg); break;
-      case 'text_delta': h.onTextDelta?.(msg.content || ''); break;
-      case 'reasoning_delta': h.onReasoningDelta?.(msg.content || ''); break;
-      case 'image': h.onImages?.(msg.urls || []); break;
-      case 'tool_start': h.onToolStart?.(msg.name, msg.arguments); break;
-      case 'tool_done': h.onToolDone?.(msg.name, msg.summary); break;
-      case 'progress': h.onProgress?.(msg); break;
-      case 'generation_update': h.onGenerationUpdate?.(msg); break;
-      case 'done': h.onDone?.(msg); break;
-      case 'error': h.onWsError?.(msg.message, msg.code, msg.error_id); break;
-      default: break;
-    }
-  }
-}
 
 class ChatApp {
   constructor() {
@@ -443,6 +314,8 @@ class ChatApp {
       usersList: document.getElementById('settings-users-list'),
       createUserForm: document.getElementById('settings-create-user-form'),
       createUserError: document.getElementById('settings-create-user-error'),
+      changePasswordForm: document.getElementById('settings-change-password-form'),
+      changePasswordError: document.getElementById('settings-change-password-error'),
     };
 
     this.log?.info('app', 'Интерфейс загружен');
@@ -485,7 +358,7 @@ class ChatApp {
     if (this.config.auth_enabled) {
       try {
         this.currentUser = await this.api('/api/auth/me');
-        this._initAuthUI();
+        WebChatAuth.initUi(this);
       } catch (err) {
         const msg = err?.message || '';
         if (msg.includes('Требуется вход') || msg.includes('401')) {
@@ -535,11 +408,7 @@ class ChatApp {
     this._bindSidebarSwipeGestures();
 
     this.$.settingsBtn?.addEventListener('click', () => this.showPanel('settings'));
-    this.$.authLogoutBtn?.addEventListener('click', () => this.logout());
-    this.$.createUserForm?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      void this.createUserFromSettings();
-    });
+    WebChatAuth.bindEvents(this);
     this.$.macroInsertBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this.promptMacros.isPickerOpen()) {
@@ -549,7 +418,7 @@ class ChatApp {
       }
     });
     this._initMacroContextToggle();
-    this._initComposerToolsMenu();
+    WebChatComposer.bindEvents(this);
     document.addEventListener('click', (e) => {
       const pop = document.getElementById('macro-picker-popover');
       if (!pop || pop.classList.contains('hidden')) return;
@@ -567,33 +436,7 @@ class ChatApp {
     document.getElementById('logs-clear-all')?.addEventListener('click', () => this.clearAllLogs());
     document.getElementById('error-banner-close').addEventListener('click', () => this.hideError());
     this.$.errorBannerRetry?.addEventListener('click', () => this._retrySocketConnection());
-    this.$.sendBtn?.addEventListener('click', () => this.sendMessage());
     this.$.cancelBtn?.addEventListener('click', () => this.cancelGeneration());
-
-    this.$.userInput?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        if (this.promptMacros.isAutocompleteOpen()) {
-          e.preventDefault();
-          this.promptMacros.applyAutocompleteSelection();
-          return;
-        }
-        e.preventDefault();
-        this.sendMessage();
-      }
-    });
-    this.$.userInput?.addEventListener('input', () => {
-      this.autoResizeInput();
-      this._scheduleComposerDraftSave();
-      this._scheduleRagPreview();
-    });
-    this.$.userInput?.addEventListener('paste', (e) => this._onComposerPaste(e));
-    window.addEventListener('resize', () => this.autoResizeInput());
-    requestAnimationFrame(() => {
-      this.autoResizeInput();
-      this._syncComposerScrollPad();
-    });
-    this._initComposerScrollPadObserver();
-    this.$.fileInput.addEventListener('change', (e) => this.uploadFiles(e.target.files));
     this.$.presetSelect?.addEventListener('change', () => this.onPresetSelectChange());
     this.$.chatPresetSelect?.addEventListener('change', () => this.onChatPresetChange());
     this.$.presetPromptSaveBtn?.addEventListener('click', () => this.savePresetPrompt());
@@ -708,7 +551,7 @@ class ChatApp {
       }
     });
 
-    this._initComposerFileHandlers();
+    WebChatComposer.initFileHandlers(this);
 
     this._onDocumentClickCancelDelete = (e) => {
       if (this._pendingDeleteConvId) {
@@ -738,7 +581,7 @@ class ChatApp {
 
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.currentConvId) {
-        this._saveComposerDraft(this.currentConvId);
+        WebChatComposer.saveDraft(this, this.currentConvId);
         this._saveScrollPosition(this.currentConvId);
       } else if (!document.hidden) {
         void this._tickGlobalSync();
@@ -746,13 +589,13 @@ class ChatApp {
     });
     window.addEventListener('pagehide', () => {
       if (this.currentConvId) {
-        this._saveComposerDraft(this.currentConvId);
+        WebChatComposer.saveDraft(this, this.currentConvId);
         this._saveScrollPosition(this.currentConvId);
       }
     });
     window.addEventListener('pageshow', (ev) => {
       if (!this.currentConvId) return;
-      this._restoreComposerDraft(this.currentConvId);
+      WebChatComposer.restoreDraft(this, this.currentConvId);
       if (ev.persisted) {
         this._restoreScrollPosition(this.currentConvId);
       }
@@ -770,7 +613,7 @@ class ChatApp {
       this.$.settingsPanel?.classList.remove('hidden');
       this.syncPresetPromptField();
       this._hideSettingsSaveStatus();
-      void this._refreshAdminUsersList();
+      void WebChatAuth.refreshAdminUsersList(this);
       this.closeSidebar();
     } else if (panelName === 'logs') {
       this.$.logsPanel?.classList.remove('hidden');
@@ -1124,87 +967,6 @@ class ChatApp {
     }
     if (res.status === 204) return null;
     return res.json();
-  }
-
-  _initAuthUI() {
-    if (!this.config.auth_enabled || !this.currentUser) return;
-    this.$.accountSection?.classList.remove('hidden');
-    const u = this.currentUser;
-    if (this.$.accountLogin) {
-      this.$.accountLogin.textContent = u.display_name || u.login;
-    }
-    if (this.$.accountRole) {
-      const isAdmin = u.role === 'admin';
-      this.$.accountRole.textContent = isAdmin ? 'Администратор' : 'Пользователь';
-      this.$.accountRole.classList.toggle('is-admin', isAdmin);
-    }
-    if (u.role === 'admin') {
-      this.$.adminSection?.classList.remove('hidden');
-      void this._refreshAdminUsersList();
-    }
-  }
-
-  async logout() {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-    } catch { /* ignore */ }
-    window.location.replace('/login');
-  }
-
-  async _refreshAdminUsersList() {
-    if (!this.config.auth_enabled || this.currentUser?.role !== 'admin' || !this.$.usersList) {
-      return;
-    }
-    try {
-      const users = await this.api('/api/users');
-      this.$.usersList.replaceChildren();
-      if (!users?.length) {
-        const li = document.createElement('li');
-        li.textContent = 'Нет пользователей';
-        this.$.usersList.appendChild(li);
-        return;
-      }
-      for (const user of users) {
-        const li = document.createElement('li');
-        const login = document.createElement('span');
-        login.className = 'user-login';
-        login.textContent = user.login;
-        const role = document.createElement('span');
-        role.className = 'user-role';
-        role.textContent = user.role === 'admin' ? 'admin' : 'user';
-        li.append(login, role);
-        this.$.usersList.appendChild(li);
-      }
-    } catch (err) {
-      this.log?.warn('auth', 'Не удалось загрузить список пользователей', err?.message);
-    }
-  }
-
-  async createUserFromSettings() {
-    if (!this.$.createUserForm) return;
-    this.$.createUserError?.classList.add('hidden');
-    const login = document.getElementById('settings-new-login')?.value?.trim() || '';
-    const password = document.getElementById('settings-new-password')?.value || '';
-    const display_name = document.getElementById('settings-new-display')?.value?.trim() || undefined;
-    const role = document.getElementById('settings-new-role')?.value || 'user';
-    const btn = document.getElementById('settings-create-user-btn');
-    if (btn) btn.disabled = true;
-    try {
-      await this.api('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login, password, display_name, role }),
-      });
-      this.$.createUserForm.reset();
-      await this._refreshAdminUsersList();
-    } catch (err) {
-      if (this.$.createUserError) {
-        this.$.createUserError.textContent = err?.message || 'Ошибка создания';
-        this.$.createUserError.classList.remove('hidden');
-      }
-    } finally {
-      if (btn) btn.disabled = false;
-    }
   }
 
   _readPresetDrafts() {
@@ -2315,7 +2077,7 @@ class ChatApp {
 
     this.conversations = remaining;
     this._conversationsFingerprint = this._conversationsFingerprintFrom(this.conversations);
-    this._clearComposerDraft(id);
+    WebChatComposer.clearDraft(this, id);
     this._clearScrollPosition(id);
 
     if (wasCurrent) {
@@ -2358,7 +2120,7 @@ class ChatApp {
   }
 
   _clearCurrentConversation() {
-    if (this.currentConvId) this._clearComposerDraft(this.currentConvId);
+    if (this.currentConvId) WebChatComposer.clearDraft(this, this.currentConvId);
     this.disconnectSocket();
     this.currentConvId = null;
     this.currentConv = null;
@@ -2371,17 +2133,17 @@ class ChatApp {
     this.$.chatPresetToolbar?.classList.add('hidden');
     this.$.chatComposer.classList.add('hidden');
     this.$.chatMessages.innerHTML = '';
-    this._resetComposerUi();
+    WebChatComposer.resetUi(this);
     this.$.userInput.disabled = true;
     this.$.sendBtn.disabled = true;
     if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = true;
     if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = true;
     if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = true;
     if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = true;
-    this._closeComposerToolsMenu();
+    WebChatComposer.closeToolsMenu(this);
     this._hideRagPreview();
     if (this.streaming) this.endStreaming();
-    this._syncComposerSendState();
+    WebChatComposer.syncSendState(this);
   }
 
   openNewConvModal() {
@@ -2474,7 +2236,7 @@ class ChatApp {
     }
 
     if (this.currentConvId && this.currentConvId !== id) {
-      this._saveComposerDraft(this.currentConvId);
+      WebChatComposer.saveDraft(this, this.currentConvId);
       this._saveScrollPosition(this.currentConvId);
     }
 
@@ -2508,7 +2270,7 @@ class ChatApp {
       if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = false;
       if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = false;
 
-      this._resetComposerUi();
+      WebChatComposer.resetUi(this);
       this._updateDocumentRagToggleUi();
       this._scheduleRagPreview();
       this.connectSocket();
@@ -2533,14 +2295,14 @@ class ChatApp {
         }
 
         await this._resumeOngoingGeneration();
-        this._restoreComposerDraft(id);
-        this._restorePendingAttachmentsFromSession();
+        WebChatComposer.restoreDraft(this, id);
+        WebChatComposer.restorePendingFromSession(this);
         this.renderConvList();
       } catch (err) {
         this.showError(err.message || 'Не удалось загрузить беседу');
         this.log?.error('chat', err.message || 'selectConversation failed');
       }
-      this._syncComposerSendState();
+      WebChatComposer.syncSendState(this);
     } catch (err) {
       if (prevConvId && prevConvId !== id) {
         this.currentConvId = prevConvId;
@@ -2725,7 +2487,7 @@ class ChatApp {
     const bubble = el.querySelector('.message-bubble');
     const grid = el.querySelector('.message-images');
     el.dataset.rawContent = text || '';
-    const reasoningBlock = this._buildMessageReasoning(reasoning);
+    const reasoningBlock = WebChatMessageBlocks.buildMessageReasoning(reasoning);
     const existingReasoning = el.querySelector('.message-reasoning');
     if (reasoningBlock) {
       if (existingReasoning) existingReasoning.replaceWith(reasoningBlock);
@@ -2785,7 +2547,7 @@ class ChatApp {
           void this._syncAfterReconnect();
         }
         this._recomputeUiState();
-        this._syncComposerSendState();
+        WebChatComposer.syncSendState(this);
       },
       onClose: () => {
         this.log?.warn('ws', 'Соединение закрыто');
@@ -2834,35 +2596,7 @@ class ChatApp {
     this.socket?.disconnect();
     this.socket = null;
     this._recomputeUiState();
-    this._syncComposerSendState();
-  }
-
-  _composerHasPayload(text) {
-    const trimmed = (text ?? this.$.userInput?.value ?? '').trim();
-    return Boolean(trimmed || this.pendingAttachments.length);
-  }
-
-  _isComposerBusy() {
-    return Boolean(this.streaming || this._generationResumeActive);
-  }
-
-  _syncComposerSendState() {
-    const sendBtn = this.$.sendBtn;
-    const cancelBtn = this.$.cancelBtn;
-    if (!sendBtn) return;
-
-    const busy = this._isComposerBusy();
-    if (busy) {
-      sendBtn.classList.add('hidden');
-      sendBtn.disabled = true;
-      cancelBtn?.classList.remove('hidden');
-      return;
-    }
-
-    cancelBtn?.classList.add('hidden');
-    sendBtn.classList.remove('hidden');
-    const inputDisabled = Boolean(this.$.userInput?.disabled);
-    sendBtn.disabled = !this.currentConvId || inputDisabled;
+    WebChatComposer.syncSendState(this);
   }
 
   async _ensureSocketReady(timeoutMs = 8000) {
@@ -2887,20 +2621,9 @@ class ChatApp {
     });
   }
 
-  _sendBlockedReason(text) {
-    if (!this.currentConvId) return 'Сначала выберите или создайте беседу';
-    if (this.$.userInput?.disabled) return 'Поле ввода недоступно';
-    if (this._isComposerBusy()) return 'Дождитесь окончания генерации';
-    if (!this._composerHasPayload(text)) return null;
-    if (!this.socket) return 'Подключение к серверу…';
-    if (this.socket.ws?.readyState === WebSocket.CONNECTING) return 'Подключение к серверу…';
-    if (this.socket.ws?.readyState !== WebSocket.OPEN) return 'Нет соединения с сервером';
-    return null;
-  }
-
   async sendMessage() {
     const text = this.$.userInput?.value?.trim() ?? '';
-    const blocked = this._sendBlockedReason(text);
+    const blocked = WebChatComposer.sendBlockedReason(this, text);
     if (blocked) {
       if (blocked !== null) this.showError(blocked, 3500);
       return;
@@ -2922,8 +2645,8 @@ class ChatApp {
       .map((a) => mediaFullUrl(a.preview_url))
       .filter(Boolean);
     this.addUserBubble(text, null, pendingImages);
-    this._resetComposerUi();
-    this._clearComposerDraft(this.currentConvId);
+    WebChatComposer.resetUi(this);
+    WebChatComposer.clearDraft(this, this.currentConvId);
     this.startStreaming();
 
     try {
@@ -2953,7 +2676,7 @@ class ChatApp {
       });
 
       this._exitMessageEditUi();
-      this._resetComposerUi();
+      WebChatComposer.resetUi(this);
 
       if (role === 'user') {
         if (row) {
@@ -2976,7 +2699,7 @@ class ChatApp {
           this._updateUserRowImages(row, pendingForUser);
           this._removeFollowingRows(row, false);
         }
-        this._clearComposerDraft(this.currentConvId);
+        WebChatComposer.clearDraft(this, this.currentConvId);
         await this._runRegenerate(messageId);
       } else if (row) {
         const mb = row.querySelector('.message-bubble');
@@ -2988,8 +2711,8 @@ class ChatApp {
       if (/не найдено|not found/i.test(err.message)) {
         this.log?.warn('msg', 'Сообщение не найдено на сервере — перезагрузка истории');
         this._exitMessageEditUi();
-        this._resetComposerUi();
-        if (this.currentConvId) this._restoreComposerDraft(this.currentConvId);
+        WebChatComposer.resetUi(this);
+        if (this.currentConvId) WebChatComposer.restoreDraft(this, this.currentConvId);
         await this.loadMessages();
       }
     }
@@ -3009,20 +2732,20 @@ class ChatApp {
     if (!this.editingMessageId) return;
     const backup = this._editComposerBackup;
     this._exitMessageEditUi();
-    this._resetComposerUi();
+    WebChatComposer.resetUi(this);
 
     if (backup) {
       this.$.userInput.value = backup.text;
-      this.autoResizeInput();
+      WebChatComposer.autoResizeInput(this);
       for (const att of backup.attachments) {
         this.pendingAttachments.push(att);
-        this.renderAttachmentChip(att);
+        WebChatComposer.renderAttachmentChip(this, att);
       }
       if (this.pendingAttachments.length) {
         this.$.attachmentStrip.classList.remove('hidden');
       }
     } else if (this.currentConvId) {
-      this._restoreComposerDraft(this.currentConvId);
+      WebChatComposer.restoreDraft(this, this.currentConvId);
     }
   }
 
@@ -3057,7 +2780,7 @@ class ChatApp {
     this._setUiActivityStage('llm_thinking');
     this.streamText = '';
     this.streamReasoningText = '';
-    this._syncComposerSendState();
+    WebChatComposer.syncSendState(this);
 
     const el = document.createElement('div');
     el.className = 'chat-message assistant streaming waiting';
@@ -3306,7 +3029,7 @@ class ChatApp {
       this.streamEl.classList.toggle('has-content', Boolean(displayText));
     }
     this.streamEl.classList.toggle('has-images', hasImages);
-    this._syncComposerSendState();
+    WebChatComposer.syncSendState(this);
   }
 
   _bindStreamToMessageId(messageId) {
@@ -3620,7 +3343,7 @@ class ChatApp {
         const row = this._findRow(messageId);
         const msgEl = row?.querySelector('.chat-message.assistant');
         if (msgEl && !msgEl.querySelector('.message-rag-sources')) {
-          const block = this._buildMessageRagSources(ragHits);
+          const block = WebChatMessageBlocks.buildMessageRagSources(ragHits);
           if (block) msgEl.appendChild(block);
         }
       }
@@ -3629,7 +3352,7 @@ class ChatApp {
         const row = this._findRow(messageId);
         const msgEl = row?.querySelector('.chat-message.assistant');
         if (msgEl && !msgEl.querySelector('.message-reasoning')) {
-          const block = this._buildMessageReasoning(reasoning);
+          const block = WebChatMessageBlocks.buildMessageReasoning(reasoning);
           if (block) msgEl.insertBefore(block, msgEl.firstChild);
         }
       }
@@ -3723,7 +3446,7 @@ class ChatApp {
     this.streaming = false;
     this._uiActivityStage = null;
     this._recomputeUiState();
-    this._syncComposerSendState();
+    WebChatComposer.syncSendState(this);
     if (!this.$.userInput.disabled) {
       this.$.userInput.focus();
     }
@@ -3865,7 +3588,7 @@ class ChatApp {
     el.dataset.rawContent = text || '';
     const displayText = stripMarkdownImages(text);
     const urls = [...new Set(imageUrls.map(mediaFullUrl).filter(Boolean))];
-    const reasoningBlock = this._buildMessageReasoning(reasoning);
+    const reasoningBlock = WebChatMessageBlocks.buildMessageReasoning(reasoning);
     if (reasoningBlock) el.appendChild(reasoningBlock);
     if (displayText) {
       const bubble = document.createElement('div');
@@ -3879,53 +3602,10 @@ class ChatApp {
       for (const url of urls) grid.appendChild(this._createImage(url, { scrollOnLoad: false }));
       el.appendChild(grid);
     }
-    const ragBlock = this._buildMessageRagSources(ragHits);
+    const ragBlock = WebChatMessageBlocks.buildMessageRagSources(ragHits);
     if (ragBlock) el.appendChild(ragBlock);
     this._bindImageClicks(el);
     return this._wrapMessage('assistant', el, messageId);
-  }
-
-  _buildMessageReasoning(reasoning) {
-    const raw = (reasoning || '').trim();
-    if (!raw) return null;
-    const details = document.createElement('details');
-    details.className = 'message-reasoning';
-    const summary = document.createElement('summary');
-    summary.className = 'message-reasoning-summary';
-    summary.textContent = 'Размышления модели';
-    details.appendChild(summary);
-    const body = document.createElement('pre');
-    body.className = 'message-reasoning-body';
-    body.textContent = raw;
-    details.appendChild(body);
-    return details;
-  }
-
-  _buildMessageRagSources(hits) {
-    if (!hits?.length) return null;
-    const details = document.createElement('details');
-    details.className = 'message-rag-sources';
-    const summary = document.createElement('summary');
-    summary.className = 'message-rag-sources-summary';
-    summary.textContent = `Ответ основан на документах (${hits.length})`;
-    details.appendChild(summary);
-    const list = document.createElement('div');
-    list.className = 'message-rag-sources-list';
-    for (const hit of hits) {
-      const item = document.createElement('div');
-      item.className = 'message-rag-sources-item';
-      const file = document.createElement('div');
-      file.className = 'message-rag-sources-file';
-      const score = typeof hit.score === 'number' ? ` · ${(hit.score * 100).toFixed(0)}%` : '';
-      file.textContent = `${hit.file_name || 'Документ'} #${hit.chunk_index ?? 0}${score}`;
-      const snippet = document.createElement('div');
-      snippet.className = 'message-rag-sources-snippet';
-      snippet.textContent = hit.snippet || '';
-      item.append(file, snippet);
-      list.appendChild(item);
-    }
-    details.appendChild(list);
-    return details;
   }
 
   async _attachRagSourcesAfterTurn(assistantMessageId) {
@@ -3948,7 +3628,7 @@ class ChatApp {
     }
     if (!hits?.length) return;
 
-    const block = this._buildMessageRagSources(hits);
+    const block = WebChatMessageBlocks.buildMessageRagSources(hits);
     if (block) msgEl.appendChild(block);
   }
 
@@ -4105,7 +3785,7 @@ class ChatApp {
     this.editingMessageId = messageId;
     this.editingRole = role;
     this.$.userInput.value = text.trim();
-    this.autoResizeInput();
+    WebChatComposer.autoResizeInput(this);
     this.$.userInput.focus();
   }
 
@@ -4114,7 +3794,7 @@ class ChatApp {
       text: this.$.userInput.value,
       attachments: this.pendingAttachments.map((a) => ({ ...a })),
     };
-    this._resetComposerUi();
+    WebChatComposer.resetUi(this);
 
     this.editingMessageId = messageId;
     this.editingRole = 'user';
@@ -4122,7 +3802,7 @@ class ChatApp {
     row.querySelector('.message-images')?.classList.add('hidden');
 
     this.$.userInput.value = text.trim();
-    this.autoResizeInput();
+    WebChatComposer.autoResizeInput(this);
     this.$.userInput.focus();
 
     try {
@@ -4133,7 +3813,7 @@ class ChatApp {
         if (!att?.id) continue;
         if (this.pendingAttachments.some((a) => a.id === att.id)) continue;
         this.pendingAttachments.push(att);
-        this.renderAttachmentChip(att);
+        WebChatComposer.renderAttachmentChip(this, att);
       }
       if (this.pendingAttachments.length) {
         this.$.attachmentStrip.classList.remove('hidden');
@@ -4408,71 +4088,6 @@ class ChatApp {
     });
   }
 
-  _readComposerDrafts() {
-    try {
-      const raw = localStorage.getItem(COMPOSER_DRAFTS_STORAGE_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-
-  _writeComposerDrafts(drafts) {
-    try {
-      localStorage.setItem(COMPOSER_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
-    } catch (err) {
-      this.log?.warn('chat', `Не удалось сохранить черновик: ${err.message}`);
-    }
-  }
-
-  _formatApiErrorDetail(detail) {
-    if (!detail) return '';
-    if (typeof detail === 'string') return detail;
-    if (Array.isArray(detail)) {
-      return detail
-        .map((item) => (typeof item === 'object' && item?.msg ? item.msg : String(item)))
-        .join('; ');
-    }
-    return String(detail);
-  }
-
-  _scheduleComposerDraftSave() {
-    if (!this.currentConvId) return;
-    clearTimeout(this._composerDraftDebounceTimer);
-    this._composerDraftDebounceTimer = setTimeout(
-      () => this._saveComposerDraft(this.currentConvId),
-      400,
-    );
-  }
-
-  _saveComposerDraft(convId = this.currentConvId) {
-    if (!convId) return;
-    const text = this.$.userInput?.value ?? '';
-    const attachments = this.pendingAttachments.map((a) => ({
-      id: a.id,
-      original_name: a.original_name,
-      mime_type: a.mime_type,
-      size_bytes: a.size_bytes,
-      preview_url: a.preview_url,
-    }));
-    const drafts = this._readComposerDrafts();
-    if (!text.trim() && !attachments.length) {
-      delete drafts[convId];
-    } else {
-      drafts[convId] = { text, attachments, updatedAt: Date.now() };
-    }
-    this._writeComposerDrafts(drafts);
-  }
-
-  _clearComposerDraft(convId) {
-    if (!convId) return;
-    const drafts = this._readComposerDrafts();
-    if (!drafts[convId]) return;
-    delete drafts[convId];
-    this._writeComposerDrafts(drafts);
-  }
 
   _readScrollPositions() {
     try {
@@ -4662,271 +4277,6 @@ class ChatApp {
     this._applyScrollRestore(entry);
   }
 
-  _resetComposerUi() {
-    this.pendingAttachments = [];
-    this.$.attachmentStrip.innerHTML = '';
-    this.$.attachmentStrip.classList.add('hidden');
-    this._closeComposerToolsMenu();
-    if (this.$.userInput) {
-      this.$.userInput.value = '';
-      this.autoResizeInput();
-    }
-  }
-
-  _restoreComposerDraft(convId) {
-    if (!convId) return;
-    const draft = this._readComposerDrafts()[convId];
-    if (!draft) return;
-
-    if (typeof draft.text === 'string' && this.$.userInput) {
-      this.$.userInput.value = draft.text;
-      this.autoResizeInput();
-    }
-
-    const list = Array.isArray(draft.attachments) ? draft.attachments : [];
-    for (const att of list) {
-      if (!att?.id) continue;
-      if (this.pendingAttachments.some((a) => a.id === att.id)) continue;
-      this.pendingAttachments.push(att);
-      this.renderAttachmentChip(att);
-    }
-    if (this.pendingAttachments.length) {
-      this.$.attachmentStrip.classList.remove('hidden');
-    }
-  }
-
-  _initComposerFileHandlers() {
-    const body = this.$.chatBody;
-    const dropZone = document.getElementById('drop-zone');
-    if (!body) return;
-
-    const onDragEnter = (e) => {
-      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
-      e.preventDefault();
-      this._fileDragDepth += 1;
-      if (this._fileDragDepth === 1) this._setFileDragActive(true);
-    };
-    const onDragOver = (e) => {
-      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-      if (!body.classList.contains('is-file-drag')) this._setFileDragActive(true);
-    };
-    const onDragLeave = (e) => {
-      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
-      const leaving = e.currentTarget;
-      const related = e.relatedTarget;
-      if (related && leaving.contains(related)) return;
-      this._fileDragDepth = Math.max(0, this._fileDragDepth - 1);
-      if (this._fileDragDepth === 0) this._setFileDragActive(false);
-    };
-    const onDrop = (e) => {
-      if (!this._dataTransferHasFiles(e.dataTransfer)) return;
-      e.preventDefault();
-      this._fileDragDepth = 0;
-      this._setFileDragActive(false);
-      dropZone?.classList.remove('drag-over');
-      const files = this._filesFromDataTransfer(e.dataTransfer);
-      if (files.length) void this.uploadFiles(files);
-    };
-
-    body.addEventListener('dragenter', onDragEnter);
-    body.addEventListener('dragover', onDragOver);
-    body.addEventListener('dragleave', onDragLeave);
-    body.addEventListener('drop', onDrop);
-    document.addEventListener('dragend', () => {
-      this._fileDragDepth = 0;
-      this._setFileDragActive(false);
-      dropZone?.classList.remove('drag-over');
-    });
-
-    if (this.$.fileInput && !this.$.fileInput.accept) {
-      this.$.fileInput.accept = ACCEPTED_UPLOAD_ACCEPT;
-    }
-  }
-
-  _dataTransferHasFiles(dt) {
-    if (!dt?.types) return false;
-    const types = dt.types;
-    if (typeof types.includes === 'function') return types.includes('Files');
-    return Array.from(types).indexOf('Files') >= 0;
-  }
-
-  _filesFromDataTransfer(dt) {
-    if (!dt) return [];
-    if (dt.files?.length) return Array.from(dt.files);
-    const out = [];
-    if (dt.items) {
-      for (const item of dt.items) {
-        if (item.kind === 'file') {
-          const f = item.getAsFile();
-          if (f) out.push(f);
-        }
-      }
-    }
-    return out;
-  }
-
-  _filesFromClipboard(clipboardData) {
-    if (!clipboardData) return [];
-    const fromItems = [];
-    if (clipboardData.items) {
-      for (const item of clipboardData.items) {
-        if (item.kind === 'file') {
-          const f = item.getAsFile();
-          if (f) fromItems.push(f);
-        }
-      }
-    }
-    if (fromItems.length) return fromItems;
-    if (clipboardData.files?.length) return Array.from(clipboardData.files);
-    return [];
-  }
-
-  _onComposerPaste(e) {
-    const files = this._filesFromClipboard(e.clipboardData);
-    if (files.length) {
-      e.preventDefault();
-      void this.uploadFiles(files);
-      return;
-    }
-    requestAnimationFrame(() => this.autoResizeInput());
-  }
-
-  _setFileDragActive(active) {
-    this.$.chatBody?.classList.toggle('is-file-drag', active);
-    this.$.chatDropOverlay?.classList.toggle('hidden', !active);
-    this.$.chatDropOverlay?.setAttribute('aria-hidden', active ? 'false' : 'true');
-    const dropZone = document.getElementById('drop-zone');
-    dropZone?.classList.toggle('drag-over', active);
-    if (active && this.$.chatDropOverlayTitle && !this._uploadInProgress) {
-      this.$.chatDropOverlayTitle.textContent = 'Отпустите для прикрепления';
-    }
-  }
-
-  _setComposerUploading(uploading) {
-    this._uploadInProgress = uploading;
-    this.$.chatDropOverlay?.classList.toggle('is-uploading', uploading);
-    if (uploading && this.$.chatDropOverlayTitle) {
-      this.$.chatDropOverlayTitle.textContent = 'Загрузка…';
-    }
-  }
-
-  showUploadSuccess(message) {
-    const el = this.$.uploadToast;
-    if (!el) return;
-    clearTimeout(this._uploadToastTimer);
-    el.textContent = message;
-    el.classList.remove('hidden');
-    requestAnimationFrame(() => el.classList.add('is-visible'));
-    this._uploadToastTimer = setTimeout(() => {
-      el.classList.remove('is-visible');
-      setTimeout(() => el.classList.add('hidden'), 220);
-    }, 2800);
-  }
-
-  async uploadFiles(fileList) {
-    if (!this.currentConvId) {
-      this.showError('Сначала выберите или создайте беседу');
-      return;
-    }
-    if (!fileList?.length) return;
-    const files = Array.from(fileList);
-    const max = this.config.max_files_per_message || 10;
-    if (this.pendingAttachments.length + files.length > max) {
-      this.showError(`Максимум ${max} файлов за сообщение`);
-      return;
-    }
-
-    const fd = new FormData();
-    for (const f of files) fd.append('files', f);
-    fd.append('conversation_id', this.currentConvId);
-
-    this._setComposerUploading(true);
-    try {
-      const res = await fetch('/api/upload', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const detail = this._formatApiErrorDetail(body.detail);
-        throw new Error(detail || res.statusText || 'Ошибка загрузки');
-      }
-      const data = await res.json();
-      const added = data.attachments || [];
-      for (const att of added) {
-        this.pendingAttachments.push(att);
-        this.renderAttachmentChip(att, { isNew: true });
-      }
-      if (added.length) {
-        this.$.attachmentStrip.classList.remove('hidden');
-        this._saveComposerDraft(this.currentConvId);
-        const names = added.map((a) => a.original_name).filter(Boolean);
-        if (added.length === 1) {
-          this.showUploadSuccess(`Прикреплён: ${names[0]}`);
-        } else {
-          this.showUploadSuccess(`Прикреплено файлов: ${added.length}`);
-        }
-      }
-    } catch (err) {
-      this.showError(err.message);
-    } finally {
-      this._setComposerUploading(false);
-      this._setFileDragActive(false);
-    }
-    if (this.$.fileInput) this.$.fileInput.value = '';
-  }
-
-  renderAttachmentChip(att, { isNew = false } = {}) {
-    const chip = document.createElement('div');
-    chip.className = 'attachment-chip' + (isNew ? ' is-new' : '');
-    chip.dataset.id = att.id;
-    const previewUrl = att.preview_url ? mediaPreviewUrl(att.preview_url) : '';
-    const preview = previewUrl
-      ? `<img src="${this.escapeAttr(previewUrl)}" alt="">`
-      : '<span class="chip-file-icon">📄</span>';
-    chip.innerHTML = `${preview}<span class="chip-name">${this.escape(att.original_name)}</span>
-      <button type="button" class="attachment-chip-remove" title="Убрать" aria-label="Убрать">×</button>`;
-    chip.querySelector('.attachment-chip-remove').addEventListener('click', () => {
-      this.pendingAttachments = this.pendingAttachments.filter((a) => a.id !== att.id);
-      chip.remove();
-      if (!this.pendingAttachments.length) {
-        this.$.attachmentStrip.classList.add('hidden');
-      }
-      this._saveComposerDraft(this.currentConvId);
-    });
-    this.$.attachmentStrip.appendChild(chip);
-  }
-
-  clearAttachments() {
-    this.pendingAttachments = [];
-    this.$.attachmentStrip.innerHTML = '';
-    this.$.attachmentStrip.classList.add('hidden');
-  }
-
-  _restorePendingAttachmentsFromSession() {
-    const raw = sessionStorage.getItem(PENDING_ATTACHMENTS_KEY);
-    if (!raw) return;
-    sessionStorage.removeItem(PENDING_ATTACHMENTS_KEY);
-    let payload;
-    try {
-      payload = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (payload.conversation_id && payload.conversation_id !== this.currentConvId) return;
-    const list = payload.attachments;
-    if (!Array.isArray(list) || !list.length) return;
-    for (const att of list) {
-      if (!att?.id) continue;
-      if (this.pendingAttachments.some((a) => a.id === att.id)) continue;
-      this.pendingAttachments.push(att);
-      this.renderAttachmentChip(att);
-    }
-    if (this.pendingAttachments.length) {
-      this.$.attachmentStrip.classList.remove('hidden');
-      this.$.userInput?.focus();
-    }
-    this._saveComposerDraft(this.currentConvId);
-  }
 
   _setSettingsChatTitle(title) {
     const el = this.$.settingsChatTitle;
@@ -5252,7 +4602,7 @@ class ChatApp {
       const blob = await res.blob();
       const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
       const file = new File([blob], this._filenameFromLightboxUrl(resolved), { type: mime });
-      await this.uploadFiles([file]);
+      await WebChatComposer.uploadFiles(this, [file]);
       if (closeLightbox) this.closeLightbox();
       this.$.userInput?.focus();
     } catch (err) {
@@ -5349,89 +4699,6 @@ class ChatApp {
     }
   }
 
-  _initComposerScrollPadObserver() {
-    const composer = this.$.chatComposer;
-    if (!composer || typeof ResizeObserver === 'undefined') return;
-    this._composerResizeObserver = new ResizeObserver(() => this._syncComposerScrollPad());
-    this._composerResizeObserver.observe(composer);
-  }
-
-  _syncComposerScrollPad() {
-    const composer = this.$.chatComposer;
-    if (!composer) return;
-    const fadeEl = this.$.chatHistory?.querySelector(':scope > .chat-composer-edge-fade');
-    const fadeH = fadeEl?.offsetHeight || 100;
-    const pad = Math.max(120, composer.offsetHeight + fadeH + 20);
-    document.documentElement.style.setProperty('--composer-scroll-pad', `${pad}px`);
-  }
-
-  _playGenerationDoneSound() {
-    try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      const ctx = new Ctx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.07, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.28);
-      osc.onended = () => ctx.close();
-    } catch {
-      /* звук опционален */
-    }
-  }
-
-  _chatInputMetrics() {
-    const ta = this.$.userInput;
-    const box = ta?.closest('.composer-input-row') || ta?.closest('.chat-input-container');
-    const taStyle = ta ? getComputedStyle(ta) : null;
-    const boxStyle = box ? getComputedStyle(box) : null;
-    const lineHeight = parseFloat(taStyle?.lineHeight) || 20;
-    const padY = parseFloat(taStyle?.paddingTop || 0) + parseFloat(taStyle?.paddingBottom || 0);
-    const borderY = parseFloat(taStyle?.borderTopWidth || 0) + parseFloat(taStyle?.borderBottomWidth || 0);
-    const maxRows = parseInt(boxStyle?.getPropertyValue('--chat-input-max-rows'), 10) || 10;
-    const minH = lineHeight + padY + borderY;
-    const maxH = lineHeight * maxRows + padY + borderY;
-    return { lineHeight, padY, borderY, maxRows, minH, maxH };
-  }
-
-  autoResizeInput() {
-    const ta = this.$.userInput;
-    if (!ta) return;
-
-    const { lineHeight, padY, borderY, maxRows, minH, maxH } = this._chatInputMetrics();
-
-    if (!ta.value) {
-      ta.style.height = `${minH}px`;
-      ta.rows = 1;
-      ta.classList.remove('chat-input--scrollable');
-      this._syncComposerScrollPad();
-      return;
-    }
-
-    ta.style.height = '0px';
-    const contentH = ta.scrollHeight;
-    const nextH = Math.min(Math.max(contentH, minH), maxH);
-    ta.style.height = `${nextH}px`;
-
-    const rows = Math.min(
-      maxRows,
-      Math.max(1, Math.ceil((nextH - padY - borderY) / lineHeight)),
-    );
-    if (ta.rows !== rows) ta.rows = rows;
-
-    const overflow = contentH > maxH + 1;
-    ta.classList.toggle('chat-input--scrollable', overflow);
-    if (overflow) {
-      ta.scrollTop = ta.scrollHeight;
-    }
-    this._syncComposerScrollPad();
-  }
 
   _loadTheme() {
     const dark = localStorage.getItem('webchat_theme') === 'dark'
@@ -5562,65 +4829,6 @@ class ChatApp {
     return order[(idx + 1) % order.length];
   }
 
-  _isComposerToolsMenuOpen() {
-    return this.$.composerToolsMenu?.classList.contains('is-open') ?? false;
-  }
-
-  _openComposerToolsMenu() {
-    const menu = this.$.composerToolsMenu;
-    const btn = this.$.composerMoreBtn;
-    if (!menu || !btn || btn.disabled) return;
-    menu.classList.remove('hidden');
-    menu.classList.add('is-open');
-    btn.classList.add('is-open');
-    btn.setAttribute('aria-expanded', 'true');
-  }
-
-  _closeComposerToolsMenu() {
-    const menu = this.$.composerToolsMenu;
-    const btn = this.$.composerMoreBtn;
-    if (!menu || menu.classList.contains('hidden')) return;
-    menu.classList.add('hidden');
-    menu.classList.remove('is-open');
-    btn?.classList.remove('is-open');
-    btn?.setAttribute('aria-expanded', 'false');
-  }
-
-  _toggleComposerToolsMenu() {
-    if (this._isComposerToolsMenuOpen()) {
-      this._closeComposerToolsMenu();
-    } else {
-      this._openComposerToolsMenu();
-    }
-  }
-
-  _initComposerToolsMenu() {
-    const btn = this.$.composerMoreBtn;
-    const menu = this.$.composerToolsMenu;
-    if (!btn || !menu) return;
-
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._toggleComposerToolsMenu();
-    });
-
-    menu.querySelectorAll('.composer-tools-menu-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        requestAnimationFrame(() => this._closeComposerToolsMenu());
-      });
-    });
-
-    document.addEventListener('click', (e) => {
-      if (!this._isComposerToolsMenuOpen()) return;
-      const t = e.target;
-      if (btn.contains(t) || menu.contains(t)) return;
-      this._closeComposerToolsMenu();
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this._closeComposerToolsMenu();
-    });
-  }
 
   _initMacroContextToggle() {
     const btn = this.$.macroContextFullBtn;
@@ -5858,7 +5066,7 @@ class ChatApp {
     this.$.fontSizeInput.value = String(clamped);
     document.documentElement.style.setProperty('--font-size', `${clamped}px`);
     localStorage.setItem('webchat_font_size', String(clamped));
-    this.autoResizeInput();
+    WebChatComposer.autoResizeInput(this);
   }
 
   changeFontSize(delta) {

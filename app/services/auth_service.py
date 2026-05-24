@@ -121,6 +121,34 @@ async def authenticate_login(
     return user
 
 
+async def change_password(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    current_password: str,
+    new_password: str,
+) -> None:
+    """Сменить пароль текущего пользователя (требуется верный текущий пароль)."""
+    repo = UserRepository(db)
+    user = await repo.get_by_id(user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Требуется вход",
+        )
+    if not verify_password(current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный текущий пароль",
+        )
+    if current_password == new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Новый пароль должен отличаться от текущего",
+        )
+    await repo.update_password_hash(user, hash_password(new_password))
+
+
 async def resolve_authenticated_user(
     db: AsyncSession,
     request: Request,

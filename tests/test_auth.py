@@ -144,6 +144,57 @@ async def test_admin_lists_and_creates_users(
 
 
 @pytest.mark.asyncio
+async def test_change_password_updates_login(
+    client: AsyncClient,
+    auth_settings: None,
+) -> None:
+    from app.db import session as db_session
+    from app.db.models import UserRole
+    from app.db.repositories import UserRepository
+
+    async with db_session.async_session_factory() as session:
+        await UserRepository(session).create_user(
+            login="pwuser",
+            slug="pwuser",
+            display_name="PW",
+            password_hash=hash_password("old-secret"),
+            role=UserRole.USER,
+        )
+        await session.commit()
+
+    login = await client.post(
+        "/api/auth/login",
+        json={"login": "pwuser", "password": "old-secret"},
+    )
+    assert login.status_code == 200
+
+    bad = await client.post(
+        "/api/auth/change-password",
+        json={"current_password": "wrong", "new_password": "new-secret"},
+    )
+    assert bad.status_code == 400
+
+    ok = await client.post(
+        "/api/auth/change-password",
+        json={"current_password": "old-secret", "new_password": "new-secret"},
+    )
+    assert ok.status_code == 204
+
+    old_login = await client.post(
+        "/api/auth/login",
+        json={"login": "pwuser", "password": "old-secret"},
+    )
+    assert old_login.status_code == 401
+
+    await client.post("/api/auth/logout")
+    new_login = await client.post(
+        "/api/auth/login",
+        json={"login": "pwuser", "password": "new-secret"},
+    )
+    assert new_login.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_public_config_includes_auth_enabled(
     client: AsyncClient,
     auth_settings: None,

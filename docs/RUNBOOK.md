@@ -66,4 +66,30 @@ cd /root/web-chat && source .venv/bin/activate && pytest -q
 
 ## Восстановление из бэкапа
 
-См. [deploy/DATABASE-BACKUP.md](../deploy/DATABASE-BACKUP.md). Рекомендуется пробный restore на VM раз в квартал.
+Полная документация: [deploy/DATABASE-BACKUP.md](../deploy/DATABASE-BACKUP.md).
+
+### Квартальная проверка restore (чеклист)
+
+Раз в ~3 месяца на **копии** стенда (VM/другой хост), не на боевом без остановки:
+
+1. Свежий бэкап: `./scripts/backup-database.sh` — убедиться, что архив появился в `data/backups/database/`.
+2. `systemctl stop web-chat` на тестовой копии.
+3. `./scripts/restore-database.sh --list` — выбрать архив (`--index 1` или `--stamp …`).
+4. `./scripts/restore-database.sh --yes` (создаётся safety-backup текущей БД).
+5. `systemctl start web-chat` → `curl -s http://127.0.0.1:8090/api/health | jq`.
+6. В браузере: вход, одна беседа, одно сообщение с картинкой (если были в бэкапе).
+7. Зафиксировать дату проверки в заметках оператора.
+
+При Postgres сверка схемы: `python -m app.scripts.verify_migration --target "$DATABASE_URL"` (см. DATABASE-BACKUP.md).
+
+---
+
+## nginx + HTTPS (если хост не только в LAN)
+
+> Не обязательно для одного пользователя в домашней сети — см. [HANDBOOK §0.5](../HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
+
+1. Шаблон: [deploy/nginx-web-chat.conf.template](../deploy/nginx-web-chat.conf.template) — upstream на `127.0.0.1:8090`, WebSocket upgrade.
+2. TLS: Let's Encrypt или свой сертификат; в `.env`: `AUTH_COOKIE_SECURE=true`, `WEB_CHAT_ENV=production`.
+3. `TRUSTED_PROXY_IPS=127.0.0.1`, `TRUSTED_WS_ORIGINS=https://<ваш-хост>`.
+4. Опционально: Basic Auth в nginx **или** `API_ACCESS_KEY` в приложении — [SECURITY.md](../SECURITY.md).
+5. `nginx -t && systemctl reload nginx` → проверка чата и `/health` по HTTPS.
