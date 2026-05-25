@@ -262,6 +262,7 @@ class ChatApp {
       img2imgGenPresetToggle: document.getElementById('img2img-gen-preset-toggle'),
       img2imgGenPresetPanel: document.getElementById('img2img-gen-preset-panel'),
       img2imgGenPresetEnabled: document.getElementById('img2img-gen-preset-enabled'),
+      img2imgGenPresetPreview: document.getElementById('img2img-gen-preset-preview'),
       img2imgGenPresetFields: document.getElementById('img2img-gen-preset-fields'),
       img2imgDenoiseMin: document.getElementById('img2img-denoise-min'),
       img2imgDenoiseMax: document.getElementById('img2img-denoise-max'),
@@ -1078,6 +1079,8 @@ class ChatApp {
     }
     this.populateGlobalPresetSelect();
     this.populateConvPresetSelect(this.currentConv?.preset_id);
+    WebChatImg2imgPreset?.refreshPresetCache?.(this);
+    WebChatImg2imgPreset?.logDiagnostics?.(this, 'presets_loaded');
   }
 
   _mergeUnsyncedPresetDrafts() {
@@ -1133,7 +1136,11 @@ class ChatApp {
     if (this.presets.length === 0) return;
     const fallback = this.presets.find((p) => p.is_default)?.id ?? this.presets[0].id;
     const activeId = selectedId ?? fallback;
-    const optionAttrs = (p) => `value="${p.id}"${p.id === activeId ? ' selected' : ''}`;
+    const activeKey = activeId != null ? String(activeId).trim().toLowerCase() : '';
+    const optionAttrs = (p) => {
+      const selected = String(p.id).trim().toLowerCase() === activeKey;
+      return `value="${p.id}"${selected ? ' selected' : ''}`;
+    };
     const optionsHtml = this.presets
       .map((p) => `<option ${optionAttrs(p)}>${this.escape(p.name)}</option>`)
       .join('');
@@ -1149,6 +1156,12 @@ class ChatApp {
       this.$.chatPresetSelect.innerHTML = chatOptionsHtml;
       this.$.chatPresetSelect.disabled = disabled;
       this.$.chatPresetSelect.title = 'Пресет для следующего сообщения';
+      if (activeId != null) {
+        this.$.chatPresetSelect.value = String(activeId);
+      }
+    }
+    if (this.$.convPresetSelect && activeId != null) {
+      this.$.convPresetSelect.value = String(activeId);
     }
     this._updateChatPresetToolbar();
   }
@@ -1170,7 +1183,7 @@ class ChatApp {
 
   async _applyConversationPreset(presetId) {
     if (!this.currentConvId) return;
-    if (this.currentConv?.preset_id === presetId) {
+    if (String(this.currentConv?.preset_id) === String(presetId)) {
       WebChatImg2imgPreset?.syncVisibility?.(this);
       return;
     }
@@ -1182,6 +1195,7 @@ class ChatApp {
       });
       if (this.$.convPresetSelect) this.$.convPresetSelect.value = presetId;
       if (this.$.chatPresetSelect) this.$.chatPresetSelect.value = presetId;
+      WebChatImg2imgPreset?.logDiagnostics?.(this, 'preset_patched', { presetId });
     } catch (err) {
       this.showError(err.message || 'Не удалось сменить пресет');
       this.populateConvPresetSelect(this.currentConv?.preset_id);
@@ -2293,6 +2307,8 @@ class ChatApp {
 
       this._setSettingsChatTitle(this.currentConv.title);
       this.populateConvPresetSelect(this.currentConv.preset_id);
+      WebChatImg2imgPreset?.refreshPresetCache?.(this);
+      WebChatImg2imgPreset?.logDiagnostics?.(this, 'conversation_selected');
 
       this.$.placeholder.classList.add('hidden');
       this.$.chatHistory.classList.remove('hidden');
@@ -2708,6 +2724,23 @@ class ChatApp {
     const payloadText = typeof WebChatImg2imgPreset !== 'undefined'
       ? WebChatImg2imgPreset.getPayloadText(this, rawText)
       : rawText;
+    if (typeof WebChatImg2imgPreset !== 'undefined') {
+      WebChatImg2imgPreset.logDiagnostics?.(this, 'send_message', {
+        rawLen: rawText.length,
+        payloadLen: payloadText.length,
+        willSendDisplayText: rawText !== payloadText,
+      });
+      if (
+        WebChatImg2imgPreset.isPanelEnabled?.(this)
+        && payloadText === rawText
+        && WebChatImg2imgPreset.collectDiagnostics?.(this)?.hintFromFieldsOnly
+      ) {
+        this.log?.warn(
+          'img2img-preset',
+          'поля заполнены, но префикс не добавлен — см. диагностику выше',
+        );
+      }
+    }
     const ids = this.pendingAttachments.map((a) => a.id);
     const pendingImages = this.pendingAttachments
       .map((a) => mediaFullUrl(a.preview_url))
@@ -3321,6 +3354,30 @@ class ChatApp {
     poll();
   }
 
+  /** Короткий сигнал после генерации с картинками (без ошибки, если autoplay запрещён). */
+  _playGenerationDoneSound() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 660;
+      gain.gain.value = 0.04;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const t0 = ctx.currentTime;
+      osc.start(t0);
+      osc.stop(t0 + 0.12);
+      osc.onended = () => {
+        void ctx.close().catch(() => {});
+      };
+    } catch {
+      /* Web Audio недоступен или заблокирован политикой браузера */
+    }
+  }
+
   onTurnDone(msg) {
     const assistantMessageId = msg?.assistant_message_id;
     const conversationTitle = msg?.conversation_title;
@@ -3919,6 +3976,33 @@ class ChatApp {
    * user: удаляет только ответы после сообщения, user остаётся.
    * assistant: удаляет этот ответ и всё после, затем ответ на предыдущий user.
    */
+  _previousUserMessageRow(row) {
+    let el = row?.previousElementSibling;
+    while (el) {
+      if (el.classList?.contains('message-row') && el.classList.contains('user')) {
+        return el;
+      }
+      el = el.previousElementSibling;
+    }
+    return null;
+  }
+
+  _llmTextForRegenerate(userRow) {
+    if (!userRow) return null;
+    const rawText = this._extractMessagePlainText(userRow, 'user');
+    if (typeof WebChatImg2imgPreset === 'undefined') {
+      return rawText || null;
+    }
+    const payloadText = WebChatImg2imgPreset.getPayloadText(this, rawText);
+    WebChatImg2imgPreset.logDiagnostics?.(this, 'regenerate', {
+      rawLen: rawText.length,
+      payloadLen: payloadText.length,
+      injected: payloadText !== rawText,
+      outPreview: payloadText.slice(0, 160),
+    });
+    return payloadText || null;
+  }
+
   async _runRegenerate(messageId, { fromAssistant = false } = {}) {
     if (this.streaming || !this.socket) return;
     const row = this._findRow(messageId);
@@ -3930,11 +4014,18 @@ class ChatApp {
       this._removeFollowingRows(row, false);
     }
 
+    const userRow = fromAssistant ? this._previousUserMessageRow(row) : row;
+    const llmTextOverride = this._llmTextForRegenerate(userRow);
+
     this.log?.info('msg', `Перегенерация ${fromAssistant ? 'assistant' : 'user'} ${messageId}`);
     this._regenerating = true;
     this.startStreaming();
     try {
-      this.socket.sendRegenerate(messageId, this.getWsIntegrationPayload());
+      this.socket.sendRegenerate(
+        messageId,
+        this.getWsIntegrationPayload(),
+        llmTextOverride,
+      );
     } catch (err) {
       this.showError(err.message);
       this.endStreaming();
@@ -4411,7 +4502,7 @@ class ChatApp {
           if (conv) conv.title = this.currentConv.title;
           this.renderConvList();
           if (patch.preset_id) {
-            if (this.$.chatPresetSelect) this.$.chatPresetSelect.value = patch.preset_id;
+            this.populateConvPresetSelect(patch.preset_id);
           }
         }
       }

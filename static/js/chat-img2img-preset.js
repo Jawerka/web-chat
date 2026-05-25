@@ -6,6 +6,7 @@
 
   const STORAGE_KEY = 'webchat_img2img_gen_preset_v1';
   const COLLAPSED_STORAGE_KEY = 'webchat_img2img_gen_preset_collapsed_v1';
+  const IMG2IMG_PRESET_ID_CACHE_KEY = 'webchat_img2img_preset_id_v1';
   const IMG2IMG_SLUG = 'img2img';
   const SAVE_DEBOUNCE_MS = 280;
 
@@ -166,12 +167,21 @@
     return `Сделай ${n} изображений`;
   }
 
+  /** Явное true/false из localStorage (строка "false" и 0 — выключено). */
+  function parseStoredEnabled(value, fallback = true) {
+    if (value === true || value === 1 || value === '1' || value === 'true') return true;
+    if (value === false || value === 0 || value === '0' || value === 'false') return false;
+    return fallback;
+  }
+
   function loadStored() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return { ...DEFAULTS };
       const data = JSON.parse(raw);
-      return { ...DEFAULTS, ...data };
+      const merged = { ...DEFAULTS, ...data };
+      merged.enabled = parseStoredEnabled(data.enabled, DEFAULTS.enabled);
+      return merged;
     } catch {
       return { ...DEFAULTS };
     }
@@ -185,13 +195,44 @@
 
   function isPanelEnabled(app) {
     const el = app.$.img2imgGenPresetEnabled;
-    if (!el) return true;
+    if (!el) return false;
     return el.checked;
   }
 
-  /** Панель активна и вставка в промпт включена (пресет img2img). */
+  /** Вставка в промпт: только пресет беседы img2img + галочка (как на сервере). */
   function isInjectionEnabled(app) {
-    return isImg2imgActive(app) && isPanelEnabled(app);
+    return isImg2imgConvActive(app) && isPanelEnabled(app);
+  }
+
+  function syncEnableUi(app) {
+    const enabled = isPanelEnabled(app);
+    const injectionOn = isInjectionEnabled(app);
+    const inner = app.$.img2imgGenPresetPanel?.querySelector('.img2img-gen-preset-inner');
+    inner?.classList.toggle('is-injection-off', !injectionOn);
+    app.$.img2imgGenPresetEnabled?.closest('.img2img-gen-preset-enable')
+      ?.classList.toggle('is-checked', enabled);
+    const preview = app.$.img2imgGenPresetPreview;
+    if (!preview) return;
+    if (!isImg2imgActive(app)) {
+      preview.textContent = '';
+      preview.classList.add('hidden');
+      return;
+    }
+    preview.classList.remove('hidden');
+    if (!injectionOn) {
+      if (isImg2imgActive(app) && !isImg2imgConvActive(app)) {
+        preview.textContent = 'Сначала сохраните пресет img2img для беседы (селект сверху)';
+      } else {
+        preview.textContent = 'Параметры в промпт не добавляются';
+      }
+      preview.classList.add('is-off');
+      return;
+    }
+    preview.classList.remove('is-off');
+    const hint = buildInstruction(app);
+    preview.textContent = hint
+      ? `В промпт: ${hint}`
+      : 'Заполните поля ниже — блок добавится к сообщению';
   }
 
   function syncFieldsDisabled(app) {
@@ -212,14 +253,20 @@
     wrap?.querySelectorAll('.img2img-gen-step').forEach((btn) => {
       btn.disabled = !enabled;
     });
+    syncEnableUi(app);
+  }
+
+  function readFieldValue(el) {
+    if (!el) return '';
+    return String(el.value ?? '').trim();
   }
 
   function readFields(app) {
     const $ = app.$;
-    const denoiseMinRaw = ($.img2imgDenoiseMin?.value ?? '').trim();
-    const denoiseMaxRaw = ($.img2imgDenoiseMax?.value ?? '').trim();
-    const cfgMinRaw = ($.img2imgCfgMin?.value ?? '').trim();
-    const cfgMaxRaw = ($.img2imgCfgMax?.value ?? '').trim();
+    const denoiseMinRaw = readFieldValue($.img2imgDenoiseMin);
+    const denoiseMaxRaw = readFieldValue($.img2imgDenoiseMax);
+    const cfgMinRaw = readFieldValue($.img2imgCfgMin);
+    const cfgMaxRaw = readFieldValue($.img2imgCfgMax);
     return {
       enabled: isPanelEnabled(app),
       denoiseMin: denoiseMinRaw
@@ -234,14 +281,14 @@
       cfgMax: cfgMaxRaw
         ? normalizeFieldValue(cfgMaxRaw, { min: 1, max: 30, decimals: 1 })
         : '',
-      count: ($.img2imgCount?.value ?? '').trim(),
+      count: readFieldValue($.img2imgCount),
     };
   }
 
   function applyFields(app, values) {
     const $ = app.$;
     if ($.img2imgGenPresetEnabled) {
-      $.img2imgGenPresetEnabled.checked = values.enabled !== false;
+      $.img2imgGenPresetEnabled.checked = parseStoredEnabled(values.enabled, DEFAULTS.enabled);
     }
     syncFieldsDisabled(app);
     if ($.img2imgDenoiseMin) {
@@ -274,9 +321,7 @@
     }, SAVE_DEBOUNCE_MS);
   }
 
-  function buildInstruction(app) {
-    if (!isInjectionEnabled(app)) return '';
-    const v = readFields(app);
+  function buildInstructionParts(v) {
     const parts = [];
     const denoise = formatRange(v.denoiseMin, v.denoiseMax, {
       min: 0,
@@ -298,6 +343,11 @@
     }
     if (!parts.length) return '';
     return `${parts.join('; ')}.`;
+  }
+
+  function buildInstruction(app) {
+    if (!isInjectionEnabled(app)) return '';
+    return buildInstructionParts(readFields(app));
   }
 
   /** Одна часть инструкции img2img (denoising / CFG / число картинок). */
@@ -325,28 +375,130 @@
     return isInstructionBlock(head) ? rest : raw;
   }
 
+  function readCachedImg2imgPresetId() {
+    try {
+      return localStorage.getItem(IMG2IMG_PRESET_ID_CACHE_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  function refreshPresetCache(app) {
+    const preset = app.presets?.find((p) => p.slug === IMG2IMG_SLUG);
+    const id = preset?.id != null ? normalizePresetId(preset.id) : null;
+    try {
+      if (id) localStorage.setItem(IMG2IMG_PRESET_ID_CACHE_KEY, id);
+      else localStorage.removeItem(IMG2IMG_PRESET_ID_CACHE_KEY);
+    } catch { /* quota */ }
+    return id;
+  }
+
+  function collectDiagnostics(app) {
+    const fields = readFields(app);
+    const hintIfEnabled = buildInstruction(app);
+    const hintFromFields = buildInstructionParts(fields);
+    return {
+      convId: app.currentConvId ?? null,
+      convPresetId: app.currentConv?.preset_id ?? null,
+      selectPresetId: app.$.chatPresetSelect?.value ?? null,
+      presetsCount: Array.isArray(app.presets) ? app.presets.length : 0,
+      presetSlugs: Array.isArray(app.presets)
+        ? app.presets.map((p) => p.slug).filter(Boolean)
+        : [],
+      convPresetSlug: presetSlugForId(app, app.currentConv?.preset_id),
+      selectPresetSlug: presetSlugForId(app, app.$.chatPresetSelect?.value),
+      cachedImg2imgPresetId: readCachedImg2imgPresetId(),
+      panelEnabled: isPanelEnabled(app),
+      convImg2img: isImg2imgConvActive(app),
+      selectImg2img: isImg2imgSelectActive(app),
+      injectionEnabled: isInjectionEnabled(app),
+      hintApplied: hintIfEnabled,
+      hintFromFieldsOnly: hintFromFields,
+      fields,
+      dom: {
+        checkbox: Boolean(app.$.img2imgGenPresetEnabled),
+        denoiseMin: readFieldValue(app.$.img2imgDenoiseMin),
+        denoiseMax: readFieldValue(app.$.img2imgDenoiseMax),
+        cfgMin: readFieldValue(app.$.img2imgCfgMin),
+        cfgMax: readFieldValue(app.$.img2imgCfgMax),
+        count: readFieldValue(app.$.img2imgCount),
+      },
+    };
+  }
+
+  function logDiagnostics(app, phase, extra) {
+    if (!app?.log) return;
+    app.log.info('img2img-preset', phase, { ...collectDiagnostics(app), ...extra });
+  }
+
   /** Текст для отправки в LLM (с подсказками из панели img2img, если включено). */
   function getPayloadText(app, rawText) {
-    if (!isInjectionEnabled(app)) return (rawText || '').trim();
-    const hint = buildInstruction(app);
     const body = (rawText || '').trim();
-    if (!hint) return body;
-    if (!body) return hint;
-    return `${hint}\n\n${body}`;
+    const injection = isInjectionEnabled(app);
+    const hint = injection ? buildInstruction(app) : '';
+    let out = body;
+    if (injection && hint) {
+      out = body ? `${hint}\n\n${body}` : hint;
+    }
+    logDiagnostics(app, 'getPayloadText', {
+      rawLen: body.length,
+      hintLen: hint.length,
+      injected: Boolean(injection && hint),
+      outLen: out.length,
+      outPreview: out.slice(0, 160),
+      sameAsRaw: out === body,
+    });
+    return out;
   }
 
   function augmentMessage(app, text) {
     return getPayloadText(app, text);
   }
 
-  function activePresetSlug(app) {
-    const presetId = app.$.chatPresetSelect?.value || app.currentConv?.preset_id;
-    if (!presetId || !app.presets?.length) return null;
-    return app.presets.find((p) => p.id === presetId)?.slug ?? null;
+  function normalizePresetId(id) {
+    if (id == null || id === '') return null;
+    return String(id).trim().toLowerCase();
   }
 
+  function findPresetById(app, presetId) {
+    const key = normalizePresetId(presetId);
+    if (!key || !app.presets?.length) return null;
+    return app.presets.find((p) => normalizePresetId(p.id) === key) ?? null;
+  }
+
+  /** Источник истины — пресет беседы (как на сервере); селект в тулбаре — запасной. */
+  function resolvePresetId(app) {
+    const convId = app.currentConv?.preset_id;
+    if (convId != null && convId !== '') return convId;
+    const sel = app.$.chatPresetSelect?.value;
+    return sel || null;
+  }
+
+  function presetSlugForId(app, presetId) {
+    return findPresetById(app, presetId)?.slug ?? null;
+  }
+
+  /** Пресет беседы (то, что уходит на сервер в tools/turn). */
+  function isImg2imgConvActive(app) {
+    const convKey = normalizePresetId(app.currentConv?.preset_id);
+    if (!convKey) return false;
+    if (presetSlugForId(app, app.currentConv?.preset_id) === IMG2IMG_SLUG) return true;
+    const cached = readCachedImg2imgPresetId();
+    return Boolean(cached && convKey === cached);
+  }
+
+  /** Селект в тулбаре (может опережать PATCH беседы). */
+  function isImg2imgSelectActive(app) {
+    return presetSlugForId(app, app.$.chatPresetSelect?.value) === IMG2IMG_SLUG;
+  }
+
+  /** Показ панели параметров. */
   function isImg2imgActive(app) {
-    return activePresetSlug(app) === IMG2IMG_SLUG;
+    return isImg2imgConvActive(app) || isImg2imgSelectActive(app);
+  }
+
+  function activePresetSlug(app) {
+    return presetSlugForId(app, resolvePresetId(app));
   }
 
   function setExpanded(app, expanded) {
@@ -389,6 +541,7 @@
       return;
     }
     syncCollapseState(app);
+    syncEnableUi(app);
   }
 
   function bind(app) {
@@ -401,8 +554,14 @@
       app.$.img2imgCount,
     ].filter(Boolean);
     for (const el of inputs) {
-      el.addEventListener('input', () => scheduleSave(app));
-      el.addEventListener('change', () => saveStored(readFields(app)));
+      el.addEventListener('input', () => {
+        scheduleSave(app);
+        syncEnableUi(app);
+      });
+      el.addEventListener('change', () => {
+        saveStored(readFields(app));
+        syncEnableUi(app);
+      });
     }
     const denoiseOpts = { min: 0, max: 1, decimals: 2, step: 0.01 };
     const cfgOpts = { min: 1, max: 30, decimals: 1, step: 0.1 };
@@ -416,25 +575,38 @@
     bindStepper(app.$.img2imgCfgMin, cfgOpts);
     bindStepper(app.$.img2imgCfgMax, cfgOpts);
     bindStepper(app.$.img2imgCount, { kind: 'count' });
-    app.$.img2imgGenPresetEnabled?.addEventListener('change', () => {
+    const onEnabledToggle = () => {
       syncFieldsDisabled(app);
       saveStored(readFields(app));
-    });
+      logDiagnostics(app, 'checkbox_toggle');
+    };
+    app.$.img2imgGenPresetEnabled?.addEventListener('change', onEnabledToggle);
+    app.$.img2imgGenPresetEnabled?.addEventListener('input', onEnabledToggle);
     app.$.img2imgGenPresetToggle?.addEventListener('click', () => togglePanel(app));
+    refreshPresetCache(app);
     syncFieldsDisabled(app);
+    syncEnableUi(app);
     syncVisibility(app);
+    logDiagnostics(app, 'init');
   }
 
   window.WebChatImg2imgPreset = {
     STORAGE_KEY,
     init: bind,
     syncVisibility,
+    refreshPresetCache,
+    collectDiagnostics,
+    logDiagnostics,
     buildInstruction,
     getPayloadText,
     augmentMessage,
     stripFromStoredMessage,
     isImg2imgActive,
+    isImg2imgConvActive,
+    isImg2imgSelectActive,
     isInjectionEnabled,
     isPanelEnabled,
+    resolvePresetId,
+    activePresetSlug,
   };
 })();

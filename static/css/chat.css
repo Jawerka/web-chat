@@ -2389,16 +2389,50 @@ body:not(.dark-theme) .icon-moon { display: none; }
 }
 
 .img2img-gen-preset-enable-text {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
   color: var(--text);
+  pointer-events: none;
+}
+
+.img2img-gen-preset-enable:not(.is-checked) .img2img-gen-preset-enable-text {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .img2img-gen-preset-enable-hint {
   margin: -2px 0 4px 24px;
   font-size: 10px;
   line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.img2img-gen-preset-preview {
+  margin: 0 0 6px 24px;
+  padding: 5px 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--primary);
+  word-break: break-word;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+}
+
+.img2img-gen-preset-preview.hidden {
+  display: none !important;
+}
+
+.img2img-gen-preset-preview.is-off {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  border-color: var(--border);
+}
+
+.img2img-gen-preset-inner.is-injection-off .img2img-gen-preset-preview {
   color: var(--text-secondary);
 }
 

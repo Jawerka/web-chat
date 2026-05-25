@@ -33,6 +33,8 @@ from app.services.agent_orchestrator import (
     ToolLoopExceeded,
     TurnCancelled,
 )
+from app.diag_logging import log_event
+from app.services.message_builder import is_img2img_gen_preset_instruction_block
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,7 @@ async def _run_regenerate_task(
     cancel_event: asyncio.Event,
     *,
     integration: IntegrationOverrides | None = None,
+    llm_text_override: str | None = None,
 ) -> None:
     """Перегенерация ответа на user-сообщение (или на предыдущее user для assistant)."""
     import time
@@ -278,6 +281,7 @@ async def _run_regenerate_task(
                 llm_model=integration.llm_model if integration else None,
                 macro_context=macro_ctx,
                 document_rag=doc_rag,
+                llm_text_override=llm_text_override,
             )
             await session.commit()
         except TurnCancelled:
@@ -391,6 +395,8 @@ def _schedule_regenerate_task(
     conversation_id: uuid.UUID,
     message_id: uuid.UUID,
     integration: IntegrationOverrides | None = None,
+    *,
+    llm_text_override: str | None = None,
 ):
     """Фабрика корутины перегенерации."""
 
@@ -400,6 +406,7 @@ def _schedule_regenerate_task(
             message_id,
             cancel_event,
             integration=integration,
+            llm_text_override=llm_text_override,
         )
 
     return runner
@@ -544,10 +551,26 @@ async def _handle_ws_message(
             return True
 
         integration = parse_integration_overrides(data)
+        hint_head = llm_text.split("\n\n", 1)[0].strip() if llm_text else ""
+        has_gen_preset = bool(
+            hint_head and is_img2img_gen_preset_instruction_block(hint_head)
+        )
+        log_event(
+            logger,
+            "img2img_gen_preset_ws",
+            "WS user_message",
+            attachments=len(attachment_ids),
+            llm_text_len=len(llm_text),
+            display_text_len=len(display_text) if display_text is not None else None,
+            has_display_text=display_text is not None,
+            has_gen_preset_block=has_gen_preset,
+            llm_text_preview=llm_text[:120] if llm_text else "",
+        )
         logger.info(
-            "WS user_message принят: %d вложений, llm_override=%s",
+            "WS user_message принят: %d вложений, llm_override=%s, gen_preset_block=%s",
             len(attachment_ids),
             bool(integration.llm_model or integration.llm_base_url),
+            has_gen_preset,
         )
         _start_background_turn(
             conversation_id,
@@ -580,10 +603,39 @@ async def _handle_ws_message(
             )
             return True
         integration = parse_integration_overrides(data)
-        logger.info("WS regenerate принят: message_id=%s", regen_id)
+        regen_llm_raw = data.get("text")
+        llm_text_override = (
+            str(regen_llm_raw).strip() if regen_llm_raw is not None else None
+        )
+        hint_head = (
+            llm_text_override.split("\n\n", 1)[0].strip() if llm_text_override else ""
+        )
+        has_gen_preset = bool(
+            hint_head and is_img2img_gen_preset_instruction_block(hint_head)
+        )
+        log_event(
+            logger,
+            "img2img_gen_preset_ws",
+            "WS regenerate",
+            message_id=str(regen_id),
+            llm_text_len=len(llm_text_override) if llm_text_override else 0,
+            has_gen_preset_block=has_gen_preset,
+            llm_text_preview=llm_text_override[:120] if llm_text_override else "",
+        )
+        logger.info(
+            "WS regenerate принят: message_id=%s, llm_override=%s, gen_preset_block=%s",
+            regen_id,
+            bool(llm_text_override),
+            has_gen_preset,
+        )
         _start_background_turn(
             conversation_id,
-            _schedule_regenerate_task(conversation_id, regen_id, integration),
+            _schedule_regenerate_task(
+                conversation_id,
+                regen_id,
+                integration,
+                llm_text_override=llm_text_override,
+            ),
             turn_kind="regenerate",
         )
         return True

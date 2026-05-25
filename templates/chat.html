@@ -153,14 +153,15 @@
         </div>
         <div class="img2img-gen-preset-panel hidden" id="img2img-gen-preset-panel" aria-label="Параметры img2img">
           <div class="img2img-gen-preset-inner">
-            <label class="img2img-gen-preset-enable">
+            <label class="img2img-gen-preset-enable" for="img2img-gen-preset-enabled">
               <input type="checkbox" class="img2img-gen-preset-enable-input" id="img2img-gen-preset-enabled"
-                checked aria-describedby="img2img-gen-preset-enable-hint">
+                checked aria-describedby="img2img-gen-preset-enable-hint img2img-gen-preset-preview">
               <span class="img2img-gen-preset-enable-text">Добавлять параметры в промпт</span>
             </label>
             <p class="img2img-gen-preset-enable-hint" id="img2img-gen-preset-enable-hint">
-              Если выключено, значения ниже не меняют отправляемый текст и не сохраняются в сообщении.
+              Если выключено, блок denoising/CFG/число картинок не добавляется к отправляемому тексту (в чате и в БД).
             </p>
+            <p class="img2img-gen-preset-preview hidden" id="img2img-gen-preset-preview" aria-live="polite"></p>
             <div class="img2img-gen-preset-fields" id="img2img-gen-preset-fields">
             <div class="img2img-gen-preset-row">
               <span class="img2img-gen-preset-label">Denoising</span>

@@ -40,7 +40,8 @@
         try {
           this._dispatch(JSON.parse(e.data));
         } catch (err) {
-          window.appLog?.error('ws', 'Ошибка разбора WS-сообщения', err.message);
+          const detail = err instanceof Error ? err : new Error(String(err));
+          window.appLog?.error('ws', 'Ошибка обработки WS-сообщения', detail);
         }
       };
       this.ws.onclose = () => {
@@ -92,6 +93,18 @@
       if (displayText != null && displayText !== llmText) {
         payload.display_text = displayText;
       }
+      if (typeof console !== 'undefined' && console.debug) {
+        const head = String(llmText || '').slice(0, 80);
+        console.debug(
+          '[img2img-preset] ws user_message',
+          {
+            llmLen: llmText?.length ?? 0,
+            displayLen: displayText?.length ?? 0,
+            hasDisplayText: Object.prototype.hasOwnProperty.call(payload, 'display_text'),
+            llmHead: head,
+          },
+        );
+      }
       this.ws.send(JSON.stringify(payload));
     }
 
@@ -101,15 +114,28 @@
       }
     }
 
-    sendRegenerate(messageId, integration = {}) {
+    sendRegenerate(messageId, integration = {}, llmTextOverride = null) {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         throw new Error('Нет соединения с сервером');
       }
-      this.ws.send(JSON.stringify({
+      const payload = {
         type: 'regenerate',
         message_id: messageId,
         ...integration,
-      }));
+      };
+      const llmText = (llmTextOverride ?? '').trim();
+      if (llmText) {
+        payload.text = llmText;
+      }
+      if (typeof console !== 'undefined' && console.debug) {
+        console.debug('[img2img-preset] ws regenerate', {
+          messageId,
+          llmLen: llmText.length,
+          hasText: Boolean(llmText),
+          llmHead: llmText.slice(0, 80),
+        });
+      }
+      this.ws.send(JSON.stringify(payload));
     }
 
     _dispatch(msg) {

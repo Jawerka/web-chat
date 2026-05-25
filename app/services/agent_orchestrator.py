@@ -35,6 +35,7 @@ from app.services.attachment_service import AttachmentService
 from app.services.conversation_title_service import maybe_generate_conversation_title
 from app.services.message_builder import (
     strip_img2img_gen_preset_prefix,
+    is_img2img_gen_preset_instruction_block,
     append_img2img_init_hints,
     build_img2img_init_hint_text,
     build_user_content,
@@ -495,6 +496,22 @@ class AgentOrchestrator:
             if display_text is not None
             else strip_img2img_gen_preset_prefix(user_text)
         )
+        hint_head = user_text.split("\n\n", 1)[0].strip() if user_text else ""
+        has_gen_preset = bool(
+            hint_head and is_img2img_gen_preset_instruction_block(hint_head)
+        )
+        log_event(
+            logger,
+            "img2img_gen_preset_turn",
+            "user turn text split",
+            preset_slug=preset.slug if preset else None,
+            has_gen_preset_block=has_gen_preset,
+            llm_text_len=len(user_text),
+            stored_text_len=len(stored_text),
+            display_text_provided=display_text is not None,
+            user_text_preview=user_text[:120] if user_text else "",
+            stored_text_preview=stored_text[:120] if stored_text else "",
+        )
         stored_parts = build_user_content(stored_text, attachments)
         llm_parts = build_user_content(user_text, attachments)
         if preset and preset.slug == "img2img":
@@ -743,6 +760,7 @@ class AgentOrchestrator:
         llm_model: str | None = None,
         macro_context: str = "selected",
         document_rag: bool = False,
+        llm_text_override: str | None = None,
     ) -> AgentTurnResult:
         """Перегенерировать ответ на существующее user-сообщение (без нового user)."""
         conv_repo = ConversationRepository(session)
@@ -836,11 +854,43 @@ class AgentOrchestrator:
         att_repo = AttachmentRepository(session)
         user_attachments = await att_repo.list_for_message(user_message_id)
 
+        llm_user_text = (llm_text_override or "").strip() or None
+        if llm_user_text:
+            hint_head = llm_user_text.split("\n\n", 1)[0].strip()
+            has_gen_preset = bool(
+                hint_head and is_img2img_gen_preset_instruction_block(hint_head)
+            )
+            log_event(
+                logger,
+                "img2img_gen_preset_turn",
+                "regenerate with llm_text override",
+                preset_slug=preset.slug if preset else None,
+                has_gen_preset_block=has_gen_preset,
+                llm_text_len=len(llm_user_text),
+                stored_text_len=len(user_message.content_text or ""),
+                user_text_preview=llm_user_text[:120],
+            )
+
         llm_messages: list[dict[str, Any]] = []
         if system_prompt:
             llm_messages.append({"role": "system", "content": system_prompt})
         llm_messages.extend(history_to_llm_messages(history, alias_to_body=alias_to_body))
-        if isinstance(user_parts, list):
+        if llm_user_text:
+            regen_parts = build_user_content(llm_user_text, user_attachments)
+            regen_parts = expand_parts_for_llm(regen_parts, alias_to_body)
+            if preset and preset.slug == "img2img":
+                regen_parts = append_img2img_init_hints(
+                    regen_parts,
+                    user_attachments,
+                    image_parts=regen_parts,
+                )
+            llm_messages.append(
+                {
+                    "role": "user",
+                    "content": self._llm_user_parts(regen_parts),
+                }
+            )
+        elif isinstance(user_parts, list):
             regen_parts = refresh_user_parts_for_regenerate(
                 user_parts,
                 user_attachments,
