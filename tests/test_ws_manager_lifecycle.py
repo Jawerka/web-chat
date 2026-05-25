@@ -41,6 +41,39 @@ async def test_reconnect_after_disconnect_not_busy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_disconnect_does_not_cancel_running_task() -> None:
+    """Обрыв WS (F5) не должен отменять фоновую генерацию."""
+    mgr = ConnectionManager()
+    conv_id = uuid.uuid4()
+    ws = AsyncMock()
+    await mgr.connect(conv_id, ws)
+
+    cancel = mgr.reset_cancel(conv_id)
+    started = asyncio.Event()
+
+    async def long_turn() -> None:
+        started.set()
+        await asyncio.sleep(30)
+
+    task = asyncio.create_task(long_turn())
+    mgr.set_active_task(conv_id, task)
+    await started.wait()
+    assert mgr.is_busy(conv_id)
+    assert not cancel.is_set()
+
+    assert mgr.disconnect(conv_id, ws) is True
+    assert mgr.is_busy(conv_id)
+    assert not cancel.is_set()
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    mgr.clear_active_task(conv_id)
+
+
+@pytest.mark.asyncio
 async def test_cancel_event_propagates() -> None:
     mgr = ConnectionManager()
     conv_id = uuid.uuid4()

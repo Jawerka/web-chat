@@ -299,6 +299,7 @@ class ChatApp {
       newConvPreset: document.getElementById('new-conv-preset'),
       lightbox: document.getElementById('lightbox'),
       lightboxImg: document.getElementById('lightbox-img'),
+      lightboxLoader: document.getElementById('lightbox-loader'),
       lightboxPrev: document.getElementById('lightbox-prev'),
       lightboxNext: document.getElementById('lightbox-next'),
       lightboxCounter: document.getElementById('lightbox-counter'),
@@ -929,9 +930,14 @@ class ChatApp {
         `/api/conversations/${this.currentConvId}/generation-status`,
       );
       if (status.in_progress) {
-        await this._refreshStreamingBubbleFromServer(status);
-        if (!this._generationWatchRunning) {
-          this._watchGenerationUntilDone();
+        if (!this.streamEl || !this._generationResumeActive) {
+          await this._resumeOngoingGeneration(status);
+        } else {
+          await this._refreshStreamingBubbleFromServer(status);
+          this._syncResumeProgress(status);
+          if (!this._generationWatchRunning) {
+            this._watchGenerationUntilDone();
+          }
         }
         return;
       }
@@ -2305,10 +2311,25 @@ class ChatApp {
       this.connectSocket();
 
       const scrollToMessageId = opts.scrollToMessageId || null;
+      let generationStatus = null;
+      try {
+        generationStatus = await this.api(
+          `/api/conversations/${id}/generation-status`,
+        );
+      } catch (err) {
+        this.log?.warn('chat', err.message || 'generation-status');
+      }
+      const loadOpts = {
+        activeStreamingId: generationStatus?.streaming_message_id || null,
+      };
       try {
         if (scrollToMessageId) {
           this._scrollStuckToBottom = false;
-          await this.loadMessages({ scrollToEnd: false, preserveScroll: false });
+          await this.loadMessages({
+            scrollToEnd: false,
+            preserveScroll: false,
+            ...loadOpts,
+          });
           this._highlightMessage(scrollToMessageId);
         } else {
           const scrollEntry = this._getScrollPositionEntry(id);
@@ -2320,10 +2341,11 @@ class ChatApp {
             scrollToEnd: !restoreScroll,
             preserveScroll: false,
             restoreScrollEntry: restoreScroll ? scrollEntry : null,
+            ...loadOpts,
           });
         }
 
-        await this._resumeOngoingGeneration();
+        await this._resumeOngoingGeneration(generationStatus || {});
         WebChatComposer.restoreDraft(this, id);
         WebChatComposer.restorePendingFromSession(this);
         this.renderConvList();
@@ -2393,7 +2415,8 @@ class ChatApp {
     const mustRenderDom = showSkeleton || this._isMessagesSkeletonVisible();
     const listFp = this._messagesFingerprintFromList(messages);
     const structureKey = this._messagesStructureKey(messages);
-    const activeStreamingId = this._activeStreamingIdFromList(messages);
+    const activeStreamingId = opts.activeStreamingId
+      || this._activeStreamingIdFromList(messages);
 
     if (!opts.force && listFp === this._messagesFingerprint && !mustRenderDom) {
       return;
@@ -2478,7 +2501,9 @@ class ChatApp {
     }
     const ragHits = m.content_json?.rag_sources;
     const reasoning = m.content_json?.reasoning;
-    if (m.role === 'assistant' && m.content_json?.streaming) {
+    const isStreamingDraft = Boolean(m.content_json?.streaming)
+      || (activeStreamingId && m.id === activeStreamingId);
+    if (m.role === 'assistant' && isStreamingDraft) {
       if (activeStreamingId && m.id !== activeStreamingId) {
         return this._buildAssistantRow(m.content_text || '', urls, m.id, ragHits, reasoning);
       }
@@ -4704,9 +4729,18 @@ class ChatApp {
     if (!this._lightboxUrls.length) return;
     this._lightboxIndex = Math.max(0, Math.min(index, this._lightboxUrls.length - 1));
     const url = this._lightboxUrls[this._lightboxIndex];
-    this.$.lightboxImg.src = url;
-    this.$.lightboxImg.alt = `Изображение ${this._lightboxIndex + 1} из ${this._lightboxUrls.length}`;
     this.$.lightbox.classList.remove('hidden');
+    if (typeof LightboxImage !== 'undefined') {
+      LightboxImage.load({
+        lightbox: this.$.lightbox,
+        img: this.$.lightboxImg,
+        loader: this.$.lightboxLoader,
+        url,
+      });
+    } else {
+      this.$.lightboxImg.src = url;
+    }
+    this.$.lightboxImg.alt = `Изображение ${this._lightboxIndex + 1} из ${this._lightboxUrls.length}`;
     this._updateLightboxNav();
     this._updateLightboxActions();
   }
@@ -4756,7 +4790,11 @@ class ChatApp {
 
   closeLightbox() {
     this.$.lightbox.classList.add('hidden');
-    this.$.lightboxImg.src = '';
+    if (typeof LightboxImage !== 'undefined') {
+      LightboxImage.reset(this.$.lightbox, this.$.lightboxImg, this.$.lightboxLoader);
+    } else {
+      this.$.lightboxImg.src = '';
+    }
     this._lightboxUrls = [];
     this._lightboxIndex = 0;
     this._lightboxTouchStart = null;

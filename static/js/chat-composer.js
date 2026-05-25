@@ -8,7 +8,7 @@
   const COMPOSER_DRAFTS_STORAGE_KEY = 'webchat_composer_drafts_v1';
   const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
   const ACCEPTED_UPLOAD_ACCEPT =
-    'image/jpeg,image/png,image/webp,image/gif,application/pdf,.docx,text/plain,text/csv';
+    'image/jpeg,image/png,image/webp,image/gif,image/*,application/pdf,.docx,text/plain,text/csv';
 
   function readComposerDrafts() {
     try {

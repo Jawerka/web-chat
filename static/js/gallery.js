@@ -40,6 +40,7 @@ class GalleryApp {
       status: $('#gallery-status'),
       lightbox: $('#gallery-lightbox'),
       lightboxImg: $('#gallery-lightbox-img'),
+      lightboxLoader: $('#gallery-lightbox-loader'),
       lightboxPrev: $('#gallery-lightbox-prev'),
       lightboxNext: $('#gallery-lightbox-next'),
       lightboxClose: $('#gallery-lightbox-close'),
@@ -328,12 +329,21 @@ class GalleryApp {
     const item = this.items[index];
     if (!item || !this.els.lightbox) return;
     this.lightboxIndex = index;
-    this.els.lightboxImg.src = item.url;
-    this.els.lightboxImg.alt = item.filename;
+    this.els.lightbox.classList.remove('hidden');
+    if (typeof LightboxImage !== 'undefined') {
+      LightboxImage.load({
+        lightbox: this.els.lightbox,
+        img: this.els.lightboxImg,
+        loader: this.els.lightboxLoader,
+        url: item.url,
+      });
+    } else if (this.els.lightboxImg) {
+      this.els.lightboxImg.src = item.url;
+    }
+    if (this.els.lightboxImg) this.els.lightboxImg.alt = item.filename;
     if (this.els.lightboxTitle) {
       this.els.lightboxTitle.textContent = item.filename;
     }
-    this.els.lightbox.classList.remove('hidden');
     this.updateLightboxNav();
   }
 
@@ -377,7 +387,11 @@ class GalleryApp {
   closeLightbox() {
     this._cancelPendingDelete();
     this.els.lightbox?.classList.add('hidden');
-    if (this.els.lightboxImg) this.els.lightboxImg.src = '';
+    if (typeof LightboxImage !== 'undefined') {
+      LightboxImage.reset(this.els.lightbox, this.els.lightboxImg, this.els.lightboxLoader);
+    } else if (this.els.lightboxImg) {
+      this.els.lightboxImg.src = '';
+    }
     this.lightboxIndex = -1;
     document.body.classList.remove('gallery-lightbox-open');
   }

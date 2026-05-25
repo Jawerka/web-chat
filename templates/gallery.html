@@ -83,11 +83,18 @@
         </button>
       </div>
     </div>
-    <img id="gallery-lightbox-img" alt="">
+    <div class="lightbox-stage">
+      <div class="lightbox-loader" id="gallery-lightbox-loader" role="status" aria-live="polite" aria-hidden="true">
+        <div class="lightbox-loader-spinner" aria-hidden="true"></div>
+        <span class="lightbox-loader-label">Загрузка…</span>
+      </div>
+      <img id="gallery-lightbox-img" alt="" decoding="async">
+    </div>
   </div>
 
   <script src="/static/js/storage-migrate.js"></script>
   <script src="/static/js/media-urls.js"></script>
+  <script src="/static/js/lightbox-image.js"></script>
   <script src="/static/js/system-events.js"></script>
   <script src="/static/js/gallery.js"></script>
 </body>

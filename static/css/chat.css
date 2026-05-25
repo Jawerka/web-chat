@@ -3619,6 +3619,7 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
 }
 
 .attach-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3628,12 +3629,31 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   cursor: pointer;
   border-radius: var(--radius-sm);
   flex-shrink: 0;
+  overflow: hidden;
   transition: color 0.2s, background 0.2s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.attach-btn-file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+  font-size: 16px;
 }
 
 .attach-btn svg {
   display: block;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .attach-btn:hover {
@@ -4089,7 +4109,19 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   to { opacity: 1; }
 }
 
-.lightbox img {
+.lightbox-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.lightbox-stage img {
   max-width: 100%;
   max-height: 100%;
   border-radius: var(--space-2);
@@ -4097,6 +4129,63 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   user-select: none;
   -webkit-user-drag: none;
   touch-action: pan-y pinch-zoom;
+  transition: opacity 0.22s var(--ease);
+}
+
+.lightbox.is-loading .lightbox-stage img,
+.lightbox-stage img.is-faded {
+  opacity: 0.18;
+}
+
+.lightbox-loader {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.lightbox.is-loading .lightbox-loader {
+  display: flex;
+}
+
+.lightbox.is-loading .lightbox-nav {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.lightbox-loader-spinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid rgba(255, 255, 255, 0.22);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+  animation: lightboxSpin 0.8s linear infinite;
+}
+
+.lightbox-loader-label {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+@keyframes lightboxSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-loader-spinner {
+    animation: lightboxSpin 1.4s linear infinite;
+  }
+
+  .lightbox-stage img {
+    transition: none;
+  }
 }
 
 .lightbox-nav {
@@ -4260,7 +4349,25 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   }
 
   .composer-input-row {
+    --input-row-control: 44px;
     gap: 4px;
+  }
+
+  .attach-btn-file-input {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .attachment-chip {
+    max-width: min(220px, calc(100vw - 80px));
+  }
+
+  .attachment-chip-remove {
+    min-width: 36px;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .composer-tools-menu {
@@ -4726,7 +4833,13 @@ body.gallery-lightbox-open {
   box-sizing: border-box;
 }
 
-.gallery-lightbox img {
+.gallery-lightbox .lightbox-stage {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+}
+
+.gallery-lightbox .lightbox-stage img {
   flex: 0 1 auto;
   max-width: 100%;
   max-height: 100%;

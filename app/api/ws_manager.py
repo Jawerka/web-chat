@@ -95,9 +95,10 @@ class ConnectionManager:
         state: ConversationSessionState,
         *,
         reason: str,
+        cancel_running: bool = False,
     ) -> None:
         if state.active_task is not None and not state.active_task.done():
-            if state.cancel_event is not None:
+            if cancel_running and state.cancel_event is not None:
                 state.cancel_event.set()
             return
         state.cancel_event = None
@@ -152,6 +153,12 @@ class ConnectionManager:
         state.last_activity = time.monotonic()
         if state.websockets:
             return False
+        if state.active_task is not None and not state.active_task.done():
+            logger.info(
+                "WS disconnect: беседа %s — клиент отключился, фоновая генерация продолжается",
+                conversation_id,
+            )
+            return True
         self._cleanup_session_state(conversation_id, state, reason="disconnect")
         return True
 
@@ -296,7 +303,7 @@ class ConnectionManager:
         self._system_websockets.clear()
         for cid, state in list(self._sessions.items()):
             state.websockets.clear()
-            self._cleanup_session_state(cid, state, reason="shutdown")
+            self._cleanup_session_state(cid, state, reason="shutdown", cancel_running=True)
         logger.info("WS: закрыто %d подключений (code=%s)", len(all_ws), code)
 
     def active_turn_count(self) -> int:
