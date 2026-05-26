@@ -19,7 +19,10 @@ from app.integrations.media_utils import (
     parse_asset_id_from_url,
     rewrite_image_url_for_llm,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.services.attachment_service import AttachmentService
+from app.services.media_service import MediaService
 from app.services.prompt_macro_service import expand_macro_text, expand_parts_for_llm
 
 logger = logging.getLogger(__name__)
@@ -100,6 +103,88 @@ def _text_from_parts(parts: list[dict[str, Any]], *, skip_img2img_hints: bool = 
         if text.strip():
             chunks.append(text)
     return "\n\n".join(chunks)
+
+
+async def filter_available_image_attachments(
+    session: AsyncSession,
+    attachments: list[Attachment],
+) -> list[Attachment]:
+    """Оставить только вложения с доступными изображениями (для LLM vision)."""
+    media = MediaService(session)
+    out: list[Attachment] = []
+    dropped = 0
+    for att in attachments:
+        if not att.mime_type.startswith("image/"):
+            out.append(att)
+            continue
+        url = AttachmentService.llm_image_url(att)
+        if await media.is_image_url_available(url):
+            out.append(att)
+        else:
+            dropped += 1
+    if dropped:
+        log_event(
+            logger,
+            "llm_vision_filter",
+            "dropped unavailable image attachments",
+            dropped=dropped,
+        )
+    return out
+
+
+async def filter_unreachable_image_parts(
+    session: AsyncSession,
+    parts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Убрать image_url parts, указывающие на отсутствующие файлы/ассеты."""
+    media = MediaService(session)
+    out: list[dict[str, Any]] = []
+    dropped = 0
+    for part in parts:
+        if part.get("type") != "image_url":
+            out.append(part)
+            continue
+        raw_asset = part.get("asset_id")
+        if raw_asset:
+            try:
+                aid = uuid.UUID(str(raw_asset))
+            except ValueError:
+                dropped += 1
+                continue
+            if (await media.get_bytes(aid)) is not None:
+                out.append(part)
+            else:
+                dropped += 1
+            continue
+        url = (part.get("image_url") or {}).get("url") or ""
+        if await media.is_image_url_available(url):
+            out.append(part)
+        else:
+            dropped += 1
+    if dropped:
+        log_event(
+            logger,
+            "llm_vision_filter",
+            "dropped unreachable image_url parts",
+            dropped=dropped,
+        )
+    return out
+
+
+async def sanitize_llm_messages_for_vision(
+    session: AsyncSession,
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Убрать недоступные image_url из multimodal content перед запросом к LLM."""
+    sanitized: list[dict[str, Any]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            sanitized.append(msg)
+            continue
+        filtered = await filter_unreachable_image_parts(session, content)
+        sanitized.append({**msg, "content": filtered})
+    return sanitized
 
 
 def refresh_user_parts_for_regenerate(

@@ -33,6 +33,7 @@ from app.integrations.media_utils import (
     safe_filename,
     sniff_image_mime,
 )
+from app.public_url import is_trusted_media_url, strip_public_base
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,41 @@ class MediaService:
         if asset is None:
             return None
         return asset.data, asset.mime_type
+
+    async def is_image_url_available(self, url: str) -> bool:
+        """Проверить, что изображение по локальному /media/ URL доступно для LLM vision."""
+        raw = (url or "").strip()
+        if not raw:
+            return False
+
+        check_path = raw
+        if is_trusted_media_url(raw):
+            check_path = strip_public_base(raw)
+        elif raw.startswith("http://") or raw.startswith("https://"):
+            return False
+
+        asset_id = parse_asset_id_from_url(check_path) or parse_asset_id_from_url(raw)
+        if asset_id is not None:
+            return (await self.get_bytes(asset_id)) is not None
+
+        gen = _GENERATED_URL_RE.search(check_path)
+        if gen:
+            thumbs = "/thumbs/" in check_path
+            try:
+                resolve_generated_file(safe_filename(gen.group(1)), thumbs=thumbs)
+                return True
+            except (ValueError, FileNotFoundError):
+                return False
+
+        upl = _UPLOAD_URL_RE.search(check_path)
+        if upl:
+            try:
+                resolve_upload_file(uuid.UUID(upl.group(1)), upl.group(2))
+                return True
+            except (ValueError, FileNotFoundError):
+                return False
+
+        return False
 
     async def get_thumb_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
         asset = await self._repo.get_by_id(asset_id)

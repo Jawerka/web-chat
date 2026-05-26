@@ -39,9 +39,12 @@ from app.services.message_builder import (
     append_img2img_init_hints,
     build_img2img_init_hint_text,
     build_user_content,
+    filter_available_image_attachments,
+    filter_unreachable_image_parts,
     finalize_assistant_text,
     history_to_llm_messages,
     refresh_user_parts_for_regenerate,
+    sanitize_llm_messages_for_vision,
 )
 from app.services.prompt_macro_service import (
     alias_map_from_macros,
@@ -489,7 +492,10 @@ class AgentOrchestrator:
         preset_tools = tools_for_preset_slug(preset.slug if preset else None)
 
         att_service = AttachmentService(session)
-        attachments = await att_service.prepare_for_llm(attachment_ids)
+        attachments = await filter_available_image_attachments(
+            session,
+            await att_service.prepare_for_llm(attachment_ids),
+        )
 
         stored_text = (
             display_text
@@ -637,7 +643,7 @@ class AgentOrchestrator:
                 **summarize_llm_messages(llm_messages),
             )
             completion = await self._llm.complete_with_stream(
-                llm_messages,
+                await sanitize_llm_messages_for_vision(session, llm_messages),
                 on_text_delta=_on_delta,
                 on_reasoning_delta=_on_reasoning,
                 cancel_event=cancel_event,
@@ -852,7 +858,10 @@ class AgentOrchestrator:
         history = [m for m in history if m.created_at < user_message.created_at]
 
         att_repo = AttachmentRepository(session)
-        user_attachments = await att_repo.list_for_message(user_message_id)
+        user_attachments = await filter_available_image_attachments(
+            session,
+            await att_repo.list_for_message(user_message_id),
+        )
 
         llm_user_text = (llm_text_override or "").strip() or None
         if llm_user_text:
@@ -884,6 +893,7 @@ class AgentOrchestrator:
                     user_attachments,
                     image_parts=regen_parts,
                 )
+            regen_parts = await filter_unreachable_image_parts(session, regen_parts)
             llm_messages.append(
                 {
                     "role": "user",
@@ -903,6 +913,7 @@ class AgentOrchestrator:
                     user_attachments,
                     image_parts=regen_parts,
                 )
+            regen_parts = await filter_unreachable_image_parts(session, regen_parts)
             llm_messages.append(
                 {
                     "role": "user",
@@ -960,7 +971,7 @@ class AgentOrchestrator:
                 **summarize_llm_messages(llm_messages),
             )
             completion = await self._llm.complete_with_stream(
-                llm_messages,
+                await sanitize_llm_messages_for_vision(session, llm_messages),
                 on_text_delta=_on_delta,
                 on_reasoning_delta=_on_reasoning,
                 cancel_event=cancel_event,
