@@ -92,6 +92,24 @@ function stripMarkdownImages(text) {
     .trim();
 }
 
+/** Служебная пометка LLM о картинках — не показывать в пузыре (модель иногда копирует из контекста). */
+function stripLlmImageContextNote(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(
+      /\n*\[(?:CTX generated_images:[^\]]*|В этом ответе были изображения \(для контекста\):[^\]]*)\]\s*/gi,
+      '',
+    )
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Текст ассистента для отображения в UI. */
+function assistantDisplayText(text) {
+  return stripLlmImageContextNote(stripMarkdownImages(text || ''));
+}
+
 function imageUrlsFromParts(parts) {
   if (!parts || !parts.length) return [];
   const urls = [];
@@ -2600,7 +2618,7 @@ class ChatApp {
   }
 
   _fillAssistantBubble(el, text, imageUrls, reasoning = null) {
-    const displayText = stripMarkdownImages(text || '');
+    const displayText = assistantDisplayText(text || '');
     const bubble = el.querySelector('.message-bubble');
     const grid = el.querySelector('.message-images');
     el.dataset.rawContent = text || '';
@@ -2948,7 +2966,7 @@ class ChatApp {
       this.streamEl.dataset.rawContent = body;
     }
     const bubble = this.streamEl.querySelector('.message-bubble');
-    const displayText = stripMarkdownImages(body);
+    const displayText = assistantDisplayText(body);
     if (displayText && bubble) {
       bubble.innerHTML = formatMarkdown(displayText);
     } else if (bubble) {
@@ -3155,7 +3173,7 @@ class ChatApp {
     this.streamText = this.streamEl.dataset.rawContent || '';
     const bubble = this.streamEl.querySelector('.message-bubble');
     if (this.streamText && bubble) {
-      const displayText = stripMarkdownImages(this.streamText);
+      const displayText = assistantDisplayText(this.streamText);
       bubble.innerHTML = formatMarkdown(displayText);
     }
     this._syncAssistantLayoutClasses(this.streamEl);
@@ -3180,7 +3198,7 @@ class ChatApp {
 
   _syncResumeProgress(status = {}) {
     if (!this.streamEl) return;
-    const hasText = Boolean(stripMarkdownImages(this.streamText || ''));
+    const hasText = Boolean(assistantDisplayText(this.streamText || ''));
     const hasImages = Boolean(this.streamImagesEl?.children.length);
 
     if (status.progress_label || status.progress_stage) {
@@ -3755,7 +3773,7 @@ class ChatApp {
     const el = document.createElement('div');
     el.className = 'chat-message assistant';
     el.dataset.rawContent = text || '';
-    const displayText = stripMarkdownImages(text);
+    const displayText = assistantDisplayText(text);
     const urls = [...new Set(imageUrls.map(mediaFullUrl).filter(Boolean))];
     const reasoningBlock = WebChatMessageBlocks.buildMessageReasoning(reasoning);
     if (reasoningBlock) el.appendChild(reasoningBlock);

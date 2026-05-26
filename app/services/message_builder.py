@@ -27,6 +27,13 @@ from app.services.prompt_macro_service import expand_macro_text, expand_parts_fo
 
 logger = logging.getLogger(__name__)
 
+# Служебные пометки в истории LLM (модель иногда копирует в ответ — убираем при показе/сохранении).
+_LLM_IMAGE_CONTEXT_NOTE_RE = re.compile(
+    r"\n*\[(?:CTX generated_images:[^\]]*|"
+    r"В этом ответе были изображения \(для контекста\):[^\]]*)\]\s*",
+    re.IGNORECASE,
+)
+
 # Markdown-изображения в тексте ассистента не используем — картинки в content_json + UI.
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 
@@ -312,6 +319,32 @@ def build_user_content(
     return parts
 
 
+def strip_llm_image_context_note(text: str) -> str:
+    """Убрать служебную пометку о сгенерированных картинках (эхо из контекста LLM)."""
+    if not text:
+        return text
+    result = _LLM_IMAGE_CONTEXT_NOTE_RE.sub("", text)
+    result = re.sub(r"[ \t]+\n", "\n", result)
+    return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+
+def _image_context_tokens(urls: list[str]) -> list[str]:
+    """Короткие идентификаторы картинок для служебной пометки в истории LLM."""
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        aid = parse_asset_id_from_url(url)
+        if aid is not None:
+            token = str(aid)
+        else:
+            m = re.search(r"/media/generated/([^/\s?#]+)", url)
+            token = f"disk:{m.group(1)}" if m else ""
+        if token and token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    return tokens[:8]
+
+
 def _image_urls_from_content_json(content_json: dict[str, Any]) -> list[str]:
     """URL картинок из content_json assistant/user (images + image_asset_ids)."""
     urls: list[str] = []
@@ -366,11 +399,13 @@ def message_to_llm_dict(
         if tool_calls:
             entry["tool_calls"] = tool_calls
             if image_urls:
-                note_urls = ", ".join(
-                    rewrite_image_url_for_llm(u) for u in image_urls[:8]
-                )
-                suffix = f"\n\n[В этом ответе были изображения (для контекста): {note_urls}]"
-                entry["content"] = (text + suffix).strip() if text else suffix.strip()
+                tokens = _image_context_tokens(image_urls)
+                if tokens:
+                    suffix = (
+                        f"\n\n[CTX generated_images: {', '.join(tokens)} | "
+                        "служебная пометка для контекста, не цитируй пользователю]"
+                    )
+                    entry["content"] = (text + suffix).strip() if text else suffix.strip()
         elif image_urls:
             parts: list[dict[str, Any]] = []
             if text:
@@ -445,4 +480,5 @@ def finalize_assistant_text(
     if media_url_rewrites:
         body = rewrite_media_urls_in_text(body, media_url_rewrites)
     body = strip_markdown_images(body)
+    body = strip_llm_image_context_note(body)
     return strip_think_tags(body)
