@@ -53,6 +53,8 @@ const MSG_IMAGE_ICON_SAVE =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 const MSG_IMAGE_ICON_DELETE =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+const MSG_IMAGE_ICON_STAR =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 15.1 8.5 22 9.3 17 14.1 18.3 21 12 17.5 5.7 21 7 14.1 2 9.3 8.9 8.5 12 2"/></svg>';
 
 const MESSAGE_STATUS_HTML = `
   <div class="message-status" role="status" aria-live="polite">
@@ -191,6 +193,7 @@ class ChatApp {
     this._generationResumeActive = false;
     this._generationWatchRunning = false;
     this._generationHadImages = false;
+    this._generationNotifyPending = false;
     this._wsOfflineBannerShown = false;
     this._wsReconnecting = false;
     this._uiState = CHAT_UI_STATE.READY;
@@ -221,6 +224,7 @@ class ChatApp {
     this._uploadToastTimer = null;
     this._pendingImageDeleteKey = null;
     this._pendingImageDeleteBtn = null;
+    this._favoriteStateCache = new Map();
     this.currentUser = null;
     this.log = window.appLog;
     this.promptMacros = new PromptMacrosUI(this);
@@ -254,6 +258,7 @@ class ChatApp {
       composerMoreBtn: document.getElementById('composer-more-btn'),
       composerToolsMenu: document.getElementById('composer-tools-menu'),
       documentRagPreview: document.getElementById('document-rag-preview'),
+      macroInsertMenuBtn: document.getElementById('macro-insert-menu-btn'),
       settingsChatTitle: document.getElementById('settings-chat-title'),
       exportConversationBtn: document.getElementById('export-conversation-btn'),
       convPresetSelect: document.getElementById('conv-preset-select'),
@@ -299,12 +304,14 @@ class ChatApp {
       newConvModal: document.getElementById('new-conv-modal'),
       newConvPreset: document.getElementById('new-conv-preset'),
       lightbox: document.getElementById('lightbox'),
+      lightboxStage: document.getElementById('lightbox-stage'),
       lightboxImg: document.getElementById('lightbox-img'),
       lightboxLoader: document.getElementById('lightbox-loader'),
       lightboxPrev: document.getElementById('lightbox-prev'),
       lightboxNext: document.getElementById('lightbox-next'),
       lightboxCounter: document.getElementById('lightbox-counter'),
       lightboxSave: document.getElementById('lightbox-save'),
+      lightboxFavorite: document.getElementById('lightbox-favorite'),
       lightboxAttachCurrent: document.getElementById('lightbox-attach-current'),
       themeToggle: document.getElementById('theme-toggle'),
       themeToggleLabel: document.getElementById('theme-toggle-label'),
@@ -431,12 +438,26 @@ class ChatApp {
         this.promptMacros.openPicker();
       }
     });
+    this.$.macroInsertMenuBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.promptMacros.isPickerOpen()) {
+        this.promptMacros.closePicker();
+      } else {
+        this.promptMacros.openPicker();
+      }
+    });
     this._initMacroContextToggle();
     WebChatComposer.bindEvents(this);
     document.addEventListener('click', (e) => {
       const pop = document.getElementById('macro-picker-popover');
       if (!pop || pop.classList.contains('hidden')) return;
-      if (pop.contains(e.target) || this.$.macroInsertBtn?.contains(e.target)) return;
+      if (
+        pop.contains(e.target)
+        || this.$.macroInsertBtn?.contains(e.target)
+        || this.$.macroInsertMenuBtn?.contains(e.target)
+      ) {
+        return;
+      }
       this.promptMacros.closePicker();
     });
     document.getElementById('settings-close')?.addEventListener('click', () => this.showPanel('main'));
@@ -513,6 +534,11 @@ class ChatApp {
       e.stopPropagation();
       void this.downloadLightboxImage();
     });
+    this.$.lightboxFavorite?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const url = this._lightboxCurrentUrl();
+      if (url) void this._toggleFavoriteByUrl(url, this.$.lightboxFavorite);
+    });
     this.$.lightboxAttachCurrent?.addEventListener('click', (e) => {
       e.stopPropagation();
       void this.attachLightboxImageToComposer();
@@ -527,6 +553,11 @@ class ChatApp {
     });
     this.$.lightbox.addEventListener('click', (e) => {
       if (e.target === this.$.lightbox) this.closeLightbox();
+    });
+    this.$.lightboxStage?.addEventListener('click', (e) => {
+      // Закрытие по клику “мимо картинки”, но внутри сцены.
+      // (По самой картинке клик не должен закрывать.)
+      if (e.target === this.$.lightboxStage) this.closeLightbox();
     });
     this.$.lightbox.addEventListener('touchstart', (e) => this._onLightboxTouchStart(e), { passive: true });
     this.$.lightbox.addEventListener('touchend', (e) => this._onLightboxTouchEnd(e), { passive: true });
@@ -627,6 +658,7 @@ class ChatApp {
       this.$.settingsPanel?.classList.remove('hidden');
       this.syncPresetPromptField();
       this._hideSettingsSaveStatus();
+      window.TaskNotifications?.updateSettingsUi?.(this.$.settingsPanel);
       void WebChatAuth.refreshAdminUsersList(this);
       this.closeSidebar();
     } else if (panelName === 'logs') {
@@ -2186,6 +2218,7 @@ class ChatApp {
     this.$.userInput.disabled = true;
     this.$.sendBtn.disabled = true;
     if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = true;
+    if (this.$.macroInsertMenuBtn) this.$.macroInsertMenuBtn.disabled = true;
     if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = true;
     if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = true;
     if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = true;
@@ -2317,6 +2350,7 @@ class ChatApp {
       this.$.userInput.disabled = false;
       this.$.sendBtn.disabled = false;
       if (this.$.macroInsertBtn) this.$.macroInsertBtn.disabled = false;
+    if (this.$.macroInsertMenuBtn) this.$.macroInsertMenuBtn.disabled = false;
       if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = false;
       if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = false;
       if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = false;
@@ -2877,6 +2911,8 @@ class ChatApp {
 
   startStreaming() {
     this.streaming = true;
+    this._generationNotifyPending = true;
+    void window.TaskNotifications?.unlockAudio?.();
     this._setUiActivityStage('llm_thinking');
     this.streamText = '';
     this.streamReasoningText = '';
@@ -3198,7 +3234,9 @@ class ChatApp {
 
     if (!status.in_progress) {
       if (this.streaming || this._generationResumeActive) {
+        this._generationNotifyPending = true;
         await this._completeGenerationUi({ preserveScroll: !this._scrollStuckToBottom });
+        this._notifyGenerationComplete({ conversationTitle: this.currentConv?.title });
       } else {
         this._generationResumeActive = false;
       }
@@ -3206,6 +3244,7 @@ class ChatApp {
     }
 
     this._generationResumeActive = true;
+    this._generationNotifyPending = true;
     this.log?.info('chat', 'Подключение к идущей генерации на сервере');
 
     const streamId = status.streaming_message_id || serverMsg?.streaming_message_id;
@@ -3337,6 +3376,7 @@ class ChatApp {
           this._generationWatchRunning = false;
           const stick = this._scrollStuckToBottom;
           await this._completeGenerationUi({ preserveScroll: !stick });
+          this._notifyGenerationComplete({ conversationTitle: this.currentConv?.title });
           this._messagesFingerprint = await this._messagesFingerprintFromServer();
           this._conversationsFingerprint = '';
           await this._syncConversationsFromServer();
@@ -3354,28 +3394,21 @@ class ChatApp {
     poll();
   }
 
-  /** Короткий сигнал после генерации с картинками (без ошибки, если autoplay запрещён). */
-  _playGenerationDoneSound() {
-    try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      const ctx = new Ctx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 660;
-      gain.gain.value = 0.04;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      const t0 = ctx.currentTime;
-      osc.start(t0);
-      osc.stop(t0 + 0.12);
-      osc.onended = () => {
-        void ctx.close().catch(() => {});
-      };
-    } catch {
-      /* Web Audio недоступен или заблокирован политикой браузера */
-    }
+  /** Звук и системное уведомление о завершении генерации (один раз на ход). */
+  _notifyGenerationComplete({ conversationTitle } = {}) {
+    if (!this._generationNotifyPending) return;
+    this._generationNotifyPending = false;
+    const hadImages = this._generationHadImages;
+    this._generationHadImages = false;
+    const title = conversationTitle || this.currentConv?.title || 'web-chat';
+    const body = hadImages
+      ? 'Генерация изображений завершена'
+      : 'Ответ ассистента готов';
+    void window.TaskNotifications?.notifyTaskDone({
+      title,
+      body,
+      tag: `webchat-done-${this.currentConvId || 'chat'}`,
+    });
   }
 
   onTurnDone(msg) {
@@ -3384,10 +3417,7 @@ class ChatApp {
     this._clearGenerationSyncTimer();
     this._generationResumeActive = false;
     this.hideProgress();
-    if (this._generationHadImages) {
-      this._playGenerationDoneSound();
-    }
-    this._generationHadImages = false;
+    this._notifyGenerationComplete({ conversationTitle });
     this._regenerating = false;
 
     const afterReload = () => {
@@ -3531,6 +3561,8 @@ class ChatApp {
   onWsError(message, code, errorId) {
     this._clearGenerationSyncTimer();
     this._generationResumeActive = false;
+    this._generationNotifyPending = false;
+    this._generationHadImages = false;
     this.hideProgress();
     this.log?.error('ws', `Ошибка генерации (${code || 'unknown'})`, {
       message,
@@ -4111,14 +4143,21 @@ class ChatApp {
     const deleteBtn = target
       ? `<button type="button" class="gallery-card-action gallery-card-delete danger message-image-delete" data-media-key="${this.escapeAttr(mediaKey)}" title="Удалить" aria-label="Удалить">${MSG_IMAGE_ICON_DELETE}</button>`
       : '';
+    const favoriteBtn = target
+      ? `<button type="button" class="gallery-card-action message-image-favorite" data-media-key="${this.escapeAttr(mediaKey)}" data-full-url="${this.escapeAttr(full)}" title="В избранное" aria-label="В избранное">${MSG_IMAGE_ICON_STAR}</button>`
+      : '';
     frame.insertAdjacentHTML(
       'beforeend',
       `<button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl message-image-attach" data-full-url="${this.escapeAttr(full)}" title="Прикрепить это изображение к сообщению" aria-label="Прикрепить к сообщению">${MSG_IMAGE_ICON_ATTACH}</button>
       <div class="gallery-card-actions">
+        ${favoriteBtn}
         <button type="button" class="gallery-card-action gallery-card-save message-image-save" data-full-url="${this.escapeAttr(full)}" title="Сохранить" aria-label="Сохранить">${MSG_IMAGE_ICON_SAVE}</button>
         ${deleteBtn}
       </div>`,
     );
+    if (target) {
+      void this._syncFavoriteVisualByUrl(full, frame.querySelector('.message-image-favorite'));
+    }
     return frame;
   }
 
@@ -4139,6 +4178,13 @@ class ChatApp {
         e.preventDefault();
         e.stopPropagation();
         void this._saveMessageImage(saveBtn.dataset.fullUrl);
+        return;
+      }
+      const favoriteBtn = e.target.closest('.message-image-favorite');
+      if (favoriteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        void this._toggleFavoriteByUrl(favoriteBtn.dataset.fullUrl, favoriteBtn);
         return;
       }
       const deleteBtn = e.target.closest('.message-image-delete');
@@ -4840,6 +4886,10 @@ class ChatApp {
     if (this.$.lightboxAttachCurrent) {
       this.$.lightboxAttachCurrent.disabled = !this.currentConvId;
     }
+    if (this.$.lightboxFavorite) {
+      const url = this._lightboxCurrentUrl();
+      if (url) void this._syncFavoriteVisualByUrl(url, this.$.lightboxFavorite);
+    }
   }
 
   _updateLightboxNav() {
@@ -4877,6 +4927,75 @@ class ChatApp {
     this._lightboxTouchStart = null;
     if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy)) return;
     this._lightboxStep(dx < 0 ? 1 : -1);
+  }
+
+  _favoriteTitle(isFavorite) {
+    return isFavorite ? 'Убрать из избранного' : 'В избранное';
+  }
+
+  _setFavoriteButtonState(btn, isFavorite) {
+    if (!btn) return;
+    btn.classList.toggle('is-favorite', Boolean(isFavorite));
+    const title = this._favoriteTitle(Boolean(isFavorite));
+    btn.title = title;
+    btn.setAttribute('aria-label', title);
+  }
+
+  async _syncFavoriteVisualByUrl(url, btn) {
+    const target = parseMediaGalleryTarget(url);
+    if (!target || !btn) return;
+    const key = `${target.source}:${target.id}`;
+    if (this._favoriteStateCache.has(key)) {
+      this._setFavoriteButtonState(btn, this._favoriteStateCache.get(key));
+      return;
+    }
+    try {
+      const res = await fetch(`/api/gallery/favorite/state?source=${encodeURIComponent(target.source)}&id=${encodeURIComponent(target.id)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const favored = Boolean(data?.is_favorite);
+      this._favoriteStateCache.set(key, favored);
+      this._setFavoriteButtonState(btn, favored);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async _toggleFavoriteByUrl(url, btn) {
+    const target = parseMediaGalleryTarget(url);
+    if (!target || !btn) return;
+    const wasFavorite = btn.classList.contains('is-favorite');
+    const next = !wasFavorite;
+    const cacheKey = `${target.source}:${target.id}`;
+    const applyAll = (state) => {
+      this._favoriteStateCache.set(cacheKey, state);
+      this.$.chatMessages
+        ?.querySelectorAll(`.message-image-favorite[data-media-key="${CSS.escape(cacheKey)}"]`)
+        .forEach((node) => this._setFavoriteButtonState(node, state));
+      this._setFavoriteButtonState(this.$.lightboxFavorite, state);
+    };
+    applyAll(next);
+    try {
+      const res = await fetch('/api/gallery/favorite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: target.source,
+          id: target.id,
+          favorite: next,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+      const payload = await res.json();
+      const confirmed = Boolean(payload.is_favorite);
+      if (confirmed !== next) applyAll(confirmed);
+    } catch (err) {
+      applyAll(wasFavorite);
+      this.showError(err.message || 'Не удалось обновить избранное');
+    }
   }
 
   closeLightbox() {

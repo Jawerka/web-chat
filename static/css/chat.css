@@ -3866,6 +3866,14 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   flex-direction: column;
   gap: 14px;
   padding: 8px 0 16px;
+  opacity: 0;
+  animation: skeletonFadeIn 0.3s ease forwards;
+  animation-delay: 1s;
+}
+
+@keyframes skeletonFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .message-skeleton-row {
@@ -4149,6 +4157,9 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   align-items: center;
   justify-content: center;
   flex: 1 1 auto;
+  align-self: stretch; /* важно: ограничиваем высоту по размеру lightbox */
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   max-width: 100%;
@@ -4156,6 +4167,8 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
 }
 
 .lightbox-stage img {
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
   border-radius: var(--space-2);
@@ -4309,6 +4322,18 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   right: calc(max(16px, env(safe-area-inset-right)) + 52px);
 }
 
+.lightbox-favorite {
+  right: calc(max(16px, env(safe-area-inset-right)) + 104px);
+}
+
+.lightbox-action.is-favorite {
+  background: color-mix(in srgb, #fbbc04 28%, rgba(255, 255, 255, 0.12));
+  color: #fff7cc;
+}
+.lightbox-action.is-favorite svg polygon {
+  fill: currentColor;
+}
+
 .lightbox-close {
   position: absolute;
   top: max(16px, env(safe-area-inset-top));
@@ -4351,6 +4376,10 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
 
   .lightbox-save {
     right: calc(max(6px, env(safe-area-inset-right)) + 46px);
+  }
+
+  .lightbox-favorite {
+    right: calc(max(6px, env(safe-area-inset-right)) + 92px);
   }
 
   .lightbox-action,
@@ -4406,6 +4435,11 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
 
   .composer-tools-menu {
     max-width: min(240px, calc(100vw - 32px));
+  }
+
+  /* На мобильных: дополнительные действия (быстрые вставки) прячем под троеточие. */
+  #macro-insert-btn {
+    display: none;
   }
 
   .chat-preset-toolbar {
@@ -4703,6 +4737,14 @@ body.gallery-lightbox-open {
   transform: scale(0.94);
 }
 
+.gallery-card-action.is-favorite {
+  background: color-mix(in srgb, #fbbc04 35%, rgba(0, 0, 0, 0.55));
+  color: #fff7cc;
+}
+.gallery-card-action.is-favorite svg polygon {
+  fill: currentColor;
+}
+
 .gallery-card-action.delete-armed {
   background: rgba(234, 67, 53, 0.85);
   animation: convDeletePulse 1.1s ease-in-out infinite;
@@ -4858,6 +4900,14 @@ body.gallery-lightbox-open {
   transform: scale(0.94);
 }
 
+.gallery-lightbox .gallery-toolbar-btn.is-favorite {
+  background: color-mix(in srgb, #fbbc04 35%, rgba(255, 255, 255, 0.12));
+  color: #fff7cc;
+}
+.gallery-lightbox .gallery-toolbar-btn.is-favorite svg polygon {
+  fill: currentColor;
+}
+
 /* Счётчик и тулбар — оверлей; снизу место под картинку не резервируем */
 .gallery-lightbox {
   padding-top: max(64px, calc(12px + env(safe-area-inset-top) + 48px));
@@ -4875,10 +4925,10 @@ body.gallery-lightbox-open {
 
 .gallery-lightbox .lightbox-stage img {
   flex: 0 1 auto;
-  max-width: 100%;
-  max-height: 100%;
   width: auto;
   height: auto;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 

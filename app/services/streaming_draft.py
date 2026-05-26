@@ -44,6 +44,7 @@ class AssistantStreamDraft:
         self._flush_lock = asyncio.Lock()
         self._pending_flush = False
         self._last_flushed_len = 0
+        self._is_discarded = False
 
     @property
     def message(self) -> Message | None:
@@ -107,18 +108,19 @@ class AssistantStreamDraft:
         return self._message
 
     async def _update_content_json(self, patch: dict[str, Any]) -> None:
-        if self._message is None:
-            return
-        merged = self._content_json()
-        merged.update(patch)
-        self._json_cache = merged
-        await self._msg_repo.update_content(
-            self._message,
-            content_text=self._current_content_text(),
-            content_json=merged,
-        )
-        await self._conv_repo.touch(self._conversation)
-        await self._session.commit()
+        async with self._flush_lock:
+            if self._message is None or self._is_discarded:
+                return
+            merged = self._content_json()
+            merged.update(patch)
+            self._json_cache = merged
+            await self._msg_repo.update_content(
+                self._message,
+                content_text=self._current_content_text(),
+                content_json=merged,
+            )
+            await self._conv_repo.touch(self._conversation)
+            await self._session.commit()
 
     async def on_reasoning_delta(self, chunk: str) -> None:
         if not chunk:
@@ -146,18 +148,29 @@ class AssistantStreamDraft:
         self._pending_flush = True
         asyncio.create_task(self._debounced_flush())
         if len(self._buffer) - self._last_flushed_len >= settings.stream_flush_min_bytes:
-            asyncio.create_task(self.flush())
+            asyncio.create_task(self._flush_safe())
 
     async def _debounced_flush(self) -> None:
         await asyncio.sleep(0.35)
-        if not self._pending_flush:
+        if self._is_discarded or not self._pending_flush:
             return
         self._pending_flush = False
-        await self.flush()
+        try:
+            await self.flush()
+        except Exception:
+            # Фоновая задача: не даём исключению “утечь” как unhandled task.
+            logger.exception("AssistantStreamDraft: debounced flush failed")
+
+    async def _flush_safe(self) -> None:
+        """Безопасный flush для фоновых задач (не кидает исключения наружу)."""
+        try:
+            await self.flush()
+        except Exception:
+            logger.exception("AssistantStreamDraft: flush task failed")
 
     async def flush(self) -> None:
         async with self._flush_lock:
-            if self._message is None:
+            if self._message is None or self._is_discarded:
                 return
             await self._msg_repo.update_content(
                 self._message,
@@ -174,11 +187,6 @@ class AssistantStreamDraft:
         Нужно для восстановления UI после перезагрузки во время SD/MCP.
         """
         await self._ensure_message()
-        if self._buffer:
-            await self._msg_repo.update_content(
-                self._message,
-                content_text=self._buffer,
-            )
         cj = self._content_json()
         patch = patch_active_turn_phase(
             {
@@ -239,12 +247,16 @@ class AssistantStreamDraft:
 
     async def discard(self) -> None:
         """Удалить черновик (только при отмене / ошибке)."""
-        if self._message is None:
-            return
-        mid = self._message.id
-        await self._msg_repo.delete(self._message)
-        await self._session.commit()
-        manager.clear_streaming_message(self._conversation.id)
-        logger.info("Черновик ответа %s удалён", mid)
-        self._message = None
-        self._buffer = ""
+        async with self._flush_lock:
+            if self._message is None or self._is_discarded:
+                return
+            self._is_discarded = True
+            self._pending_flush = False
+            mid = self._message.id
+            await self._msg_repo.delete(self._message)
+            await self._session.commit()
+            manager.clear_streaming_message(self._conversation.id)
+            logger.info("Черновик ответа %s удалён", mid)
+            self._message = None
+            self._buffer = ""
+            self._reasoning_buffer = ""

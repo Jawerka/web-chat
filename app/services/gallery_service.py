@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import Message
-from app.db.repositories import GalleryAssetMeta, MessageRepository
+from app.db.repositories import GalleryAssetMeta, MediaFavoriteRepository, MessageRepository
 from app.services.media_reference_index import collect_referenced_asset_ids
 from app.services.media_registry import MediaRegistry
 from app.integrations.media_utils import asset_media_url, generated_media_url
@@ -40,7 +40,7 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 GALLERY_MAX_LIMIT = 1000
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class GalleryItem:
     """Один элемент галереи."""
 
@@ -51,6 +51,8 @@ class GalleryItem:
     size_kb: float
     mtime: float
     source: str = "disk"  # "db" | "disk"
+    is_favorite: bool = False
+    favorite_at: float | None = None
 
     def to_api_dict(self) -> dict:
         return {
@@ -61,6 +63,8 @@ class GalleryItem:
             "size_kb": self.size_kb,
             "mtime": self.mtime,
             "source": self.source,
+            "is_favorite": self.is_favorite,
+            "favorite_at": self.favorite_at,
         }
 
 
@@ -137,8 +141,24 @@ async def list_gallery_images(
             continue
         local_items.append(item)
 
+    fav_repo = MediaFavoriteRepository(session)
+    favorite_map = await fav_repo.favorite_map()
+
     merged = db_items + local_items
-    merged.sort(key=lambda x: x.mtime, reverse=True)
+    for item in merged:
+        key = f"{item.source}:{item.id}"
+        fav_dt = favorite_map.get(key)
+        if fav_dt is not None:
+            item.is_favorite = True
+            item.favorite_at = fav_dt.timestamp()
+    merged.sort(
+        key=lambda x: (
+            1 if x.is_favorite else 0,
+            x.favorite_at or 0.0,
+            x.mtime,
+        ),
+        reverse=True,
+    )
     return merged[:limit]
 
 

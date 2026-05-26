@@ -219,6 +219,22 @@ class MediaAsset(Base):
     )
 
 
+class MediaFavorite(Base):
+    """Избранное для изображений галереи (DB asset или disk file)."""
+
+    __tablename__ = "media_favorites"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    media_source: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    media_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class PromptMacro(Base):
     """Быстрый промпт: @alias в чате → полный текст для LLM."""
 

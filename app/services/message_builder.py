@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 # Markdown-изображения в тексте ассистента не используем — картинки в content_json + UI.
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 
+# Некоторые модели могут возвращать reasoning в виде тегов `<think>...</think>`.
+# Эти теги нельзя оставлять в history для следующего LLM-запроса.
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
 
 def _public_url_from_image_part(part: dict[str, Any]) -> str | None:
     """Публичный URL картинки из part сообщения (не /llm)."""
@@ -269,7 +273,8 @@ def message_to_llm_dict(
     if message.role == MessageRole.ASSISTANT:
         cj = message.content_json if isinstance(message.content_json, dict) else {}
         image_urls = _image_urls_from_content_json(cj) if cj else []
-        text = message.content_text or ""
+        # Для следующего запроса LLM не передаём `<think>...</think>`.
+        text = strip_think_tags(message.content_text or "")
         tool_calls = cj.get("tool_calls") if cj else None
 
         entry: dict[str, Any] = {"role": "assistant", "content": text or None}
@@ -334,6 +339,17 @@ def strip_markdown_images(text: str) -> str:
     return result.strip()
 
 
+def strip_think_tags(text: str) -> str:
+    """Убрать `<think>...</think>` и одиночные `<think>`/`</think>`."""
+    if not text:
+        return text
+    result = _THINK_BLOCK_RE.sub("", text)
+    # На случай “некорректно сформированных” тегов.
+    result = re.sub(r"</?think>", "", result, flags=re.IGNORECASE)
+    result = re.sub(r"[ \t]+\n", "\n", result)
+    return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+
 def finalize_assistant_text(
     completion_content: str | None,
     *,
@@ -343,4 +359,5 @@ def finalize_assistant_text(
     body = completion_content or ""
     if media_url_rewrites:
         body = rewrite_media_urls_in_text(body, media_url_rewrites)
-    return strip_markdown_images(body)
+    body = strip_markdown_images(body)
+    return strip_think_tags(body)

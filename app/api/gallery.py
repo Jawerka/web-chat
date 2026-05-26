@@ -8,9 +8,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.ws_events import broadcast_gallery_update
+from app.db.repositories import MediaFavoriteRepository
 from app.db.session import get_db
 from app.services.gallery_service import (
     GALLERY_MAX_LIMIT,
@@ -27,6 +29,12 @@ templates = Jinja2Templates(directory=str(_ROOT / "templates"))
 router = APIRouter(tags=["gallery"])
 
 
+class GalleryFavoritePayload(BaseModel):
+    source: str = Field(min_length=2, max_length=16)
+    id: str = Field(min_length=1, max_length=255)
+    favorite: bool = True
+
+
 @router.get("/api/gallery")
 async def api_gallery(
     limit: int = GALLERY_MAX_LIMIT,
@@ -37,6 +45,44 @@ async def api_gallery(
     return {
         "images": [i.to_api_dict() for i in items],
         "count": len(items),
+    }
+
+
+@router.post("/api/gallery/favorite")
+async def api_gallery_favorite(
+    payload: GalleryFavoritePayload,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    source = payload.source.strip().lower()
+    if source not in {"db", "disk"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source должен быть db или disk")
+    media_id = payload.id.strip()
+    repo = MediaFavoriteRepository(db)
+    is_favorite = await repo.set_favorite(
+        source=source,
+        media_id=media_id,
+        is_favorite=bool(payload.favorite),
+    )
+    await db.commit()
+    await broadcast_gallery_update("favorite", source=source, id=media_id, favorite=is_favorite)
+    return {"ok": True, "source": source, "id": media_id, "is_favorite": is_favorite}
+
+
+@router.get("/api/gallery/favorite/state")
+async def api_gallery_favorite_state(
+    source: str,
+    id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    source_norm = source.strip().lower()
+    if source_norm not in {"db", "disk"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source должен быть db или disk")
+    media_id = id.strip()
+    repo = MediaFavoriteRepository(db)
+    return {
+        "source": source_norm,
+        "id": media_id,
+        "is_favorite": await repo.is_favorite(source=source_norm, media_id=media_id),
     }
 
 

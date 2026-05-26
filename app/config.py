@@ -51,7 +51,9 @@ class Settings(BaseSettings):
     sd_cfg_scale: float = 5.0
     sd_width: int = 1024
     sd_height: int = 1024
-    request_timeout: int = 600
+    # HTTP ReadTimeout для тяжелых txt2img/img2img запросов.
+    # Дефолт 600с для медленных окружений иногда недостаточен.
+    request_timeout: int = 1200
     mcp_timeout: int = 900
 
     database_url: str = "sqlite+aiosqlite:///./data/db/web_chat.sqlite"

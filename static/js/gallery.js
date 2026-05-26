@@ -18,6 +18,8 @@ const ICON_SAVE =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 const ICON_DELETE =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+const ICON_STAR =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 15.1 8.5 22 9.3 17 14.1 18.3 21 12 17.5 5.7 21 7 14.1 2 9.3 8.9 8.5 12 2"/></svg>';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -47,6 +49,7 @@ class GalleryApp {
       lightboxCounter: $('#gallery-lightbox-counter'),
       lightboxTitle: $('#gallery-lightbox-title'),
       lightboxSave: $('#gallery-lightbox-save'),
+      lightboxFavorite: $('#gallery-lightbox-favorite'),
       lightboxAttach: $('#gallery-lightbox-attach'),
       lightboxDelete: $('#gallery-lightbox-delete'),
     };
@@ -108,6 +111,11 @@ class GalleryApp {
       e.stopPropagation();
       this.saveItem(this.currentItem());
     });
+    this.els.lightboxFavorite?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = this.currentItem();
+      if (item) void this.toggleFavorite(item, this.els.lightboxFavorite);
+    });
     this.els.lightboxAttach?.addEventListener('click', (e) => {
       e.stopPropagation();
       const item = this.currentItem();
@@ -148,6 +156,15 @@ class GalleryApp {
         const card = saveBtn.closest('.gallery-card');
         const item = card ? this.itemById.get(card.dataset.id) : null;
         if (item) this.saveItem(item);
+        return;
+      }
+      const favoriteBtn = e.target.closest('.gallery-card-favorite');
+      if (favoriteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = favoriteBtn.closest('.gallery-card');
+        const item = card ? this.itemById.get(card.dataset.id) : null;
+        if (item) void this.toggleFavorite(item, favoriteBtn);
         return;
       }
 
@@ -308,6 +325,7 @@ class GalleryApp {
         <img src="${this.escapeAttr(mediaPreviewUrl(item.thumb_url))}" alt="${this.escapeAttr(item.filename)}" loading="lazy" decoding="async">
         <button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl" data-id="${this.escapeAttr(item.id)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${ICON_ATTACH}</button>
         <div class="gallery-card-actions">
+          <button type="button" class="gallery-card-action gallery-card-favorite${item.is_favorite ? ' is-favorite' : ''}" data-id="${this.escapeAttr(item.id)}" title="${item.is_favorite ? 'Убрать из избранного' : 'В избранное'}" aria-label="Избранное">${ICON_STAR}</button>
           <button type="button" class="gallery-card-action gallery-card-save" data-id="${this.escapeAttr(item.id)}" title="Сохранить" aria-label="Сохранить">${ICON_SAVE}</button>
           <button type="button" class="gallery-card-action gallery-card-delete danger" data-id="${this.escapeAttr(item.id)}" title="Удалить" aria-label="Удалить">${ICON_DELETE}</button>
         </div>
@@ -344,7 +362,16 @@ class GalleryApp {
     if (this.els.lightboxTitle) {
       this.els.lightboxTitle.textContent = item.filename;
     }
+    this._syncFavoriteButton(item);
     this.updateLightboxNav();
+  }
+
+  _syncFavoriteButton(item) {
+    const btn = this.els.lightboxFavorite;
+    if (!btn || !item) return;
+    btn.classList.toggle('is-favorite', Boolean(item.is_favorite));
+    btn.title = item.is_favorite ? 'Убрать из избранного' : 'В избранное';
+    btn.setAttribute('aria-label', item.is_favorite ? 'Убрать из избранного' : 'В избранное');
   }
 
   updateLightboxNav() {
@@ -408,6 +435,48 @@ class GalleryApp {
 
   currentItem() {
     return this.items[this.lightboxIndex] || null;
+  }
+
+  async toggleFavorite(item, btn) {
+    if (!item) return;
+    const next = !item.is_favorite;
+    const prev = item.is_favorite;
+    item.is_favorite = next;
+    item.favorite_at = next ? Date.now() / 1000 : null;
+    if (btn) this._applyFavoriteVisual(btn, next);
+    this._syncFavoriteButton(item);
+    const cardBtn = document.querySelector(`.gallery-card-favorite[data-id="${CSS.escape(item.id)}"]`);
+    if (cardBtn && cardBtn !== btn) this._applyFavoriteVisual(cardBtn, next);
+    try {
+      const res = await fetch('/api/gallery/favorite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: item.source,
+          id: item.id,
+          favorite: next,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+      await this.refresh(false);
+      this.flashStatus(next ? 'Добавлено в избранное' : 'Удалено из избранного');
+    } catch (err) {
+      item.is_favorite = prev;
+      item.favorite_at = prev ? Date.now() / 1000 : null;
+      if (btn) this._applyFavoriteVisual(btn, prev);
+      this._syncFavoriteButton(item);
+      if (cardBtn && cardBtn !== btn) this._applyFavoriteVisual(cardBtn, prev);
+      this.flashStatus(err.message || 'Не удалось обновить избранное', true);
+    }
+  }
+
+  _applyFavoriteVisual(btn, isFav) {
+    btn.classList.toggle('is-favorite', Boolean(isFav));
+    btn.title = isFav ? 'Убрать из избранного' : 'В избранное';
+    btn.setAttribute('aria-label', isFav ? 'Убрать из избранного' : 'В избранное');
   }
 
   async attachToNewChat(item, btn) {

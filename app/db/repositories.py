@@ -16,6 +16,7 @@ from app.db.models import (
     Conversation,
     DocumentChunk,
     MediaAsset,
+    MediaFavorite,
     Message,
     MessageRole,
     Preset,
@@ -481,6 +482,71 @@ class MediaAssetRepository:
         await self._session.refresh(asset)
         return asset
 
+
+class MediaFavoriteRepository:
+    """Избранное изображений (глобально для галереи)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    @staticmethod
+    def make_key(source: str, media_id: str) -> str:
+        return f"{source}:{media_id}"
+
+    async def list_all(self) -> list[MediaFavorite]:
+        result = await self._session.execute(
+            select(MediaFavorite).order_by(MediaFavorite.created_at.desc()),
+        )
+        return list(result.scalars().all())
+
+    async def favorite_map(self) -> dict[str, datetime]:
+        items = await self.list_all()
+        out: dict[str, datetime] = {}
+        for item in items:
+            out[self.make_key(item.media_source, item.media_id)] = item.created_at
+        return out
+
+    async def set_favorite(self, *, source: str, media_id: str, is_favorite: bool) -> bool:
+        source_norm = source.strip().lower()
+        media_norm = media_id.strip()
+        if not source_norm or not media_norm:
+            return False
+        result = await self._session.execute(
+            select(MediaFavorite)
+            .where(
+                MediaFavorite.media_source == source_norm,
+                MediaFavorite.media_id == media_norm,
+            )
+            .limit(1),
+        )
+        item = result.scalar_one_or_none()
+        if is_favorite:
+            if item is not None:
+                return True
+            self._session.add(
+                MediaFavorite(
+                    media_source=source_norm,
+                    media_id=media_norm,
+                ),
+            )
+            await self._session.flush()
+            return True
+        if item is None:
+            return False
+        await self._session.delete(item)
+        await self._session.flush()
+        return False
+
+    async def is_favorite(self, *, source: str, media_id: str) -> bool:
+        result = await self._session.execute(
+            select(MediaFavorite.id)
+            .where(
+                MediaFavorite.media_source == source.strip().lower(),
+                MediaFavorite.media_id == media_id.strip(),
+            )
+            .limit(1),
+        )
+        return result.scalar_one_or_none() is not None
 
 class AttachmentRepository:
     """Операции с вложениями."""

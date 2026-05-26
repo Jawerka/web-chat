@@ -323,6 +323,19 @@
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
                   </button>
                   <div class="composer-tools-menu hidden" id="composer-tools-menu" role="menu" aria-label="Инструменты ввода">
+                    <button
+                      type="button"
+                      class="composer-tools-menu-item macro-insert-menu-btn"
+                      id="macro-insert-menu-btn"
+                      role="menuitem"
+                      title="Вставить @промпт"
+                      aria-label="Вставить @промпт"
+                      aria-pressed="false"
+                      disabled
+                    >
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 8h10M7 12h6M7 16h8"/><circle cx="17" cy="8" r="3"/></svg>
+                      <span class="composer-tools-menu-label">Вставить @промпт</span>
+                    </button>
                     <button type="button" class="composer-tools-menu-item macro-context-full-btn" id="macro-context-full-btn" role="menuitem" title="Каталог @alias в контексте модели: выкл" aria-label="Полный каталог @alias для модели" aria-pressed="false" disabled>
                       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6"/></svg>
                       <span class="composer-tools-menu-label">Каталог @alias</span>
@@ -510,6 +523,26 @@
               </span>
               <svg class="settings-row-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
             </button>
+            <label class="settings-toggle-row" for="settings-task-sound">
+              <span class="settings-toggle-text">
+                <span class="settings-toggle-title">Звук при завершении</span>
+                <span class="settings-toggle-desc">Короткий сигнал, когда ответ готов</span>
+              </span>
+              <input type="checkbox" id="settings-task-sound" class="settings-toggle-input" checked>
+              <span class="settings-toggle-track" aria-hidden="true"></span>
+            </label>
+            <label class="settings-toggle-row" for="settings-task-notify">
+              <span class="settings-toggle-text">
+                <span class="settings-toggle-title">Системные уведомления</span>
+                <span class="settings-toggle-desc">Chrome на Windows и мобильных (после разрешения)</span>
+              </span>
+              <input type="checkbox" id="settings-task-notify" class="settings-toggle-input" checked>
+              <span class="settings-toggle-track" aria-hidden="true"></span>
+            </label>
+            <p class="form-hint" id="settings-notify-permission-hint" role="status">Не запрошено</p>
+            <button type="button" class="settings-inline-btn" id="settings-notify-permission-btn">
+              Разрешить уведомления в браузере
+            </button>
           </section>
 
           <section class="settings-section settings-section--preset ui-card">
@@ -642,11 +675,16 @@
         <line x1="12" y1="15" x2="12" y2="3"/>
       </svg>
     </button>
+    <button type="button" class="lightbox-action lightbox-favorite" id="lightbox-favorite" title="В избранное" aria-label="В избранное">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <polygon points="12 2 15.1 8.5 22 9.3 17 14.1 18.3 21 12 17.5 5.7 21 7 14.1 2 9.3 8.9 8.5 12 2"/>
+      </svg>
+    </button>
     <button type="button" class="lightbox-close" id="lightbox-close" title="Закрыть" aria-label="Закрыть">
       <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>
     <span class="lightbox-counter hidden" id="lightbox-counter" aria-live="polite"></span>
-    <div class="lightbox-stage">
+    <div class="lightbox-stage" id="lightbox-stage">
       <div class="lightbox-loader" id="lightbox-loader" role="status" aria-live="polite" aria-hidden="true">
         <div class="lightbox-loader-spinner" aria-hidden="true"></div>
         <span class="lightbox-loader-label">Загрузка…</span>
@@ -662,6 +700,7 @@
   <script src="/static/js/prompt-macros.js"></script>
   <script src="/static/js/media-urls.js"></script>
   <script src="/static/js/lightbox-image.js"></script>
+  <script src="/static/js/task-notifications.js"></script>
   <script src="/static/js/chat-labels.js"></script>
   <script src="/static/js/chat-message-blocks.js"></script>
   <script src="/static/js/chat-ws.js"></script>

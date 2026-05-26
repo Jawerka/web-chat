@@ -42,6 +42,7 @@ async def broadcast_gallery_update(
     *,
     asset_id: str | None = None,
     count: int | None = None,
+    **extra: Any,
 ) -> None:
     """Уведомить подписчиков /ws/events об изменении галереи."""
     payload: dict[str, Any] = {"type": "gallery_update", "reason": reason}
@@ -49,6 +50,8 @@ async def broadcast_gallery_update(
         payload["asset_id"] = asset_id
     if count is not None:
         payload["count"] = count
+    if extra:
+        payload.update(extra)
     await manager.broadcast_system(payload)
 
 
