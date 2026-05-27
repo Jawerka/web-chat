@@ -224,6 +224,8 @@ class ChatApp {
     this._sidebarSwipe = null;
     this._serverLlmModel = '';
     this._serverLlmSource = 'auto';
+    this._sdModels = [];
+    this._sdSelectedServer = '';
     this._settingsSaveStatusTimer = null;
     this._settingsSaveBtnTimer = null;
     this._presetPromptSaveBtnTimer = null;
@@ -336,6 +338,8 @@ class ChatApp {
       llmBaseUrlInput: document.getElementById('llm-base-url-input'),
       llmModelInput: document.getElementById('llm-model-input'),
       sdWebuiUrlInput: document.getElementById('sd-webui-url-input'),
+      sdModelSelect: document.getElementById('sd-model-select'),
+      sdModelRefreshBtn: document.getElementById('sd-model-refresh-btn'),
       useServerModel: document.getElementById('use-server-model'),
       fontSizeInput: document.getElementById('font-size'),
       fontSizeDecrease: document.getElementById('font-size-decrease'),
@@ -408,6 +412,7 @@ class ChatApp {
       }
     }
     this.loadLlmModelInfo().catch(() => {});
+    this.loadSdModelInfo().catch(() => {});
 
     await Promise.all([
       this.loadPresets(),
@@ -482,6 +487,15 @@ class ChatApp {
     document.getElementById('logs-close')?.addEventListener('click', () => this.closeLogsPanel());
     this.$.themeToggle?.addEventListener('click', () => this.toggleTheme());
     this.$.llmModelInput?.addEventListener('change', () => this._saveModelOverride());
+    this.$.sdModelRefreshBtn?.addEventListener('click', () => {
+      void this.loadSdModelInfo();
+    });
+    this.$.sdModelSelect?.addEventListener('change', () => {
+      void this.applySdModelSelection({ showStatus: true });
+    });
+    this.$.sdWebuiUrlInput?.addEventListener('change', () => {
+      void this.loadSdModelInfo();
+    });
     this.$.fontSizeDecrease?.addEventListener('click', () => this.changeFontSize(-1));
     this.$.fontSizeIncrease?.addEventListener('click', () => this.changeFontSize(1));
     this.$.fontSizeInput?.addEventListener('change', () => this.applyFontSize());
@@ -4577,6 +4591,7 @@ class ChatApp {
       this._saveModelOverride();
       this._saveIntegrationUrls();
       await this.loadLlmModelInfo();
+      await this.applySdModelSelection({ showStatus: false });
       if (this.$.useServerModel) {
         localStorage.setItem(
           'webchat_use_server_model',
@@ -5354,6 +5369,116 @@ class ChatApp {
       if (this.$.llmModelInput) {
         this.$.llmModelInput.placeholder = 'Недоступно';
       }
+    }
+  }
+
+  async loadSdModelInfo() {
+    const select = this.$.sdModelSelect;
+    if (!select) return;
+    const refreshBtn = this.$.sdModelRefreshBtn;
+    if (refreshBtn) refreshBtn.disabled = true;
+    select.innerHTML = '<option value="">Загрузка списка моделей…</option>';
+    select.disabled = true;
+    try {
+      const base = this._normalizeServiceUrl(this.$.sdWebuiUrlInput?.value);
+      const qs = base ? `?sd_webui_url=${encodeURIComponent(base)}` : '';
+      const info = await this.api(`/api/config/sd-models${qs}`);
+      this._sdModels = Array.isArray(info?.models) ? info.models : [];
+      this._sdSelectedServer = String(info?.selected || '');
+      this._syncSdModelSelectState();
+    } catch (err) {
+      this._sdModels = [];
+      this._sdSelectedServer = '';
+      select.innerHTML = '<option value="">Не удалось загрузить модели</option>';
+      select.disabled = true;
+      this.log?.warn('settings', 'Не удалось получить список SD моделей', err?.message || err);
+    } finally {
+      if (refreshBtn) refreshBtn.disabled = false;
+    }
+  }
+
+  _syncSdModelSelectState() {
+    const select = this.$.sdModelSelect;
+    if (!select) return;
+    const models = this._sdModels || [];
+    if (!models.length) {
+      select.innerHTML = '<option value="">Список моделей пуст</option>';
+      select.disabled = true;
+      return;
+    }
+    const serverSelected = (this._sdSelectedServer || '').trim();
+    const saved = (localStorage.getItem('webchat_sd_model_checkpoint') || '').trim();
+    const candidate = saved || serverSelected;
+
+    select.innerHTML = '';
+    for (const item of models) {
+      const title = String(item?.title || '').trim();
+      if (!title) continue;
+      const opt = document.createElement('option');
+      opt.value = title;
+      opt.textContent = title;
+      select.appendChild(opt);
+    }
+    if (!select.options.length) {
+      select.innerHTML = '<option value="">Список моделей пуст</option>';
+      select.disabled = true;
+      return;
+    }
+    select.disabled = false;
+    if (candidate && [...select.options].some((o) => o.value === candidate)) {
+      select.value = candidate;
+    } else if (serverSelected && [...select.options].some((o) => o.value === serverSelected)) {
+      select.value = serverSelected;
+    } else {
+      select.selectedIndex = 0;
+    }
+  }
+
+  async applySdModelSelection({ showStatus = true } = {}) {
+    const select = this.$.sdModelSelect;
+    if (!select || select.disabled) return;
+    const title = (select.value || '').trim();
+    if (!title) {
+      localStorage.removeItem('webchat_sd_model_checkpoint');
+      return;
+    }
+    if (title === (this._sdSelectedServer || '').trim()) {
+      localStorage.setItem('webchat_sd_model_checkpoint', title);
+      return;
+    }
+    const prev = (this._sdSelectedServer || '').trim();
+    const sdUrl = this._normalizeServiceUrl(this.$.sdWebuiUrlInput?.value);
+    select.disabled = true;
+    if (showStatus) this._showSettingsSaveStatus('info', 'Применяем SD модель…');
+    try {
+      const res = await fetch('/api/config/sd-models/select', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          title,
+          sd_webui_url: sdUrl || null,
+          warmup: true,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || 'Не удалось применить SD модель');
+      }
+      localStorage.setItem('webchat_sd_model_checkpoint', title);
+      this._sdSelectedServer = title;
+      this.log?.info('settings', `SD модель применена: ${title}`);
+      if (showStatus) this._showSettingsSaveStatus('success', `SD модель активна: ${title}`);
+    } catch (err) {
+      if (prev && [...select.options].some((o) => o.value === prev)) {
+        select.value = prev;
+      }
+      if (showStatus) {
+        this._showSettingsSaveStatus('error', err?.message || 'Не удалось применить SD модель');
+      }
+      throw err;
+    } finally {
+      select.disabled = false;
     }
   }
 

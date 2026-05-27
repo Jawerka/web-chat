@@ -450,7 +450,21 @@
               placeholder="http://host:7860"
               aria-label="Адрес Stable Diffusion WebUI"
             >
-            <p class="form-hint">Automatic1111 / Forge — для инструмента генерации изображений.</p>
+            <label class="settings-field-label" for="sd-model-select">Модель (checkpoint)</label>
+            <div class="settings-inline-row settings-inline-row--sd">
+              <select
+                class="form-input settings-field-input"
+                id="sd-model-select"
+                aria-label="Выбор модели Stable Diffusion"
+              >
+                <option value="">Загрузка списка моделей…</option>
+              </select>
+              <button type="button" class="settings-inline-btn" id="sd-model-refresh-btn">
+                Обновить
+              </button>
+            </div>
+            <p class="form-hint settings-sd-hint-primary">Automatic1111 / Forge — для инструмента генерации изображений.</p>
+            <p class="form-hint settings-sd-hint-secondary">Модель применяется глобально в WebUI и используется для следующих генераций.</p>
             <p class="form-hint settings-trusted-hint hidden" id="trusted-internal-hint"></p>
           </section>
 

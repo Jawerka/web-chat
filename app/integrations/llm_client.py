@@ -87,14 +87,18 @@ class LLMClient:
             self._model = cached[0]
             return self._model
 
-        model_id = await self._fetch_first_model_id()
+        models = await self.fetch_models()
+        if not models:
+            raise LLMError("Список моделей LLM пуст")
+        model_id = models[0]
         self._model = model_id
         async with _MODEL_CACHE_LOCK:
             _MODEL_CACHE[self._base_url] = (model_id, time.monotonic() + 300.0)
         logger.info("Автовыбор модели LLM: %s (base=%s)", model_id, self._base_url)
         return model_id
 
-    async def _fetch_first_model_id(self) -> str:
+    async def fetch_models(self) -> list[str]:
+        """Получить список id моделей из OpenAI-compatible GET /models."""
         url = f"{self._base_url.rstrip('/')}/models"
         headers: dict[str, str] = {}
         if settings.llm_api_key:
@@ -114,9 +118,13 @@ class LLMClient:
                     models = data.get("data") if isinstance(data, dict) else None
                     if not models:
                         raise LLMError("Список моделей LLM пуст")
-                    first = models[0]
-                    model_id = first.get("id") if isinstance(first, dict) else str(first)
-                    if not model_id:
+                    model_ids: list[str] = []
+                    for item in models:
+                        model_id = item.get("id") if isinstance(item, dict) else str(item)
+                        model_id = str(model_id or "").strip()
+                        if model_id:
+                            model_ids.append(model_id)
+                    if not model_ids:
                         raise LLMError("Список моделей LLM пуст")
                     if attempt > 1:
                         logger.info(
@@ -124,7 +132,7 @@ class LLMClient:
                             attempt,
                             response.status_code,
                         )
-                    return str(model_id)
+                    return model_ids
 
                 body_preview = (response.text or "")[:200]
                 if response.status_code == 503:
