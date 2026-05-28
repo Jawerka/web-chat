@@ -2999,7 +2999,9 @@ class ChatApp {
   onTextDelta(chunk) {
     if (!this._ensureStreamTarget()) return;
     this._setUiActivityStage('llm_typing');
-    this.hideProgress();
+    // Не прячем status при каждом text_delta: иначе он мигает из-за чередования
+    // с progress/generation_update событиями и "дёргает" высоту пузыря.
+    this.showProgress(null, { stage: 'llm_typing' });
     this.streamEl.classList.remove('waiting');
     this._renderStreamTextToBubble((this.streamText || '') + chunk);
     this._scheduleScrollToBottom();
@@ -3007,7 +3009,12 @@ class ChatApp {
 
   onReasoningDelta(chunk) {
     if (!chunk || !this._ensureStreamTarget()) return;
-    this._setUiActivityStage('llm_thinking');
+    // Если уже началась печать видимого текста, не откатываем UI-стадию обратно
+    // в "Размышляю…": reasoning может приходить вперемешку с text_delta.
+    const hasVisibleText = Boolean(assistantDisplayText(this.streamText || ''));
+    if (!hasVisibleText) {
+      this._setUiActivityStage('llm_thinking');
+    }
     this.streamReasoningText = (this.streamReasoningText || '') + chunk;
     this._renderStreamReasoning(this.streamReasoningText);
     this._scheduleScrollToBottom();
