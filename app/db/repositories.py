@@ -412,6 +412,45 @@ class MediaAssetRepository:
     async def get_by_id(self, asset_id: uuid.UUID) -> MediaAsset | None:
         return await self._session.get(MediaAsset, asset_id)
 
+    async def exists(self, asset_id: uuid.UUID) -> bool:
+        """Строка есть в БД без чтения BLOB (P4.6)."""
+        stmt = select(MediaAsset.id).where(MediaAsset.id == asset_id).limit(1)
+        row = await self._session.execute(stmt)
+        return row.scalar_one_or_none() is not None
+
+    async def get_cached_llm_data(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
+        """Только llm_data + mime_type, без загрузки data/thumb_data (P4.3)."""
+        stmt = (
+            select(MediaAsset.llm_data, MediaAsset.mime_type)
+            .where(MediaAsset.id == asset_id)
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None or row.llm_data is None:
+            return None
+        return row.llm_data, row.mime_type
+
+    async def get_source_data_for_llm(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
+        """Полный data для сжатия в llm_data; без thumb_data (P4.3)."""
+        stmt = (
+            select(MediaAsset.data, MediaAsset.mime_type)
+            .where(MediaAsset.id == asset_id)
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None:
+            return None
+        return row.data, row.mime_type
+
+    async def set_llm_data(self, asset_id: uuid.UUID, llm_data: bytes) -> None:
+        """Сохранить кэш vision-JPEG без повторной загрузки всей строки."""
+        await self._session.execute(
+            update(MediaAsset)
+            .where(MediaAsset.id == asset_id)
+            .values(llm_data=llm_data),
+        )
+        await self._session.flush()
+
     async def delete(self, asset: MediaAsset) -> None:
         """Удалить MediaAsset."""
         await self._session.delete(asset)
@@ -605,9 +644,12 @@ class AttachmentRepository:
         """Привязать вложения к сообщению и беседе."""
         for aid in attachment_ids:
             att = await self.get_by_id(aid)
-            if att is not None:
-                att.message_id = message_id
-                att.conversation_id = conversation_id
+            if att is None:
+                continue
+            if att.conversation_id is not None and att.conversation_id != conversation_id:
+                raise ValueError(f"Вложение {aid} принадлежит другой беседе")
+            att.message_id = message_id
+            att.conversation_id = conversation_id
         await self._session.flush()
 
     async def list_ids_for_message(self, message_id: uuid.UUID) -> list[uuid.UUID]:

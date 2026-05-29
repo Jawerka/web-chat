@@ -339,7 +339,7 @@ MediaAsset
 │   │   mcp_server.py, sd_tools.py, sd_health.py, document_tools.py
 │   │   document_extractor.py, media_utils.py, runtime_config.py
 │   └── scripts/    run_cleanup.py, test_agent.py
-├── static/css/chat.css
+├── static/css/tokens.css, chat-layout.css, chat-messages.css, gallery.css, login.css
 ├── static/js/      chat.js, chat-composer.js, chat-ws.js, chat-auth.js, chat-labels.js, …
 ├── templates/      chat.html, gallery.html, macros.html
 ├── tests/          254 pytest (auth, RAG, WS lifecycle, security, img2img, …)
@@ -1389,6 +1389,8 @@ sequenceDiagram
 
 **Design tokens** (`static/css/tokens.css`): шкала скруглений `--radius-xs` (4px, хвост пузыря) → `--radius-2xs` (6px) → `--radius-sm/md/lg/xl`; для 8px в кнопках допустим `--space-2`. Новые UI-элементы — только токены, не «магические» px.
 
+**CSS (P7.6):** `tokens.css` → `chat-layout.css` (shell, composer, lightbox, macros) + `chat-messages.css` на `/chat`; `gallery.css` и `login.css` — отдельно для своих страниц. Старый `chat.css` — указатель на схему подключения.
+
 ### 10.2. Класс ChatSocket (скелет)
 
 ```javascript
@@ -1499,10 +1501,19 @@ class ChatSocket {
 |------|------------|
 | `chat-labels.js` | `PROGRESS_STAGE_LABELS`, `TOOL_USER_LABELS` |
 | `chat-message-blocks.js` | `WebChatMessageBlocks.buildMessageReasoning`, `buildMessageRagSources` |
-| `chat-ws.js` | Класс `ChatSocket` — reconnect, ping, dispatch WS-событий turn |
+| `base-reconnecting-socket.js` | `BaseReconnectingSocket` — ping, exponential reconnect (P5.7) |
+| `chat-ws.js` | Класс `ChatSocket` — extends base; dispatch WS-событий turn |
 | `chat-auth.js` | `WebChatAuth` — аккаунт, смена пароля, admin users |
 | `chat-composer.js` | `WebChatComposer` — ввод, вложения, черновики, send/stop, drag-drop, tools menu |
-| `chat.js` | Класс `ChatApp`: беседы, история, WS-handlers, пресеты, lightbox |
+| `chat-lightbox.js` | `WebChatLightbox` — просмотр картинок, download, attach (P5.4) |
+| `chat-conversations.js` | `WebChatConversations` — sidebar, корзина, поиск, create/delete (P5.4) |
+| `chat-scroll.js` | `WebChatScroll` — позиция прокрутки истории по беседе (P5.4) |
+| `chat-presets.js` | `WebChatPresets` — пресеты, черновики system prompt (P5.4) |
+| `chat-messages.js` | `WebChatMessages` — рендер истории, пузыри, actions, сетка картинок (P5.4) |
+| `chat-settings.js` | `WebChatSettings` — беседа, LLM/SD, интеграции, trusted internal (P5.4) |
+| `chat-appearance.js` | `WebChatAppearance` — тема, размер шрифта (P5.4) |
+| `chat-logs.js` | `WebChatLogs` — панель журнала клиент/сервер (P5.4) |
+| `chat.js` | Класс `ChatApp`: WS-handlers, streaming, composer/RAG (~3k строк) |
 
 Новые модули — `window.WebChat…` / `window.ChatSocket`, без import/export (vanilla `<script>`).
 
@@ -2125,6 +2136,60 @@ MVP считается готовым после завершения **этап
 | RUNBOOK restore/HTTPS | [x] | 2026-05-24 | Квартальный restore + nginx в [docs/RUNBOOK.md](docs/RUNBOOK.md) |
 | chat-auth.js | [x] | 2026-05-24 | Auth UI вынесен из chat.js |
 | chat-composer.js | [x] | 2026-05-24 | Composer вынесен из chat.js |
+| BACKLOG P0-S1..S3 | [x] | 2026-05-28 | Guard `link_to_message`, scope tools, trusted internal при auth; `tests/test_backlog_p0_security.py` |
+| BACKLOG P3.4 | [x] | 2026-05-28 | Безопасный settle: critical при сбое БД, без подмены кода ошибки |
+| BACKLOG P3.1 | [x] | 2026-05-28 | Короткоживущие сессии БД: turn_db, streaming_draft, orchestrator, websocket |
+| BACKLOG P3.3 | [x] | 2026-05-28 | DRY WS-хода: `_execute_and_handle_turn`, единая обработка ошибок turn/regenerate |
+| BACKLOG P3.5 | [x] | 2026-05-28 | Атомарный busy: `try_start_turn`, тест `test_ws_busy_acquire.py` |
+| BACKLOG P3.2 | [x] | 2026-05-28 | `TurnContext`: единое состояние tool-loop, `_run_completion_tool_calls(ctx=…)` |
+| BACKLOG P7.1 | [x] | 2026-05-28 | Блоки кода assistant: theme-aware `--pre-*` в light/dark |
+| BACKLOG P5.1 | [x] | 2026-05-28 | Стрим: plain text в пузыре, markdown при finalize |
+| BACKLOG P5.2 | [x] | 2026-05-28 | DOMPurify + allowlist `/media/` для img; `test_markdown_sanitize` |
+| BACKLOG P6.1 | [x] | 2026-05-28 | Restore: подтверждение до `tar -xzf` |
+| BACKLOG P6.3 | [x] | 2026-05-28 | Удалён `data/.pg_migrate_secret` (не используется приложением) |
+| BACKLOG P3.6–P3.8 | [x] | 2026-05-28 | `turn_realtime`, `turn_exceptions`, ShutdownInProgress в tools |
+| BACKLOG P6.2 | [x] | 2026-05-28 | restore-database.sh: fail-fast PostgreSQL |
+| BACKLOG P7.3 | [x] | 2026-05-28 | `--gradient-primary-end` в chat.css |
+| BACKLOG P5.3 | [x] | 2026-05-28 | Delegated click картинок на `#chat-messages` |
+| BACKLOG P7.2 | [x] | 2026-05-28 | Health: tokens.css, semantic CSS-переменные |
+| BACKLOG P6.4–P6.6 | [x] | 2026-05-28 | Legacy SQLite opt-in, site backup rotate, post-restore verify |
+| BACKLOG P5.5, P5.6 | [x] | 2026-05-28 | dom-utils.js; lightbox focus + aria-hidden |
+| BACKLOG P7.5, P7.10, P7.13 | [x] | 2026-05-28 | Mobile media merge; --ease-motion; health theme-color |
+| BACKLOG P5.7 | [x] | 2026-05-28 | BaseReconnectingSocket; chat 5× reconnect, events ∞ |
+| BACKLOG P4.7 | [x] | 2026-05-28 | get_gallery: изолированный поток для asyncio |
+| BACKLOG P7.8, P7.9, P7.11 | [x] | 2026-05-28 | Breakpoints doc; radius comment; scrollbar tokens |
+| BACKLOG P4.1 | [x] | 2026-05-28 | `timeout_seconds` в TOOL_DEFINITIONS; `tool_timeout_seconds`; wait_for в ToolExecutor |
+| BACKLOG P5.8 | [x] | 2026-05-28 | `disconnectComposer` в chat-composer.js |
+| BACKLOG P7.7 | [x] | 2026-05-28 | Шкала `--z-*` в tokens.css; ключевые слои в chat.css |
+| BACKLOG P4.2 | [x] | 2026-05-28 | Параллельные tool_calls: gather + Semaphore(1) для SD; extract_text параллельно |
+| BACKLOG P4.6 | [x] | 2026-05-28 | `exists` / `asset_exists` для vision filter без загрузки BLOB |
+| BACKLOG P6.7 | [x] | 2026-05-28 | Smoke backup/restore SQLite: `test_backup_restore_smoke.py` |
+| BACKLOG P4.4 | [x] | 2026-05-28 | `@pytest.mark.load`; `test_load_integration.py` (WS, img2img/upscale) |
+| BACKLOG P4.5 | [x] | 2026-05-28 | Health: `disk_free_mb`, `generated_count` (ops JSON + UI summary) |
+| BACKLOG P4.3 | [x] | 2026-05-28 | Lazy vision: кэш `llm_data` без BLOB; URL-first в `build_conversation_llm_context` |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-28 | Composer в `chat.css`: padding/gap → `--space-*` |
+| BACKLOG P5.4 (часть) | [x] | 2026-05-28 | `chat-lightbox`, `chat-conversations`, `chat-scroll`, `chat-presets` |
+| BACKLOG P5.4 (часть) | [x] | 2026-05-29 | `chat-messages.js` — `WebChatMessages` (load, rows, actions, images); `chat.js` ~3.4k |
+| BACKLOG P5.4 (часть) | [x] | 2026-05-29 | `chat-appearance.js`, `chat-logs.js`; ядро ~3.2k |
+| BACKLOG P5.4 | [x] | 2026-05-29 | `chat-settings.js`; ядро ~3k; split `chat.css` (P7.6) разблокирован |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-28 | Modal в `chat.css`: padding/gap → `--space-*` |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-29 | Messages в `chat.css`: лента, пузыри user/assistant → `--space-*` |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-29 | Sidebar: header, new-chat, conv-list → `--space-*` |
+| BACKLOG P7.6 | [x] | 2026-05-29 | Split CSS: `chat-layout`, `chat-messages`, `gallery`, `login`; шаблоны |
+| BACKLOG P5.9 | [x] | 2026-05-29 | `lightbox-viewer.js` — общий show/step/close + `LightboxImage.load` |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-29 | Settings panel в `chat-layout.css` → `--space-*` |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-29 | Search, trash, logs, legacy input → `--space-*` |
+| Техдолг audit | [x] | 2026-05-29 | `formatApiErrorDetail` в `dom-utils.js`; `chat.js` `api()` |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-29 | Settings users/forms, floating dock, `gallery.css` → `--space-*` |
+| BACKLOG P7.12 | [x] | 2026-05-29 | Комментарий-инвентарь `!important` в `chat-layout.css` |
+| Техдолг audit | [x] | 2026-05-29 | Удалён unused `heavy_job_queue` import в `websocket.py` |
+| BACKLOG P7.4 (часть) | [x] | 2026-05-29 | Presets, conv-list, placeholder, drop-overlay, macros, logs-output, RAG preview |
+| Техдолг audit | [x] | 2026-05-29 | Убран `console.debug` img2img из `chat-ws.js` |
+| BACKLOG P7.4 | [x] | 2026-05-29 | `--space-*` во всех UI CSS (layout, messages, gallery, login) |
+| BACKLOG P7.14 | [x] | 2026-05-29 | Motion: глобальный reset + conv-search; без лишних локальных `@media` |
+| Техдолг audit | [x] | 2026-05-29 | Удалён неиспользуемый `AssistantStreamDraft.discard()` |
+| BACKLOG закрытие | [x] | 2026-05-29 | Спринт P0–P7; ops docs backup/restore; `fetch_models` тест; ToolExecutor API |
+| Техдолг audit | [x] | 2026-05-29 | `AttachmentService.get_by_id`, `MediaService.get_asset`; restore systemctl-first |
 
 ---
 
@@ -2209,7 +2274,7 @@ MVP считается готовым после завершения **этап
 | Расширить security/load тесты | WS reconnect под нагрузкой, concurrent WS |
 | ~~`reasoning_delta` в UI~~ | [x] 2026-05-24 |
 | Расширенный health | disk/generated_count — при необходимости ops |
-| Разбиение `chat.js` | [x] Модули в §10.8; ядро ~5.2k строк |
+| Разбиение `chat.js` | [x] Модули в §10.8; ядро ~3k строк |
 
 > Детальный план — [BACKLOG.md](BACKLOG.md). Инциденты — [docs/RUNBOOK.md](docs/RUNBOOK.md).
 

@@ -2,7 +2,7 @@
  * Быстрые промпты (@alias): picker, автодополнение, спойлеры в чате.
  * Редактирование — на странице /macros.
  */
-/* global ChatApp */
+/* global ChatApp, escapeHtml, escapeAttr */
 
 const PROMPT_MACRO_CATEGORIES = [
   { id: 'character', label: 'Персонажи' },
@@ -13,16 +13,6 @@ const PROMPT_MACRO_CATEGORIES = [
 
 /** @alias или @@alias (второй @ — экранирование, в UI один @). */
 const MACRO_MENTION_RE = /@?@([a-zA-Z0-9_-]+)/g;
-
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s ?? '';
-  return d.innerHTML;
-}
-
-function escapeAttr(s) {
-  return String(s ?? '').replace(/"/g, '&quot;');
-}
 
 class PromptMacrosUI {
   constructor(app) {

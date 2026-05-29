@@ -87,27 +87,26 @@ async def test_stream_draft_enter_tool_round_keeps_message(
         conversation = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
         msg_repo = MessageRepository(session)
 
-        draft = AssistantStreamDraft(
-            session,
-            msg_repo,
-            conv_repo,
-            conversation,
-            emit,
-        )
-        await draft.on_delta("Привет")
-        await draft.enter_tool_round(active_tool="generate_image")
-        cj = draft.message.content_json or {}
-        assert cj.get("phase") == "tool"
-        await draft.on_delta(" мир")
-        assert draft.text == "Привет мир"
-        await draft.add_images(
-            ["/media/asset/550e8400-e29b-41d4-a716-446655440000"],
-            ["550e8400-e29b-41d4-a716-446655440000"],
-        )
+        conv_id = conversation.id
         await session.commit()
 
-        assert draft.message is not None
-        cj = draft.message.content_json or {}
+    draft = AssistantStreamDraft(conv_id, emit)
+    await draft.on_delta("Привет")
+    await draft.enter_tool_round(active_tool="generate_image")
+    cj = draft._content_json()
+    assert cj.get("phase") == "tool"
+    await draft.on_delta(" мир")
+    assert draft.text == "Привет мир"
+    await draft.add_images(
+        ["/media/asset/550e8400-e29b-41d4-a716-446655440000"],
+        ["550e8400-e29b-41d4-a716-446655440000"],
+    )
+
+    assert draft.message_id is not None
+    async with db_session.async_session_factory() as session:
+        msg = await MessageRepository(session).get_by_id(draft.message_id)
+        assert msg is not None
+        cj = msg.content_json or {}
         assert "/media/asset/" in (cj.get("images") or [""])[0]
 
 

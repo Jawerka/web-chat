@@ -75,6 +75,10 @@ class AttachmentService:
         self._repo = AttachmentRepository(session)
         self._conv_repo = ConversationRepository(session)
 
+    async def get_by_id(self, attachment_id: uuid.UUID) -> Attachment | None:
+        """Загрузить вложение по id."""
+        return await self._repo.get_by_id(attachment_id)
+
     @staticmethod
     def max_bytes() -> int:
         """Максимальный размер одного файла в байтах."""

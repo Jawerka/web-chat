@@ -11,7 +11,7 @@ import logging
 import socket
 import time
 from functools import lru_cache
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from threading import Lock
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -36,6 +36,12 @@ _lock = Lock()
 _dynamic_hosts: set[str] = set()
 _cache_at: float = 0.0
 _cache_ips: frozenset[str] = frozenset()
+
+_PRIVATE_NETS = (
+    ip_network("10.0.0.0/8"),
+    ip_network("172.16.0.0/12"),
+    ip_network("192.168.0.0/16"),
+)
 
 
 def host_from_url(url: str | None) -> str | None:
@@ -156,6 +162,36 @@ def refresh_trusted_internal_from_settings() -> frozenset[str]:
     return ips
 
 
+def _is_private_lan_ip(host: str) -> bool:
+    """RFC1918 / loopback — допустимы для trusted internal при auth."""
+    try:
+        addr = ip_address(host.strip().lower())
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return settings.trusted_internal_allow_loopback
+    if addr.is_link_local or addr.is_reserved or addr.is_multicast:
+        return False
+    return any(addr in net for net in _PRIVATE_NETS)
+
+
+def integration_host_may_register(host: str) -> bool:
+    """
+    Можно ли расширять trusted internal этим хостом.
+
+    При AUTH_ENABLED — только .env-хосты, trusted_internal_ips и private LAN IP.
+    Без auth (личный LAN) — любой валидный хост из UI.
+    """
+    h = host.strip().lower()
+    if not h:
+        return False
+    if not settings.auth_enabled:
+        return True
+    if h in _hosts_from_settings():
+        return True
+    return _is_private_lan_ip(h)
+
+
 def register_integration_urls(
     llm_base_url: str | None,
     sd_webui_url: str | None,
@@ -165,7 +201,16 @@ def register_integration_urls(
     with _lock:
         for url in (llm_base_url, sd_webui_url):
             host = host_from_url(url)
-            if host and host not in _dynamic_hosts:
+            if not host:
+                continue
+            if not integration_host_may_register(host):
+                logger.warning(
+                    "trusted_internal: пропуск хоста %s (auth_enabled, вне allowlist)",
+                    host,
+                    extra={"event": "trusted_internal_skip", "host": host},
+                )
+                continue
+            if host not in _dynamic_hosts:
                 _dynamic_hosts.add(host)
                 changed = True
     if changed:

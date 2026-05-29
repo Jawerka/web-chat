@@ -6,13 +6,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import WebSocket
+
+from app.log_context import log_turn_context
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ class ConnectionManager:
         self._sessions: dict[uuid.UUID, ConversationSessionState] = {}
         self._system_websockets: set[WebSocket] = set()
         self._sweeper_task: asyncio.Task[None] | None = None
+        self._turn_locks: dict[uuid.UUID, threading.Lock] = defaultdict(threading.Lock)
 
     def _session(self, conversation_id: uuid.UUID) -> ConversationSessionState:
         state = self._sessions.get(conversation_id)
@@ -242,6 +247,43 @@ class ConnectionManager:
 
     def set_active_task(self, conversation_id: uuid.UUID, task: asyncio.Task[None]) -> None:
         self._session(conversation_id).active_task = task
+
+    def try_start_turn(
+        self,
+        conversation_id: uuid.UUID,
+        runner: Callable[[asyncio.Event], Awaitable[None]],
+        *,
+        turn_kind: str,
+    ) -> bool:
+        """
+        Атомарно проверить busy и запустить фоновую задачу хода (P3.5).
+
+        Returns:
+            False, если генерация уже идёт.
+        """
+        lock = self._turn_locks[conversation_id]
+        with lock:
+            if self.is_busy(conversation_id):
+                return False
+            cancel_event = self.reset_cancel(conversation_id)
+
+            async def _wrapped(ce: asyncio.Event) -> None:
+                with log_turn_context(conversation_id, turn_kind=turn_kind):
+                    await runner(ce)
+
+            task = asyncio.create_task(_wrapped(cancel_event))
+
+            def _on_turn_done(t: asyncio.Task[None]) -> None:
+                self.clear_active_task(conversation_id)
+                if not t.cancelled() and t.exception() is not None:
+                    logger.debug(
+                        "turn task завершилась с ошибкой: conv=%s",
+                        conversation_id,
+                    )
+
+            self.set_active_task(conversation_id, task)
+            task.add_done_callback(_on_turn_done)
+        return True
 
     def clear_active_task(self, conversation_id: uuid.UUID) -> None:
         state = self._sessions.get(conversation_id)

@@ -501,8 +501,6 @@ def img2img(
         ds_note = f", denoise {ds:g}" if ds is not None else ""
         lines.append(f"Изображение {i} (seed {item['seed']}{ds_note}):")
         lines.append(f"  URL: {item['url']}")
-        if item.get("thumb_url"):
-            lines.append(f"  Thumbnail: {item['thumb_url']}")
         lines.append("")
 
     lines.extend(["--- Параметры генерации ---", last_meta])
@@ -613,8 +611,6 @@ def upscale_images(
     for i, item in enumerate(results, 1):
         lines.append(f"Изображение {i}:")
         lines.append(f"  URL: {item['url']}")
-        if item.get("thumb_url"):
-            lines.append(f"  Thumbnail: {item['thumb_url']}")
         lines.append("")
     return "\n".join(lines)
 
@@ -633,15 +629,12 @@ def get_gallery(limit: int = 20) -> str:
         async with async_session_factory() as session:
             return await list_gallery_images(session, limit=cap)
 
-    def _run_sync() -> list:
+    def _run_in_isolated_thread() -> list:
+        """Отдельный поток + asyncio.run (P4.7): без nested loop в caller."""
         return asyncio.run(_fetch())
 
-    try:
-        asyncio.get_running_loop()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            items = pool.submit(_run_sync).result(timeout=120)
-    except RuntimeError:
-        items = _run_sync()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        items = pool.submit(_run_in_isolated_thread).result(timeout=120)
 
     if not items:
         return "Галерея пуста."

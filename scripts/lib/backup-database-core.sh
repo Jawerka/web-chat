@@ -14,7 +14,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/backup-postgres.sh"
 create_database_backup_archive() {
   local dest_dir="${1:-${WEB_CHAT_DB_BACKUP_DIR}}"
   local stamp="${2:-$(date -u +%Y%m%dT%H%M%SZ)}"
-  local include_legacy="${WEB_CHAT_BACKUP_LEGACY_SQLITE:-auto}"
+  # По умолчанию не тащить legacy SQLite (~2 GB); явно: 1 или auto
+  local include_legacy="${WEB_CHAT_BACKUP_LEGACY_SQLITE:-0}"
   local dump_format="${WEB_CHAT_PG_DUMP_FORMAT:-custom}"
 
   if [[ "${WEB_CHAT_DB_BACKEND}" == "unknown" || -z "${DATABASE_URL:-}" ]]; then

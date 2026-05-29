@@ -55,10 +55,25 @@
 
   /* Motion */
   --ease-ui: 150ms ease;
+  --ease-motion: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Scrollbars (P7.11) */
+  --scrollbar-track: #e4e6eb;
+  --scrollbar-thumb: #b8bcc4;
+  --scrollbar-thumb-hover: #9aa0a8;
 
   /* Focus */
   --focus-ring-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
   --focus-ring: 0 0 0 3px var(--focus-ring-color);
+
+  /* Stacking (P7.7): backdrop < sidebar < overlay < modal < toast < tooltip < lightbox */
+  --z-sidebar-backdrop: 40;
+  --z-sidebar: 50;
+  --z-overlay: 90;
+  --z-modal: 100;
+  --z-toast: 102;
+  --z-tooltip: 200;
+  --z-lightbox: 2000;
 }
 
 body.dark-theme {
@@ -80,4 +95,13 @@ body.dark-theme {
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.45);
+
+  --scrollbar-track: #15202b;
+  --scrollbar-thumb: #38444d;
+  --scrollbar-thumb-hover: #4a5c6b;
 }
+
+/*
+ * Breakpoints (P7.8): login 420px; sidebar sheet 640px; chat mobile shell + lightbox 768px;
+ * health cards ~600px — см. health.css.
+ */

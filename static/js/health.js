@@ -116,13 +116,7 @@ function renderServices(grid, services) {
   }
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+/* global escapeHtml */
 
 class HealthDashboard {
   constructor() {
@@ -250,7 +244,11 @@ class HealthDashboard {
     this.$.summaryBadge.textContent = data.status === 'ok' ? 'Всё в порядке' : 'Есть проблемы';
     this.$.summaryBadge.className = `summary-badge ${data.status}`;
     this.$.summaryUptime.textContent = `Аптайм: ${formatUptime(data.uptime_sec || 0)}`;
-    this.$.summaryGens.textContent = `Генераций: ${data.active_generations ?? 0}`;
+    const activeGens = data.active_generations ?? 0;
+    const genFiles = data.generated_count ?? 0;
+    const diskMb = data.disk_free_mb ?? 0;
+    this.$.summaryGens.textContent =
+      `Активных ходов: ${activeGens} · generated/: ${genFiles} · диск: ${diskMb} MB`;
     this.$.summaryTimeouts.textContent = data.timeouts_ok
       ? 'Таймауты: OK'
       : 'Таймауты: проверьте MCP/request';

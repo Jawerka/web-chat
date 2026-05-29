@@ -7,7 +7,8 @@
   <title>{{ title }}</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/css/tokens.css">
-  <link rel="stylesheet" href="/static/css/chat.css">
+  <link rel="stylesheet" href="/static/css/chat-layout.css">
+  <link rel="stylesheet" href="/static/css/chat-messages.css">
 </head>
 <body>
   <div class="sidebar-backdrop hidden" id="sidebar-backdrop" aria-hidden="true"></div>
@@ -708,18 +709,30 @@
   </div>
 
   <script src="/static/js/storage-migrate.js"></script>
+  <script src="/static/js/dom-utils.js"></script>
+  <script src="/static/js/dompurify.min.js"></script>
   <script src="/static/js/markdown.js"></script>
   <script src="/static/js/datetime.js"></script>
   <script src="/static/js/app-log.js"></script>
   <script src="/static/js/prompt-macros.js"></script>
   <script src="/static/js/media-urls.js"></script>
   <script src="/static/js/lightbox-image.js"></script>
+  <script src="/static/js/lightbox-viewer.js"></script>
   <script src="/static/js/task-notifications.js"></script>
   <script src="/static/js/chat-labels.js"></script>
   <script src="/static/js/chat-message-blocks.js"></script>
+  <script src="/static/js/chat-scroll.js"></script>
+  <script src="/static/js/chat-messages.js"></script>
+  <script src="/static/js/chat-settings.js"></script>
+  <script src="/static/js/chat-appearance.js"></script>
+  <script src="/static/js/chat-logs.js"></script>
+  <script src="/static/js/chat-presets.js"></script>
+  <script src="/static/js/base-reconnecting-socket.js"></script>
   <script src="/static/js/chat-ws.js"></script>
   <script src="/static/js/chat-auth.js"></script>
   <script src="/static/js/chat-composer.js"></script>
+  <script src="/static/js/chat-conversations.js"></script>
+  <script src="/static/js/chat-lightbox.js"></script>
   <script src="/static/js/chat-img2img-preset.js"></script>
   <script src="/static/js/chat.js"></script>
 </body>

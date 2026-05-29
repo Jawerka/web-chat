@@ -18,7 +18,7 @@ def clear_model_cache() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_first_model_id_retries_503(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_models_retries_503(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "app.integrations.llm_client.settings.llm_model_load_retry_sec",
         0.01,
@@ -41,17 +41,17 @@ async def test_fetch_first_model_id_retries_503(monkeypatch: pytest.MonkeyPatch)
 
     with patch("app.integrations.llm_client.httpx.AsyncClient", return_value=mock_cm):
         client = LLMClient(base_url="http://llm.test/v1")
-        model = await client._fetch_first_model_id()
+        models = await client.fetch_models()
 
-    assert model == "qwen-test"
+    assert models == ["qwen-test"]
     assert mock_client.get.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_resolve_model_uses_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.integrations.llm_client.settings.llm_model", "")
-    fetch = AsyncMock(return_value="cached-model")
-    monkeypatch.setattr(LLMClient, "_fetch_first_model_id", fetch)
+    fetch = AsyncMock(return_value=["cached-model"])
+    monkeypatch.setattr(LLMClient, "fetch_models", fetch)
     base = "http://llm.test/v1"
     c1 = LLMClient(base_url=base)
     c2 = LLMClient(base_url=base)

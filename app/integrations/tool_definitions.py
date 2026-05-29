@@ -6,6 +6,11 @@ JSON-схемы инструментов для OpenAI-compatible API.
 
 from __future__ import annotations
 
+from app.config import settings
+
+# Листинг generated/ — не SD HTTP; отдельный потолок от request_timeout.
+_GALLERY_LIST_TIMEOUT_SEC = 120
+
 TOOL_DEFINITIONS: list[dict] = [
     {
         "type": "function",
@@ -202,6 +207,34 @@ PRESET_TOOL_NAMES: dict[str, tuple[str, ...]] = {
 _TOOL_BY_NAME: dict[str, dict] = {
     t["function"]["name"]: t for t in TOOL_DEFINITIONS
 }
+
+
+def _default_tool_timeouts() -> dict[str, int]:
+    return {
+        "generate_image": settings.request_timeout,
+        "img2img": settings.request_timeout,
+        "upscale_images": settings.request_timeout,
+        "extract_text": settings.extract_timeout_sec,
+        "get_gallery": _GALLERY_LIST_TIMEOUT_SEC,
+    }
+
+
+def _apply_tool_timeouts() -> None:
+    defaults = _default_tool_timeouts()
+    for entry in TOOL_DEFINITIONS:
+        fn = entry["function"]
+        fn["timeout_seconds"] = defaults.get(fn["name"], settings.request_timeout)
+
+
+_apply_tool_timeouts()
+
+
+def tool_timeout_seconds(name: str) -> int:
+    """Таймаут выполнения инструмента (сек); дефолт — settings.request_timeout."""
+    entry = _TOOL_BY_NAME.get(name)
+    if entry is None:
+        return settings.request_timeout
+    return int(entry["function"]["timeout_seconds"])
 
 
 def tools_for_preset_slug(slug: str | None) -> list[dict]:

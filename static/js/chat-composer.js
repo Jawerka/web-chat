@@ -29,17 +29,6 @@
     }
   }
 
-  function formatApiErrorDetail(detail) {
-    if (!detail) return '';
-    if (typeof detail === 'string') return detail;
-    if (Array.isArray(detail)) {
-      return detail
-        .map((item) => (typeof item === 'object' && item?.msg ? item.msg : String(item)))
-        .join('; ');
-    }
-    return String(detail);
-  }
-
   function hasPayload(app, text) {
     const trimmed = (text ?? app.$.userInput?.value ?? '').trim();
     return Boolean(trimmed || app.pendingAttachments.length);
@@ -192,23 +181,38 @@
       });
     });
 
-    document.addEventListener('click', (e) => {
+    const onDocClick = (e) => {
       if (!isToolsMenuOpen(app)) return;
       const t = e.target;
       if (btn.contains(t) || menu.contains(t)) return;
       closeToolsMenu(app);
-    });
-
-    document.addEventListener('keydown', (e) => {
+    };
+    const onDocKeydown = (e) => {
       if (e.key === 'Escape') closeToolsMenu(app);
-    });
+    };
+    document.addEventListener('click', onDocClick);
+    document.addEventListener('keydown', onDocKeydown);
+    app._composerDocListeners = { onDocClick, onDocKeydown };
   }
 
   function initScrollPadObserver(app) {
     const composer = app.$.chatComposer;
     if (!composer || typeof ResizeObserver === 'undefined') return;
+    app._composerResizeObserver?.disconnect();
     app._composerResizeObserver = new ResizeObserver(() => syncScrollPad(app));
     app._composerResizeObserver.observe(composer);
+  }
+
+  /** Снять document listeners и ResizeObserver (P5.8). */
+  function disconnectComposer(app) {
+    const doc = app._composerDocListeners;
+    if (doc) {
+      document.removeEventListener('click', doc.onDocClick);
+      document.removeEventListener('keydown', doc.onDocKeydown);
+      app._composerDocListeners = null;
+    }
+    app._composerResizeObserver?.disconnect();
+    app._composerResizeObserver = null;
   }
 
   function syncScrollPad(app) {
@@ -534,6 +538,7 @@
     clearAttachments,
     restorePendingFromSession,
     initScrollPadObserver,
+    disconnectComposer,
     syncScrollPad,
     autoResizeInput,
     closeToolsMenu,

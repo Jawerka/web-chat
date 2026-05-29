@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.ws_manager import manager
+from app.services.turn_realtime import turn_realtime
 from app.db.models import MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository
 from app.services.turn_status import patch_interrupted
@@ -47,7 +47,7 @@ async def settle_interrupted_turn(
     """
     msg_repo = MessageRepository(session)
     conv_repo = ConversationRepository(session)
-    streaming_id = manager.get_streaming_message(conversation_id)
+    streaming_id = turn_realtime().get_streaming_message(conversation_id)
 
     target = None
     if streaming_id is not None:
@@ -64,7 +64,7 @@ async def settle_interrupted_turn(
             target = last
 
     if target is None:
-        manager.clear_streaming_message(conversation_id)
+        turn_realtime().clear_streaming_message(conversation_id)
         return False
 
     payload: dict[str, Any] = (
@@ -76,7 +76,7 @@ async def settle_interrupted_turn(
         conv = await conv_repo.get_by_id(conversation_id)
         if conv is not None:
             await conv_repo.touch(conv)
-        manager.clear_streaming_message(conversation_id)
+        turn_realtime().clear_streaming_message(conversation_id)
         logger.info(
             "Прерванный черновик %s удалён (пустой), conv=%s",
             target.id,
@@ -103,7 +103,7 @@ async def settle_interrupted_turn(
     conv = await conv_repo.get_by_id(conversation_id)
     if conv is not None:
         await conv_repo.touch(conv)
-    manager.clear_streaming_message(conversation_id)
+    turn_realtime().clear_streaming_message(conversation_id)
     logger.info(
         "Черновик %s зафиксирован как %s (conv=%s)",
         target.id,

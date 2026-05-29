@@ -4,11 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0b1018">
+  <!-- theme-color = health --bg (#0b1018), см. health.css -->
   <title>{{ title }}</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/health.css">
 </head>
-<body>
+<body class="health-page">
   <div class="health-app">
     <header class="health-header">
       <div class="health-header-main">
@@ -59,7 +61,9 @@
       <pre class="logs-view styled-scrollbar" id="logs-view" aria-label="Объединённый журнал"></pre>
     </section>
   </div>
+  <script src="/static/js/dom-utils.js"></script>
   <script src="/static/js/app-log.js"></script>
+  <script src="/static/js/base-reconnecting-socket.js"></script>
   <script src="/static/js/system-events.js"></script>
   <script src="/static/js/health.js" defer></script>
 </body>

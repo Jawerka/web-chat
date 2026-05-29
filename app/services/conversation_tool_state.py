@@ -58,7 +58,7 @@ class ConversationToolState:
         cancel_event,
     ) -> None:
         """Проверить cancel и лимиты перед запуском tool."""
-        from app.services.agent_orchestrator import ToolAntiLoopExceeded, TurnCancelled
+        from app.services.turn_exceptions import ToolAntiLoopExceeded, TurnCancelled
 
         if cancel_event.is_set():
             raise TurnCancelled("Генерация отменена")

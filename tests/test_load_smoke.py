@@ -10,6 +10,7 @@ from httpx import AsyncClient
 from tests.helpers import api_create_conversation
 
 
+@pytest.mark.load
 @pytest.mark.asyncio
 async def test_parallel_conversation_creates(
     client: AsyncClient,

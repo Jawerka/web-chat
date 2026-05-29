@@ -38,16 +38,14 @@ async def test_user_message_committed_before_llm_error(
 
     orchestrator = AgentOrchestrator(llm=mock_llm)
 
-    async with db_session.async_session_factory() as session:
-        with pytest.raises(LLMError):
-            await orchestrator.run_conversation_turn(
-                session,
-                conv_id,
-                "Сообщение перед сбоем LLM",
-                [],
-                emit,
-                asyncio.Event(),
-            )
+    with pytest.raises(LLMError):
+        await orchestrator.run_conversation_turn(
+            conv_id,
+            "Сообщение перед сбоем LLM",
+            [],
+            emit,
+            asyncio.Event(),
+        )
 
     async with db_session.async_session_factory() as session:
         msg_repo = MessageRepository(session)

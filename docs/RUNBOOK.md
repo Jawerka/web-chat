@@ -68,6 +68,8 @@ cd /root/web-chat && source .venv/bin/activate && pytest -q
 
 Полная документация: [deploy/DATABASE-BACKUP.md](../deploy/DATABASE-BACKUP.md).
 
+Не совмещайте **backup** и **restore** в один момент. Restore останавливает приложение через `systemctl stop web-chat` (fallback `pkill` только без systemd).
+
 ### Квартальная проверка restore (чеклист)
 
 Раз в ~3 месяца на **копии** стенда (VM/другой хост), не на боевом без остановки:

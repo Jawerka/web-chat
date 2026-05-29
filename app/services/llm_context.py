@@ -20,7 +20,10 @@ from app.db.repositories import (
 )
 from app.integrations.tool_definitions import tools_for_preset_slug
 from app.services.macro_search_service import apply_macro_context_to_system
-from app.services.message_builder import history_to_llm_messages
+from app.services.message_builder import (
+    history_to_llm_messages,
+    sanitize_llm_messages_for_vision,
+)
 from app.services.prompt_macro_service import (
     alias_map_from_macros,
     parse_macro_context_mode,
@@ -86,6 +89,7 @@ async def build_conversation_llm_context(
     if system_prompt:
         llm_messages.append({"role": "system", "content": system_prompt})
     llm_messages.extend(history_to_llm_messages(history, alias_to_body=alias_to_body))
+    llm_messages = await sanitize_llm_messages_for_vision(session, llm_messages)
 
     return {
         "conversation_id": str(conversation_id),

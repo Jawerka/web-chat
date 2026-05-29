@@ -80,6 +80,12 @@ data/postgres/web_chat.dump    # при Postgres (custom)
 data/db/web_chat.sqlite        # опционально (legacy)
 ```
 
+## Эксплуатация (один оператор)
+
+- **Не запускайте** `backup-database.sh` и `restore-database.sh` **одновременно** — дождитесь завершения одной операции (модель «один оператор» из [HANDBOOK](../HANDBOOK.md)).
+- Перед restore скрипт останавливает приложение: сначала `systemctl stop web-chat`, `pkill` uvicorn — только если сервис не под systemd и процесс ещё жив.
+- **Postgres:** `PGPASSWORD` может быть виден в `ps` на время `pg_dump`/`psql`. На production предпочитайте `~/.pgpass` (mode `0600`) и экспорт `PGPASSFILE` в cron/unit — см. [документацию libpq](https://www.postgresql.org/docs/current/libpq-pgpass.html).
+
 ## См. также
 
 - [POSTGRES.md](POSTGRES.md) — установка Postgres, ETL

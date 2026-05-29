@@ -1,20 +1,11 @@
 /**
  * Страница быстрых промптов: таблица по категориям (листы), inline-редактирование.
  */
+/* global escapeHtml, escapeAttr */
 
 const SAVE_ICONS = `<svg class="macro-cell-save-icon macro-cell-save-icon--disk" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg><svg class="macro-cell-save-icon macro-cell-save-icon--check" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`;
 
 const $ = (sel, root = document) => root.querySelector(sel);
-
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s ?? '';
-  return d.innerHTML;
-}
-
-function escapeAttr(s) {
-  return String(s ?? '').replace(/"/g, '&quot;');
-}
 
 let rowKeySeq = 0;
 

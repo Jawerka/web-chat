@@ -19,6 +19,7 @@ from app.integrations.media_utils import (
     parse_asset_id_from_url,
     rewrite_image_url_for_llm,
 )
+from app.public_url import strip_public_base
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.attachment_service import AttachmentService
@@ -37,9 +38,37 @@ _LLM_IMAGE_CONTEXT_NOTE_RE = re.compile(
 # Markdown-изображения в тексте ассистента не используем — картинки в content_json + UI.
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 
+# Legacy generated thumbs и служебные строки SD — не показывать пользователю.
+_THUMB_LINE_RE = re.compile(
+    r"^\s*Thumbnail:\s*\S+\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_LEGACY_THUMB_URL_RE = re.compile(
+    r"https?://\S+/media/generated/thumbs/\S+|/media/generated/thumbs/\S+",
+    re.IGNORECASE,
+)
+
 # Некоторые модели могут возвращать reasoning в виде тегов `<think>...</think>`.
 # Эти теги нельзя оставлять в history для следующего LLM-запроса.
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _init_image_url_for_hint(url: str) -> str | None:
+    """Публичный URL asset/generated для подсказки img2img (не /llm)."""
+    if not url or not str(url).strip():
+        return None
+    raw = str(url).strip()
+    aid = parse_asset_id_from_url(raw)
+    if aid is not None:
+        return absolute_media_url(asset_media_url(aid), for_llm=True)
+    if raw.startswith("/media/"):
+        return absolute_media_url(raw, for_llm=True)
+    if raw.startswith("http://") or raw.startswith("https://"):
+        path = strip_public_base(raw)
+        if path.startswith("/media/"):
+            return absolute_media_url(path, for_llm=True)
+        return raw
+    return raw
 
 
 def _public_url_from_image_part(part: dict[str, Any]) -> str | None:
@@ -158,7 +187,7 @@ async def filter_unreachable_image_parts(
             except ValueError:
                 dropped += 1
                 continue
-            if (await media.get_bytes(aid)) is not None:
+            if await media.asset_exists(aid):
                 out.append(part)
             else:
                 dropped += 1
@@ -244,7 +273,9 @@ def collect_img2img_init_lines(
     for att in attachments:
         if not att.mime_type.startswith("image/"):
             continue
-        url = AttachmentService.llm_image_url(att)
+        url = _init_image_url_for_hint(AttachmentService.public_url(att))
+        if not url:
+            continue
         seen_urls.add(url)
         lines.append(f"attachment_id={att.id}")
         lines.append(f"init_image_url={url}")
@@ -252,7 +283,13 @@ def collect_img2img_init_lines(
     for part in parts or []:
         if part.get("type") != "image_url":
             continue
-        url = _public_url_from_image_part(part)
+        raw = (part.get("image_url") or {}).get("url") or ""
+        if part.get("asset_id"):
+            try:
+                raw = asset_media_url(uuid.UUID(str(part["asset_id"])))
+            except ValueError:
+                pass
+        url = _init_image_url_for_hint(raw)
         if not url or url in seen_urls:
             continue
         seen_urls.add(url)
@@ -351,7 +388,12 @@ def _image_urls_from_content_json(content_json: dict[str, Any]) -> list[str]:
     seen: set[str] = set()
     for raw in content_json.get("images") or []:
         u = str(raw).strip()
-        if u and u not in seen:
+        if not u:
+            continue
+        aid = parse_asset_id_from_url(u)
+        if aid is not None:
+            u = asset_media_url(aid)
+        if u not in seen:
             seen.add(u)
             urls.append(u)
     for raw in content_json.get("image_asset_ids") or []:
@@ -439,6 +481,44 @@ def history_to_llm_messages(
     return [message_to_llm_dict(m, alias_to_body=alias_to_body) for m in messages]
 
 
+def canonical_stored_image_urls(
+    urls: list[str] | None,
+    asset_ids: list[str] | None,
+) -> list[str]:
+    """
+    URL для content_json.images: только /media/asset/{uuid}, если есть asset_ids.
+
+    Legacy /media/generated/… в urls игнорируются — файлы после ingest на диске не живут.
+    """
+    ids = asset_ids or []
+    if ids:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in ids:
+            try:
+                u = asset_media_url(uuid.UUID(str(raw)))
+            except ValueError:
+                continue
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+        return out
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in urls or []:
+        u = str(raw).strip()
+        if not u or u in seen:
+            continue
+        aid = parse_asset_id_from_url(u)
+        if aid is not None:
+            u = asset_media_url(aid)
+        elif "/media/generated/" in u:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out
+
+
 def rewrite_media_urls_in_text(text: str, url_map: dict[str, str]) -> str:
     """Заменить устаревшие URL картинок в тексте (markdown и plain)."""
     if not text or not url_map:
@@ -447,6 +527,16 @@ def rewrite_media_urls_in_text(text: str, url_map: dict[str, str]) -> str:
     for old, new in sorted(url_map.items(), key=lambda x: len(x[0]), reverse=True):
         result = result.replace(old, new)
     return result
+
+
+def strip_legacy_thumb_urls_from_text(text: str) -> str:
+    """Убрать устаревшие /media/generated/thumbs/… из prose ассистента."""
+    if not text:
+        return text
+    result = _THUMB_LINE_RE.sub("", text)
+    result = _LEGACY_THUMB_URL_RE.sub("", result)
+    result = re.sub(r"[ \t]+\n", "\n", result)
+    return re.sub(r"\n{3,}", "\n\n", result).strip()
 
 
 def strip_markdown_images(text: str) -> str:
@@ -479,6 +569,7 @@ def finalize_assistant_text(
     body = completion_content or ""
     if media_url_rewrites:
         body = rewrite_media_urls_in_text(body, media_url_rewrites)
+    body = strip_legacy_thumb_urls_from_text(body)
     body = strip_markdown_images(body)
     body = strip_llm_image_context_note(body)
     return strip_think_tags(body)

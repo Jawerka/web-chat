@@ -1,25 +1,97 @@
 /**
  * Markdown → HTML (порт из prompt-extension/sidebar.js).
+ * P5.2: финальная санитизация через DOMPurify + allowlist URI.
  */
-/* global window */
+/* global window, DOMPurify, escapeHtml */
 
-function escapeHtml(text) {
-  if (text === null || text === undefined) return '';
-  const div = document.createElement('div');
-  div.textContent = String(text);
-  return div.innerHTML;
+/** @param {string} uri @param {{ forImage?: boolean }} [opts] */
+function isAllowedUri(uri, opts = {}) {
+  if (!uri || typeof uri !== 'string') return false;
+  const t = uri.trim();
+  if (!t || /^\s*(javascript|vbscript|data):/i.test(t)) return false;
+  if (t.startsWith('//')) return false;
+  if (t.startsWith('/media/') || t.startsWith('/static/')) return true;
+  if (t.startsWith('/') && !t.startsWith('//')) {
+    return opts.forImage ? t.startsWith('/media/') : true;
+  }
+  try {
+    const u = new URL(t, window.location.origin);
+    if (u.origin === window.location.origin) {
+      return opts.forImage ? u.pathname.startsWith('/media/') : true;
+    }
+  } catch {
+    return false;
+  }
+  if (!opts.forImage && /^https?:\/\//i.test(t)) return true;
+  return false;
 }
 
-function sanitizeHtml(html) {
+/** Regex fallback when DOMPurify недоступен (тесты, старый кэш). */
+function sanitizeHtmlLegacy(html) {
   if (!html || typeof html !== 'string') return html;
   let sanitized = html;
   sanitized = sanitized.replace(/<script[\s\S]*?<\/script>/gi, '');
   sanitized = sanitized.replace(/<script[\s\S]*/gi, '');
   sanitized = sanitized.replace(/javascript\s*:/gi, 'blocked:');
   sanitized = sanitized.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
-  sanitized = sanitized.replace(/<(?:iframe|object|embed)[\s\S]*?(?:<\/\w+>|\/?>)/gi, '');
+  sanitized = sanitized.replace(/<(?:iframe|object|embed)[\s\S]*?(?:<\/\w+>|\s*\/?\s*>)/gi, '');
   sanitized = sanitized.replace(/<style[\s\S]*?<\/style>/gi, '');
   return sanitized;
+}
+
+let _dompurifyUriHookInstalled = false;
+
+function ensureDompurifyUriHook() {
+  if (_dompurifyUriHookInstalled || typeof DOMPurify === 'undefined') return;
+  DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+    if (data.attrName !== 'href' && data.attrName !== 'src') return;
+    const forImage = data.attrName === 'src' || node.tagName === 'IMG';
+    if (!isAllowedUri(data.attrValue, { forImage })) {
+      data.attrValue = '';
+      data.keepAttr = false;
+    }
+  });
+  _dompurifyUriHookInstalled = true;
+}
+
+function sanitizeHtml(html) {
+  if (!html || typeof html !== 'string') return html;
+  if (typeof DOMPurify !== 'undefined' && DOMPurify.sanitize) {
+    ensureDompurifyUriHook();
+    return DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: [
+        'a',
+        'blockquote',
+        'br',
+        'code',
+        'del',
+        'em',
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'hr',
+        'img',
+        'li',
+        'ol',
+        'p',
+        'pre',
+        'strong',
+        'table',
+        'tbody',
+        'td',
+        'th',
+        'thead',
+        'tr',
+        'ul',
+      ],
+      ALLOWED_ATTR: ['href', 'src', 'alt', 'class', 'target', 'rel', 'loading'],
+      ALLOW_DATA_ATTR: false,
+    });
+  }
+  return sanitizeHtmlLegacy(html);
 }
 
 function buildTable(rows) {
@@ -123,7 +195,8 @@ function formatMarkdown(text) {
   return sanitizeHtml(formatted);
 }
 
-window.escapeHtml = escapeHtml;
+window.isAllowedUri = isAllowedUri;
 window.sanitizeHtml = sanitizeHtml;
+window.sanitizeHtmlLegacy = sanitizeHtmlLegacy;
 window.formatMarkdown = formatMarkdown;
 window.parseTables = parseTables;

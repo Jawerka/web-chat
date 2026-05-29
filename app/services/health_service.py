@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from app.api.ws_manager import manager
 from app.config import settings
+from app.integrations.media_utils import GENERATED_ROOT
 from app.db import session as db_session
 from app.logging_buffer import get_log_lines
 from app.services.job_queue import heavy_job_queue
@@ -71,6 +72,8 @@ class HealthReport(BaseModel):
     active_generations: int
     ws_connections: int = 0
     job_queue_pending: int = 0
+    disk_free_mb: float = 0
+    generated_count: int = 0
 
 
 _HISTORY: deque[HealthHistoryPoint] = deque(maxlen=90)
@@ -362,14 +365,38 @@ def _probe_mcp() -> ServiceProbe:
         )
 
 
+_GENERATED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+
+
+def _generated_disk_count() -> int:
+    """Число файлов изображений в data/generated/ (без обхода thumbs/)."""
+    if not GENERATED_ROOT.is_dir():
+        return 0
+    return sum(
+        1
+        for path in GENERATED_ROOT.iterdir()
+        if path.is_file() and path.suffix.lower() in _GENERATED_IMAGE_SUFFIXES
+    )
+
+
 def _data_disk_extra() -> dict[str, Any]:
-    """Свободное место на томе с каталогом data/ (P1.6)."""
+    """Свободное место на томе с каталогом data/ (P1.6, P4.5)."""
     data_dir = Path("data")
     root = data_dir if data_dir.is_dir() else Path(".")
     usage = shutil.disk_usage(root)
+    free_mb = round(usage.free / (1024**2), 1)
     free_gb = round(usage.free / (1024**3), 2)
     used_pct = round(100 * usage.used / usage.total, 1) if usage.total else 0
-    return {"data_free_gb": free_gb, "data_disk_used_percent": used_pct}
+    return {
+        "data_free_mb": free_mb,
+        "data_free_gb": free_gb,
+        "data_disk_used_percent": used_pct,
+    }
+
+
+def disk_free_mb() -> float:
+    """Свободное место на томе data/ в мегабайтах (для ops / JSON health)."""
+    return float(_data_disk_extra()["data_free_mb"])
 
 
 def _probe_app() -> ServiceProbe:
@@ -433,6 +460,7 @@ async def build_health_report() -> HealthReport:
     )
     _HISTORY.append(point)
 
+    disk = _data_disk_extra()
     return HealthReport(
         status=overall,
         generated_at=time.time(),
@@ -449,6 +477,8 @@ async def build_health_report() -> HealthReport:
         active_generations=len(manager.busy_conversation_ids()),
         ws_connections=manager.websocket_count(),
         job_queue_pending=heavy_job_queue.pending_count,
+        disk_free_mb=float(disk["data_free_mb"]),
+        generated_count=_generated_disk_count(),
     )
 
 

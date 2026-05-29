@@ -1,6 +1,7 @@
 /**
  * Галерея генераций: сетка, lightbox, удаление, сохранение, автообновление.
  */
+/* global escapeHtml, escapeAttr */
 
 const POLL_MS = 5000;
 const POLL_FALLBACK_MS = typeof SYSTEM_EVENTS_POLL_FALLBACK_MS === 'number'
@@ -31,7 +32,6 @@ class GalleryApp {
     this.pollTimer = null;
     this._eventsSocket = null;
     this._eventsLive = false;
-    this.touchStart = null;
     this._pendingDeleteId = null;
     this._pendingDeleteBtn = null;
 
@@ -126,16 +126,15 @@ class GalleryApp {
       const item = this.currentItem();
       if (item) this.onDeleteClick(item.id, this.els.lightboxDelete);
     });
-    this.els.lightbox?.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: true });
-    this.els.lightbox?.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: true });
+    LightboxViewer.bindTouch(this._lightboxCtx(), this.els.lightbox);
 
     document.addEventListener('keydown', (e) => {
-      if (this.els.lightbox?.classList.contains('hidden')) return;
+      if (LightboxViewer.onKeydown(this._lightboxCtx(), e)) return;
+      if (!LightboxViewer.isOpen(this._lightboxCtx())) return;
       if (e.key === 'Escape') {
         this._cancelPendingDelete();
         this.closeLightbox();
-      } else if (e.key === 'ArrowLeft') this.stepLightbox(-1);
-      else if (e.key === 'ArrowRight') this.stepLightbox(1);
+      }
     });
 
     this.els.grid?.addEventListener('click', (e) => {
@@ -322,48 +321,57 @@ class GalleryApp {
     card.dataset.id = item.id;
     card.innerHTML = `
       <div class="gallery-card-media">
-        <img src="${this.escapeAttr(mediaPreviewUrl(item.thumb_url))}" alt="${this.escapeAttr(item.filename)}" loading="lazy" decoding="async">
-        <button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl" data-id="${this.escapeAttr(item.id)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${ICON_ATTACH}</button>
+        <img src="${escapeAttr(mediaPreviewUrl(item.thumb_url))}" alt="${escapeAttr(item.filename)}" loading="lazy" decoding="async">
+        <button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl" data-id="${escapeAttr(item.id)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${ICON_ATTACH}</button>
         <div class="gallery-card-actions">
-          <button type="button" class="gallery-card-action gallery-card-favorite${item.is_favorite ? ' is-favorite' : ''}" data-id="${this.escapeAttr(item.id)}" title="${item.is_favorite ? 'Убрать из избранного' : 'В избранное'}" aria-label="Избранное">${ICON_STAR}</button>
-          <button type="button" class="gallery-card-action gallery-card-save" data-id="${this.escapeAttr(item.id)}" title="Сохранить" aria-label="Сохранить">${ICON_SAVE}</button>
-          <button type="button" class="gallery-card-action gallery-card-delete danger" data-id="${this.escapeAttr(item.id)}" title="Удалить" aria-label="Удалить">${ICON_DELETE}</button>
+          <button type="button" class="gallery-card-action gallery-card-favorite${item.is_favorite ? ' is-favorite' : ''}" data-id="${escapeAttr(item.id)}" title="${item.is_favorite ? 'Убрать из избранного' : 'В избранное'}" aria-label="Избранное">${ICON_STAR}</button>
+          <button type="button" class="gallery-card-action gallery-card-save" data-id="${escapeAttr(item.id)}" title="Сохранить" aria-label="Сохранить">${ICON_SAVE}</button>
+          <button type="button" class="gallery-card-action gallery-card-delete danger" data-id="${escapeAttr(item.id)}" title="Удалить" aria-label="Удалить">${ICON_DELETE}</button>
         </div>
       </div>
-      <span class="gallery-card-meta">${this.escapeHtml(item.filename)} · ${item.size_kb} KB</span>
+      <span class="gallery-card-meta">${escapeHtml(item.filename)} · ${item.size_kb} KB</span>
     `;
     return card;
+  }
+
+  _lightboxCtx() {
+    const g = this;
+    return {
+      root: g.els.lightbox,
+      img: g.els.lightboxImg,
+      loader: g.els.lightboxLoader,
+      prev: g.els.lightboxPrev,
+      next: g.els.lightboxNext,
+      counter: g.els.lightboxCounter,
+      get index() {
+        return g.lightboxIndex;
+      },
+      set index(v) {
+        g.lightboxIndex = v;
+      },
+      getCount: () => g.items.length,
+      getUrl: (i) => g.items[i]?.url || null,
+      onShow: (i) => {
+        const item = g.items[i];
+        if (!item) return;
+        if (g.els.lightboxImg) g.els.lightboxImg.alt = item.filename;
+        if (g.els.lightboxTitle) g.els.lightboxTitle.textContent = item.filename;
+        g._syncFavoriteButton(item);
+      },
+    };
   }
 
   openLightbox(index) {
     if (!this.items.length) return;
     this._cancelPendingDelete();
-    this.lightboxIndex = Math.max(0, Math.min(index, this.items.length - 1));
-    this.showLightboxAt(this.lightboxIndex);
+    const i = Math.max(0, Math.min(index, this.items.length - 1));
+    LightboxViewer.showAt(this._lightboxCtx(), i);
     document.body.classList.add('gallery-lightbox-open');
   }
 
   showLightboxAt(index) {
-    const item = this.items[index];
-    if (!item || !this.els.lightbox) return;
-    this.lightboxIndex = index;
-    this.els.lightbox.classList.remove('hidden');
-    if (typeof LightboxImage !== 'undefined') {
-      LightboxImage.load({
-        lightbox: this.els.lightbox,
-        img: this.els.lightboxImg,
-        loader: this.els.lightboxLoader,
-        url: item.url,
-      });
-    } else if (this.els.lightboxImg) {
-      this.els.lightboxImg.src = item.url;
-    }
-    if (this.els.lightboxImg) this.els.lightboxImg.alt = item.filename;
-    if (this.els.lightboxTitle) {
-      this.els.lightboxTitle.textContent = item.filename;
-    }
-    this._syncFavoriteButton(item);
-    this.updateLightboxNav();
+    if (!this.items.length || !this.els.lightbox) return;
+    LightboxViewer.showAt(this._lightboxCtx(), index);
   }
 
   _syncFavoriteButton(item) {
@@ -375,50 +383,18 @@ class GalleryApp {
   }
 
   updateLightboxNav() {
-    const n = this.items.length;
-    const i = this.lightboxIndex;
-    if (this.els.lightboxPrev) this.els.lightboxPrev.disabled = i <= 0;
-    if (this.els.lightboxNext) this.els.lightboxNext.disabled = i >= n - 1;
-    if (this.els.lightboxCounter) {
-      if (n > 1) {
-        this.els.lightboxCounter.textContent = `${i + 1} / ${n}`;
-        this.els.lightboxCounter.classList.remove('hidden');
-      } else {
-        this.els.lightboxCounter.classList.add('hidden');
-      }
-    }
+    LightboxViewer.updateNav(this._lightboxCtx());
   }
 
   stepLightbox(delta) {
-    if (this.els.lightbox?.classList.contains('hidden')) return;
+    if (!LightboxViewer.isOpen(this._lightboxCtx())) return;
     this._cancelPendingDelete();
-    const next = this.lightboxIndex + delta;
-    if (next < 0 || next >= this.items.length) return;
-    this.showLightboxAt(next);
-  }
-
-  onTouchStart(e) {
-    if (e.touches.length !== 1) return;
-    this.touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-  }
-
-  onTouchEnd(e) {
-    if (!this.touchStart || e.changedTouches.length !== 1) return;
-    const dx = e.changedTouches[0].clientX - this.touchStart.x;
-    const dy = e.changedTouches[0].clientY - this.touchStart.y;
-    this.touchStart = null;
-    if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy)) return;
-    this.stepLightbox(dx < 0 ? 1 : -1);
+    LightboxViewer.step(this._lightboxCtx(), delta);
   }
 
   closeLightbox() {
     this._cancelPendingDelete();
-    this.els.lightbox?.classList.add('hidden');
-    if (typeof LightboxImage !== 'undefined') {
-      LightboxImage.reset(this.els.lightbox, this.els.lightboxImg, this.els.lightboxLoader);
-    } else if (this.els.lightboxImg) {
-      this.els.lightboxImg.src = '';
-    }
+    LightboxViewer.close(this._lightboxCtx());
     this.lightboxIndex = -1;
     document.body.classList.remove('gallery-lightbox-open');
   }
@@ -539,17 +515,7 @@ class GalleryApp {
   async saveItem(item) {
     if (!item) return;
     try {
-      const res = await fetch(item.url);
-      if (!res.ok) throw new Error('Не удалось загрузить файл');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = item.filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await downloadMediaFile(item.url, item.filename);
       this.flashStatus('Сохранено');
     } catch (err) {
       this.flashStatus(err.message, true);
@@ -692,15 +658,6 @@ class GalleryApp {
     }
   }
 
-  escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-  }
-
-  escapeAttr(s) {
-    return String(s).replace(/"/g, '&quot;');
-  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

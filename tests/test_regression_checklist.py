@@ -90,13 +90,14 @@ async def test_stream_draft_add_images_dedupes_for_f5_resume(
             title=repo_conv_title,
             preset_id=preset.id,
         )
-        msg_repo = MessageRepository(session)
-        draft = AssistantStreamDraft(session, msg_repo, ConversationRepository(session), conv, emit)
-        await draft.on_delta("gen")
-        await draft.add_images([url, url], ["550e8400-e29b-41d4-a716-446655440000"])
+        conv_id = conv.id
         await session.commit()
-        cj = draft.message.content_json or {}
-        assert cj.get("images") == [url]
+
+    draft = AssistantStreamDraft(conv_id, emit)
+    await draft.on_delta("gen")
+    await draft.add_images([url, url], ["550e8400-e29b-41d4-a716-446655440000"])
+    cj = draft._content_json()
+    assert cj.get("images") == [url]
 
 
 @pytest.fixture

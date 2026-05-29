@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from app.services.agent_orchestrator import ToolAntiLoopExceeded, TurnCancelled
+from app.services.turn_exceptions import ToolAntiLoopExceeded, TurnCancelled
 from app.services.conversation_tool_state import ConversationToolState, tool_call_signature
 
 

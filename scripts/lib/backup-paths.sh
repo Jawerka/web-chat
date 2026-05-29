@@ -14,6 +14,7 @@ WEB_CHAT_DB_BACKUP_EXT=".tar.gz"
 
 # Опционально: полный бэкап (БД + generated/uploads) — отдельный каталог
 WEB_CHAT_SITE_BACKUP_DIR="${WEB_CHAT_SITE_BACKUP_DIR:-${WEB_CHAT_ROOT}/data/backups/site}"
+WEB_CHAT_SITE_BACKUP_KEEP="${WEB_CHAT_SITE_BACKUP_KEEP:-3}"
 
 backup_archive_name() {
   local stamp="$1"

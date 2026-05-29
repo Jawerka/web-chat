@@ -115,3 +115,53 @@ function parseMediaGalleryTarget(url) {
   }
   return null;
 }
+
+/**
+ * Скачивание медиа. Для same-origin /media/* — прямая ссылка без blob
+ * (на HTTP не появляется предупреждение Chrome про insecure blob).
+ */
+async function downloadMediaFile(url, filename = '') {
+  const full = mediaFullUrl(url);
+  if (!full) throw new Error('Некорректный URL');
+
+  let name = filename;
+  if (!name) {
+    try {
+      const path = new URL(full, window.location.href).pathname;
+      name = path.split('/').filter(Boolean).pop() || 'image.png';
+    } catch {
+      name = 'image.png';
+    }
+  }
+
+  try {
+    const parsed = new URL(full, window.location.href);
+    if (parsed.origin === window.location.origin && parsed.pathname.startsWith('/media/')) {
+      const a = document.createElement('a');
+      a.href = parsed.href;
+      a.download = name;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      return;
+    }
+  } catch {
+    /* fetch + blob */
+  }
+
+  const res = await fetch(full, { credentials: 'same-origin' });
+  if (!res.ok) throw new Error('Не удалось загрузить файл');
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}

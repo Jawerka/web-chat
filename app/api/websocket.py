@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException, status
@@ -14,7 +15,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketExceptio
 from app.api.ws_events import broadcast_generation_update
 from app.api.ws_manager import manager
 from app.db import session as db_session
-from app.log_context import log_turn_context, log_ws_session
+from app.log_context import log_ws_session
 from app.security.access import check_api_key, check_ws_origin, client_ip_from_request
 from app.security.rate_limit import RateLimitExceeded, check_rate_limit
 from app.services.conversation_access import get_accessible_conversation
@@ -27,7 +28,6 @@ from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import IntegrationOverrides, parse_integration_overrides
 from app.public_url import bind_request_public_base_url, reset_request_public_base_url
 from app.errors import AppError, ErrorCode, app_error_from_code
-from app.services.job_queue import heavy_job_queue
 from app.services.agent_orchestrator import (
     AgentOrchestrator,
     ToolLoopExceeded,
@@ -39,6 +39,19 @@ from app.services.message_builder import is_img2img_gen_preset_instruction_block
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
+
+_GEN_PUSH = frozenset({"tool_start", "tool_done", "done", "ack"})
+
+
+def _make_turn_emit(conversation_id: uuid.UUID):
+    """Emit для хода: WS-события + generation_update на ключевых типах."""
+
+    async def emit(event_type: str, payload: dict[str, Any]) -> None:
+        await manager.send_json(conversation_id, {"type": event_type, **payload})
+        if event_type in _GEN_PUSH:
+            await broadcast_generation_update(conversation_id)
+
+    return emit
 
 
 def _ws_error_payload(
@@ -78,21 +91,138 @@ async def _emit_error(
     await emit("error", {k: v for k, v in payload.items() if k != "type"})
 
 
+async def _execute_and_handle_turn(
+    conversation_id: uuid.UUID,
+    emit: Callable[..., Awaitable[None]],
+    turn_fn: Callable[[], Awaitable[None]],
+    *,
+    log_label: str,
+) -> None:
+    """
+    Выполнить ход агента и единообразно обработать ошибки для WS (P3.3).
+
+    Новые исключения хода добавлять сюда, а не дублировать в _run_turn_task /
+    _run_regenerate_task.
+    """
+    import time
+
+    t0 = time.monotonic()
+    try:
+        await turn_fn()
+    except TurnCancelled:
+        await _commit_or_settle_turn(
+            conversation_id,
+            status_code="cancelled",
+        )
+        logger.info("%s done: cancelled за %.1fs", log_label, time.monotonic() - t0)
+        await _emit_error(
+            emit,
+            code=ErrorCode.CANCELLED,
+            message="Генерация отменена",
+        )
+    except ToolLoopExceeded as exc:
+        await _commit_or_settle_turn(
+            conversation_id,
+            status_code="tool_loop",
+            status_message=str(exc),
+        )
+        logger.warning(
+            "%s done: tool_loop за %.1fs — %s",
+            log_label,
+            time.monotonic() - t0,
+            exc,
+        )
+        await _emit_error(emit, code=ErrorCode.TOOL_LOOP, message=str(exc))
+    except LLMError as exc:
+        await _commit_or_settle_turn(
+            conversation_id,
+            status_code="llm_error",
+            status_message=str(exc),
+        )
+        logger.warning(
+            "%s done: llm_error за %.1fs — %s",
+            log_label,
+            time.monotonic() - t0,
+            exc,
+        )
+        await _emit_error(
+            emit,
+            code=ErrorCode.LLM_ERROR,
+            message=str(exc),
+            retryable=True,
+        )
+    except AppError as exc:
+        logger.warning(
+            "%s done: %s за %.1fs — %s",
+            log_label,
+            exc.code,
+            time.monotonic() - t0,
+            exc,
+        )
+        await _emit_error(
+            emit,
+            code=exc.code,
+            message=exc.user_message,
+            retryable=exc.retryable,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "%s done: validation за %.1fs — %s",
+            log_label,
+            time.monotonic() - t0,
+            exc,
+        )
+        await _emit_error(emit, code=ErrorCode.VALIDATION, message=str(exc))
+    except Exception:
+        await _commit_or_settle_turn(
+            conversation_id,
+            status_code="internal",
+            status_message="Внутренняя ошибка сервера",
+        )
+        logger.exception("%s done: internal за %.1fs", log_label, time.monotonic() - t0)
+        await _emit_error(
+            emit,
+            code=ErrorCode.INTERNAL,
+            message="Внутренняя ошибка сервера",
+        )
+    else:
+        logger.info("%s done: ok за %.1fs", log_label, time.monotonic() - t0)
+
+
 async def _commit_or_settle_turn(
-    session,
     conversation_id: uuid.UUID,
     *,
     status_code: str,
     status_message: str | None = None,
 ) -> None:
-    """Сохранить частичный черновик вместо полного rollback."""
-    await settle_interrupted_turn(
-        session,
-        conversation_id,
-        status_code=status_code,
-        status_message=status_message,
-    )
-    await session.commit()
+    """
+    Сохранить частичный черновик вместо полного rollback.
+
+    При сбое БД не подменяет status_code (клиент уже получит исходный код ошибки).
+    """
+    async with db_session.async_session_factory() as session:
+        try:
+            await settle_interrupted_turn(
+                session,
+                conversation_id,
+                status_code=status_code,
+                status_message=status_message,
+            )
+            await session.commit()
+        except Exception:
+            logger.critical(
+                "Не удалось зафиксировать прерванный turn (status=%s, conv=%s)",
+                status_code,
+                conversation_id,
+                exc_info=True,
+            )
+            try:
+                await session.rollback()
+            except Exception:
+                logger.exception(
+                    "rollback после сбоя settle также не удался (conv=%s)",
+                    conversation_id,
+                )
 
 
 async def _run_turn_task(
@@ -104,10 +234,7 @@ async def _run_turn_task(
     display_text: str | None = None,
     integration: IntegrationOverrides | None = None,
 ) -> None:
-    """Фоновая задача хода агента с отдельной сессией БД."""
-    import time
-
-    t0 = time.monotonic()
+    """Фоновая задача хода агента."""
     preview = (user_text[:80] + "…") if len(user_text) > 80 else user_text
     logger.info(
         "turn start: user_message text=%r attachments=%d",
@@ -115,102 +242,35 @@ async def _run_turn_task(
         len(attachment_ids),
     )
 
-    _GEN_PUSH = frozenset({"tool_start", "tool_done", "done", "ack"})
+    emit = _make_turn_emit(conversation_id)
 
-    async def emit(event_type: str, payload: dict[str, Any]) -> None:
-        await manager.send_json(conversation_id, {"type": event_type, **payload})
-        if event_type in _GEN_PUSH:
-            await broadcast_generation_update(conversation_id)
+    llm = LLMClient(base_url=integration.llm_base_url if integration else None)
+    orchestrator = AgentOrchestrator(
+        llm=llm,
+        sd_webui_url=integration.sd_webui_url if integration else None,
+    )
+    macro_ctx = integration.macro_context if integration else "selected"
+    doc_rag = integration.document_rag if integration else False
 
-    async with db_session.async_session_factory() as session:
-        llm = LLMClient(base_url=integration.llm_base_url if integration else None)
-        orchestrator = AgentOrchestrator(
-            llm=llm,
-            sd_webui_url=integration.sd_webui_url if integration else None,
+    async def turn_fn() -> None:
+        await orchestrator.run_conversation_turn(
+            conversation_id,
+            user_text,
+            attachment_ids,
+            emit,
+            cancel_event,
+            display_text=display_text,
+            llm_model=integration.llm_model if integration else None,
+            macro_context=macro_ctx,
+            document_rag=doc_rag,
         )
-        try:
-            macro_ctx = integration.macro_context if integration else "selected"
-            doc_rag = integration.document_rag if integration else False
-            await orchestrator.run_conversation_turn(
-                session,
-                conversation_id,
-                user_text,
-                attachment_ids,
-                emit,
-                cancel_event,
-                display_text=display_text,
-                llm_model=integration.llm_model if integration else None,
-                macro_context=macro_ctx,
-                document_rag=doc_rag,
-            )
-            await session.commit()
-        except TurnCancelled:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="cancelled",
-            )
-            logger.info("turn done: cancelled за %.1fs", time.monotonic() - t0)
-            await _emit_error(
-                emit,
-                code=ErrorCode.CANCELLED,
-                message="Генерация отменена",
-            )
-        except ToolLoopExceeded as exc:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="tool_loop",
-                status_message=str(exc),
-            )
-            logger.warning("turn done: tool_loop за %.1fs — %s", time.monotonic() - t0, exc)
-            await _emit_error(emit, code=ErrorCode.TOOL_LOOP, message=str(exc))
-        except LLMError as exc:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="llm_error",
-                status_message=str(exc),
-            )
-            logger.warning(
-                "turn done: llm_error за %.1fs — %s",
-                time.monotonic() - t0,
-                exc,
-            )
-            await _emit_error(
-                emit,
-                code=ErrorCode.LLM_ERROR,
-                message=str(exc),
-                retryable=True,
-            )
-        except AppError as exc:
-            await session.rollback()
-            logger.warning("turn done: %s за %.1fs — %s", exc.code, time.monotonic() - t0, exc)
-            await _emit_error(
-                emit,
-                code=exc.code,
-                message=exc.user_message,
-                retryable=exc.retryable,
-            )
-        except ValueError as exc:
-            await session.rollback()
-            logger.warning("turn done: validation за %.1fs — %s", time.monotonic() - t0, exc)
-            await _emit_error(emit, code=ErrorCode.VALIDATION, message=str(exc))
-        except Exception:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="internal",
-                status_message="Внутренняя ошибка сервера",
-            )
-            logger.exception("turn done: internal за %.1fs", time.monotonic() - t0)
-            await _emit_error(
-                emit,
-                code=ErrorCode.INTERNAL,
-                message="Внутренняя ошибка сервера",
-            )
-        else:
-            logger.info("turn done: ok за %.1fs", time.monotonic() - t0)
+
+    await _execute_and_handle_turn(
+        conversation_id,
+        emit,
+        turn_fn,
+        log_label="turn",
+    )
 
 
 async def _run_regenerate_task(
@@ -222,17 +282,9 @@ async def _run_regenerate_task(
     llm_text_override: str | None = None,
 ) -> None:
     """Перегенерация ответа на user-сообщение (или на предыдущее user для assistant)."""
-    import time
-
-    t0 = time.monotonic()
     logger.info("turn start: regenerate message_id=%s", message_id)
 
-    _GEN_PUSH = frozenset({"tool_start", "tool_done", "done", "ack"})
-
-    async def emit(event_type: str, payload: dict[str, Any]) -> None:
-        await manager.send_json(conversation_id, {"type": event_type, **payload})
-        if event_type in _GEN_PUSH:
-            await broadcast_generation_update(conversation_id)
+    emit = _make_turn_emit(conversation_id)
 
     async with db_session.async_session_factory() as session:
         msg_repo = MessageRepository(session)
@@ -264,109 +316,32 @@ async def _run_regenerate_task(
             )
             return
 
-        llm = LLMClient(base_url=integration.llm_base_url if integration else None)
-        orchestrator = AgentOrchestrator(
-            llm=llm,
-            sd_webui_url=integration.sd_webui_url if integration else None,
+    llm = LLMClient(base_url=integration.llm_base_url if integration else None)
+    orchestrator = AgentOrchestrator(
+        llm=llm,
+        sd_webui_url=integration.sd_webui_url if integration else None,
+    )
+    macro_ctx = integration.macro_context if integration else "selected"
+    doc_rag = integration.document_rag if integration else False
+
+    async def turn_fn() -> None:
+        await orchestrator.run_regenerate_turn(
+            conversation_id,
+            user_message_id,
+            emit,
+            cancel_event,
+            llm_model=integration.llm_model if integration else None,
+            macro_context=macro_ctx,
+            document_rag=doc_rag,
+            llm_text_override=llm_text_override,
         )
-        try:
-            macro_ctx = integration.macro_context if integration else "selected"
-            doc_rag = integration.document_rag if integration else False
-            await orchestrator.run_regenerate_turn(
-                session,
-                conversation_id,
-                user_message_id,
-                emit,
-                cancel_event,
-                llm_model=integration.llm_model if integration else None,
-                macro_context=macro_ctx,
-                document_rag=doc_rag,
-                llm_text_override=llm_text_override,
-            )
-            await session.commit()
-        except TurnCancelled:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="cancelled",
-            )
-            logger.info("turn done: regenerate cancelled за %.1fs", time.monotonic() - t0)
-            await _emit_error(
-                emit,
-                code=ErrorCode.CANCELLED,
-                message="Генерация отменена",
-            )
-        except ToolLoopExceeded as exc:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="tool_loop",
-                status_message=str(exc),
-            )
-            logger.warning(
-                "turn done: regenerate tool_loop за %.1fs — %s",
-                time.monotonic() - t0,
-                exc,
-            )
-            await _emit_error(emit, code=ErrorCode.TOOL_LOOP, message=str(exc))
-        except LLMError as exc:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="llm_error",
-                status_message=str(exc),
-            )
-            logger.warning(
-                "turn done: regenerate llm_error за %.1fs — %s",
-                time.monotonic() - t0,
-                exc,
-            )
-            await _emit_error(
-                emit,
-                code=ErrorCode.LLM_ERROR,
-                message=str(exc),
-                retryable=True,
-            )
-        except AppError as exc:
-            await session.rollback()
-            logger.warning(
-                "turn done: regenerate %s за %.1fs — %s",
-                exc.code,
-                time.monotonic() - t0,
-                exc,
-            )
-            await _emit_error(
-                emit,
-                code=exc.code,
-                message=exc.user_message,
-                retryable=exc.retryable,
-            )
-        except ValueError as exc:
-            await session.rollback()
-            logger.warning(
-                "turn done: regenerate validation за %.1fs — %s",
-                time.monotonic() - t0,
-                exc,
-            )
-            await _emit_error(emit, code=ErrorCode.VALIDATION, message=str(exc))
-        except Exception:
-            await _commit_or_settle_turn(
-                session,
-                conversation_id,
-                status_code="internal",
-                status_message="Внутренняя ошибка сервера",
-            )
-            logger.exception(
-                "turn done: regenerate internal за %.1fs",
-                time.monotonic() - t0,
-            )
-            await _emit_error(
-                emit,
-                code=ErrorCode.INTERNAL,
-                message="Внутренняя ошибка сервера",
-            )
-        else:
-            logger.info("turn done: regenerate ok за %.1fs", time.monotonic() - t0)
+
+    await _execute_and_handle_turn(
+        conversation_id,
+        emit,
+        turn_fn,
+        log_label="turn regenerate",
+    )
 
 
 def _schedule_turn_task(
@@ -414,26 +389,21 @@ def _schedule_regenerate_task(
 
 def _start_background_turn(
     conversation_id: uuid.UUID,
-    coro,
+    runner: Callable[[asyncio.Event], Awaitable[None]],
     *,
     turn_kind: str,
-) -> None:
-    """Запустить фоновую задачу с учётом busy/cancel."""
+) -> bool:
+    """
+    Запустить фоновую задачу хода (атомарно с busy-check).
 
-    async def _wrapped(cancel_event: asyncio.Event) -> None:
-        with log_turn_context(conversation_id, turn_kind=turn_kind):
-            await coro(cancel_event)
-
-    cancel_event = manager.reset_cancel(conversation_id)
-    task = asyncio.create_task(_wrapped(cancel_event))
-
-    def _on_turn_done(t: asyncio.Task[None]) -> None:
-        manager.clear_active_task(conversation_id)
-        if not t.cancelled() and t.exception() is not None:
-            logger.debug("turn task завершилась с ошибкой: conv=%s", conversation_id)
-
-    manager.set_active_task(conversation_id, task)
-    task.add_done_callback(_on_turn_done)
+    Returns:
+        False, если генерация уже идёт.
+    """
+    return manager.try_start_turn(
+        conversation_id,
+        runner,
+        turn_kind=turn_kind,
+    )
 
 
 @router.websocket("/ws/events")
@@ -510,15 +480,6 @@ async def _handle_ws_message(
             )
             return True
 
-        if manager.is_busy(conversation_id):
-            logger.warning(
-                "WS user_message отклонён: busy (активная задача уже идёт)",
-            )
-            await websocket.send_json(
-                _ws_error_payload(ErrorCode.BUSY, "Уже выполняется генерация"),
-            )
-            return True
-
         llm_text = (data.get("text") or "").strip()
         if not llm_text:
             await websocket.send_json(
@@ -572,7 +533,7 @@ async def _handle_ws_message(
             bool(integration.llm_model or integration.llm_base_url),
             has_gen_preset,
         )
-        _start_background_turn(
+        started = _start_background_turn(
             conversation_id,
             _schedule_turn_task(
                 conversation_id,
@@ -583,18 +544,16 @@ async def _handle_ws_message(
             ),
             turn_kind="user_message",
         )
-        return True
-
-    if msg_type == "regenerate":
-        if manager.is_busy(conversation_id):
+        if not started:
             logger.warning(
-                "WS regenerate отклонён: busy message_id=%s",
-                data.get("message_id"),
+                "WS user_message отклонён: busy (активная задача уже идёт)",
             )
             await websocket.send_json(
                 _ws_error_payload(ErrorCode.BUSY, "Уже выполняется генерация"),
             )
-            return True
+        return True
+
+    if msg_type == "regenerate":
         try:
             regen_id = uuid.UUID(str(data.get("message_id", "")))
         except ValueError:
@@ -628,7 +587,7 @@ async def _handle_ws_message(
             bool(llm_text_override),
             has_gen_preset,
         )
-        _start_background_turn(
+        started = _start_background_turn(
             conversation_id,
             _schedule_regenerate_task(
                 conversation_id,
@@ -638,6 +597,14 @@ async def _handle_ws_message(
             ),
             turn_kind="regenerate",
         )
+        if not started:
+            logger.warning(
+                "WS regenerate отклонён: busy message_id=%s",
+                data.get("message_id"),
+            )
+            await websocket.send_json(
+                _ws_error_payload(ErrorCode.BUSY, "Уже выполняется генерация"),
+            )
         return True
 
     await websocket.send_json(

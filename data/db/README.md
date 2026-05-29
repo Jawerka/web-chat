@@ -47,8 +47,17 @@ python -m app.scripts.verify_migration --target "$MIGRATE_TARGET_URL"
 
 Каталог: **`data/backups/database/`** (см. [deploy/DATABASE-BACKUP.md](../../deploy/DATABASE-BACKUP.md)).
 
+При PostgreSQL в архив по умолчанию **не** попадает legacy `web_chat.sqlite` (~2.1 GB). Включить явно:
+
+```bash
+WEB_CHAT_BACKUP_LEGACY_SQLITE=1 ./scripts/backup-database.sh   # принудительно
+WEB_CHAT_BACKUP_LEGACY_SQLITE=auto ./scripts/backup-database.sh # если файл есть
+```
+
 ```bash
 ./scripts/backup-database.sh
 ./scripts/restore-database.sh --list
 ./scripts/restore-database.sh --yes    # после systemctl stop web-chat
 ```
+
+После restore скрипт выполняет `SELECT 1` и `alembic current` (Postgres).

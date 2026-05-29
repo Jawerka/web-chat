@@ -1,16 +1,18 @@
 :root {
-  --bg: #0b1018;
+  /* Health — тёмная страница; семантика из tokens.css (P7.2) */
+  --health-theme-color: #0b1018;
+  --bg: var(--health-theme-color);
   --surface: #141c28;
   --surface2: #1a2433;
   --border: #2a3a52;
   --text: #e8eef6;
   --muted: #8fa3be;
-  --ok: #3ecf8e;
+  --ok: var(--color-success, #3ecf8e);
   --warn: #f0b429;
-  --load: #5b9fd4;
-  --bad: #f07178;
-  --accent: #5b9fd4;
-  --radius: 12px;
+  --load: var(--color-primary, #5b9fd4);
+  --bad: var(--color-danger, #f07178);
+  --accent: var(--color-primary, #5b9fd4);
+  --radius: var(--radius-md, 12px);
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
 }
@@ -100,7 +102,7 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #3d7ab8, #5b9fd4);
+  background: linear-gradient(135deg, var(--color-primary-hover, #3d7ab8), var(--accent));
   border-color: transparent;
   color: #fff;
 }

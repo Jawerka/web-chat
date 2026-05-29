@@ -1,6 +1,12 @@
-# Environment
+# Environment / secrets
 .venv/
 .env
+.env.*
+!.env.example
+*.pem
+*.p12
+id_rsa
+id_rsa.*
 
 audit.md
 
@@ -21,12 +27,17 @@ htmlcov/
 # Deploy generated units (install.sh)
 deploy/generated/
 
-# Runtime data
+# Runtime data (БД, логи, загрузки — не коммитить)
 logs/
+*.log
+data/.pg_migrate_secret
+data/web_chat.db
+data/**/*.sqlite
+data/**/*.sqlite3
+data/**/*.db
 data/db/*
 !data/db/.gitkeep
 !data/db/README.md
-data/.pg_migrate_secret
 data/uploads/
 data/generated/
 data/backups/**

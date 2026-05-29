@@ -49,6 +49,11 @@ async def lifespan(app: FastAPI):
     refresh_trusted_internal_from_settings()
     settings.validate_timeouts()
     await init_db()
+    from app.api.ws_events import emit_progress
+    from app.api.ws_manager import manager
+    from app.services.turn_realtime import configure_turn_realtime
+
+    configure_turn_realtime(manager, progress_emit=emit_progress)
     await heavy_job_queue.start()
     start_mcp_background()
     retention_task, retention_stop = start_retention_background()

@@ -44,6 +44,8 @@ def _sample_report(*, overall: str = "ok", llm: str = "ok", sd: str = "ok") -> H
             ),
         ],
         active_generations=0,
+        disk_free_mb=1024.0,
+        generated_count=3,
     )
 
 
@@ -68,6 +70,8 @@ async def test_health_returns_structure(
     assert data["timeouts_ok"] is True
     assert "services" in data
     assert "history" in data
+    assert "disk_free_mb" in data
+    assert "generated_count" in data
 
 
 @pytest.mark.asyncio

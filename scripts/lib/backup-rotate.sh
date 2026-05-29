@@ -40,6 +40,34 @@ backup_rotate() {
   done
 }
 
+site_backup_list_archives() {
+  local dir="${1:-${WEB_CHAT_SITE_BACKUP_DIR}}"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -maxdepth 1 -type f -name 'web-chat-site-*.tar.gz' 2>/dev/null | sort -r
+}
+
+site_backup_rotate() {
+  local dir="${1:-${WEB_CHAT_SITE_BACKUP_DIR}}"
+  local keep="${2:-${WEB_CHAT_SITE_BACKUP_KEEP}}"
+  local archives=()
+  local i=0
+  local path
+
+  mkdir -p "${dir}"
+  while IFS= read -r path; do
+    [[ -n "$path" ]] && archives+=("$path")
+  done < <(site_backup_list_archives "${dir}")
+
+  if [[ ${#archives[@]} -le ${keep} ]]; then
+    return 0
+  fi
+
+  for ((i = keep; i < ${#archives[@]}; i++)); do
+    echo "Удалён старый site-бэкап: $(basename "${archives[i]}")"
+    rm -f "${archives[i]}"
+  done
+}
+
 backup_print_list() {
   local dir="${1:-${WEB_CHAT_DB_BACKUP_DIR}}"
   local n=0

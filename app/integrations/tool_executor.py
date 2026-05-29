@@ -12,15 +12,17 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db.models import Attachment, MediaAsset
 from app.db.repositories import AttachmentRepository, MessageRepository
-from app.db.session import async_session_factory
+from app.db import session as db_session
 from app.services.message_builder import _public_url_from_image_part
 from app.integrations.media_utils import (
     parse_asset_id_from_url,
@@ -29,6 +31,7 @@ from app.integrations.media_utils import (
     resolve_upload_file,
 )
 from app.integrations.sd_progress import fetch_sd_progress
+from app.integrations.tool_definitions import tool_timeout_seconds
 from app.integrations.sd_tools import generate_image, get_gallery, img2img, upscale_images
 from app.services.attachment_service import AttachmentService
 from app.services.job_queue import JobCancelled, ShutdownInProgress, heavy_job_queue
@@ -85,6 +88,30 @@ class ToolExecutor:
         # Закреплённый init из user-сообщения на весь ход (несколько img2img подряд).
         self._pinned_user_init: tuple[bytes, str] | None = None
 
+    async def _with_tool_timeout(self, tool_name: str, coro: Awaitable[Any]) -> Any:
+        """Ограничить время выполнения инструмента (P4.1)."""
+        return await asyncio.wait_for(coro, timeout=tool_timeout_seconds(tool_name))
+
+    def _tool_timeout_result(self, tool_name: str) -> ToolResult:
+        secs = tool_timeout_seconds(tool_name)
+        return ToolResult(
+            content=f"Превышено время ожидания инструмента {tool_name} ({secs} с)",
+            image_urls=[],
+        )
+
+    @asynccontextmanager
+    async def _borrow_session(self) -> AsyncIterator[AsyncSession]:
+        """Короткая сессия БД, если оркестратор не передал свою (P3.1)."""
+        if self._session is not None:
+            yield self._session
+            return
+        async with db_session.async_session_factory() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+
     async def run(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         """
         Выполнить инструмент по имени.
@@ -106,16 +133,35 @@ class ToolExecutor:
             return await self._run_sd_image_tool(upscale_images, arguments, name)
         if name == "get_gallery":
             await self._emit_tool_progress(name)
-            text = await heavy_job_queue.run_sync(
-                get_gallery,
-                limit=int(arguments.get("limit") or 20),
-                cancel_event=self._cancel_event,
-                operation="get_gallery",
-            )
+            try:
+                text = await self._with_tool_timeout(
+                    name,
+                    heavy_job_queue.run_sync(
+                        get_gallery,
+                        limit=int(arguments.get("limit") or 20),
+                        cancel_event=self._cancel_event,
+                        operation="get_gallery",
+                    ),
+                )
+            except TimeoutError:
+                return self._tool_timeout_result(name)
+            except ShutdownInProgress:
+                return ToolResult(
+                    content="Сервер завершает работу — запрос прерван.",
+                    image_urls=[],
+                )
+            except JobCancelled:
+                return ToolResult(content="Генерация отменена", image_urls=[])
             return ToolResult(content=text, image_urls=[])
         if name == "extract_text":
             await self._emit_tool_progress(name)
-            text = await self._extract_text(arguments)
+            try:
+                text = await self._with_tool_timeout(
+                    name,
+                    self._extract_text(arguments),
+                )
+            except TimeoutError:
+                return self._tool_timeout_result(name)
             return ToolResult(content=text, image_urls=[])
         raise ValueError(f"Неизвестный инструмент: {name}")
 
@@ -125,6 +171,24 @@ class ToolExecutor:
         await self._emit_progress(
             build_progress(stage_for_tool(tool_name), tool=tool_name),
         )
+
+    def _assert_attachment_scope(self, attachment: Attachment) -> None:
+        """Вложение доступно только в текущей беседе (или ещё не привязано)."""
+        if self._conversation_id is None:
+            return
+        if attachment.conversation_id is None:
+            return
+        if attachment.conversation_id != self._conversation_id:
+            raise ValueError(f"Вложение {attachment.id} принадлежит другой беседе")
+
+    def _assert_media_asset_scope(self, asset: MediaAsset) -> None:
+        """MediaAsset доступен только в текущей беседе (или без привязки)."""
+        if self._conversation_id is None:
+            return
+        if asset.conversation_id is None:
+            return
+        if asset.conversation_id != self._conversation_id:
+            raise ValueError(f"Изображение {asset.id} принадлежит другой беседе")
 
     async def _load_init_image(
         self,
@@ -139,23 +203,25 @@ class ToolExecutor:
         generated (/media/generated/… или имя файла), attachment_id.
         """
         if attachment_id is not None:
-            if self._session is None:
-                raise ValueError("Нет сессии БД для чтения вложения")
-            service = AttachmentService(self._session)
-            att = await service._repo.get_by_id(attachment_id)
-            if att is None:
-                raise ValueError(f"Вложение {attachment_id} не найдено")
-            if not att.mime_type.startswith("image/"):
-                raise ValueError("img2img поддерживает только изображения")
-            if att.media_asset_id is not None:
-                media = MediaService(self._session)
-                result = await media.get_bytes(att.media_asset_id)
-                if result is None:
-                    raise ValueError(f"Изображение вложения {attachment_id} не найдено в БД")
-                data, _mime = result
-                return data, att.original_name
-            path = AttachmentService.file_path(att)
-            return path.read_bytes(), att.original_name
+            async with self._borrow_session() as session:
+                service = AttachmentService(session)
+                att = await service.get_by_id(attachment_id)
+                if att is None:
+                    raise ValueError(f"Вложение {attachment_id} не найдено")
+                self._assert_attachment_scope(att)
+                if not att.mime_type.startswith("image/"):
+                    raise ValueError("img2img поддерживает только изображения")
+                if att.media_asset_id is not None:
+                    media = MediaService(session)
+                    result = await media.get_bytes(att.media_asset_id)
+                    if result is None:
+                        raise ValueError(
+                            f"Изображение вложения {attachment_id} не найдено в БД",
+                        )
+                    data, _mime = result
+                    return data, att.original_name
+                path = AttachmentService.file_path(att)
+                return path.read_bytes(), att.original_name
 
         if not url_or_path or not str(url_or_path).strip():
             raise ValueError("Укажите init_image_url или attachment_id")
@@ -163,14 +229,15 @@ class ToolExecutor:
         raw = str(url_or_path).strip()
         asset_id = parse_asset_id_from_url(raw)
         if asset_id is not None:
-            if self._session is None:
-                raise ValueError("Нет сессии БД для чтения /media/asset/…")
-            media = MediaService(self._session)
-            result = await media.get_bytes(asset_id)
-            if result is not None:
-                data, _mime = result
-                return data, f"{asset_id}.png"
-            # LLM часто подставляет UUID вложения в /media/asset/… — пробуем Attachment
+            async with self._borrow_session() as session:
+                media = MediaService(session)
+                asset = await media.get_asset(asset_id)
+                if asset is not None:
+                    self._assert_media_asset_scope(asset)
+                result = await media.get_bytes(asset_id)
+                if result is not None:
+                    data, _mime = result
+                    return data, f"{asset_id}.png"
             try:
                 return await self._load_init_image(attachment_id=asset_id)
             except (ValueError, FileNotFoundError) as exc:
@@ -195,45 +262,50 @@ class ToolExecutor:
         1) Attachment с message_id в БД
         2) image_url / asset_id в content_json.parts (старые сообщения без link_to_message)
         """
-        if self._session is None or self._source_user_message_id is None:
+        if self._source_user_message_id is None:
             return None
 
-        att_repo = AttachmentRepository(self._session)
-        attachments = await att_repo.list_for_message(self._source_user_message_id)
-        for att in attachments:
-            if att.mime_type.startswith("image/"):
-                try:
-                    return await self._load_init_image(attachment_id=att.id)
-                except (ValueError, FileNotFoundError, RuntimeError) as exc:
-                    logger.warning(
-                        "img2img: вложение %s не загружено: %s",
-                        att.id,
-                        exc,
-                    )
+        async with self._borrow_session() as session:
+            att_repo = AttachmentRepository(session)
+            attachments = await att_repo.list_for_message(self._source_user_message_id)
+            for att in attachments:
+                if att.mime_type.startswith("image/"):
+                    try:
+                        return await self._load_init_image(attachment_id=att.id)
+                    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+                        logger.warning(
+                            "img2img: вложение %s не загружено: %s",
+                            att.id,
+                            exc,
+                        )
 
-        msg = await MessageRepository(self._session).get_by_id(self._source_user_message_id)
-        if msg and msg.content_json and isinstance(msg.content_json.get("parts"), list):
-            for part in msg.content_json["parts"]:
-                if part.get("type") != "image_url":
-                    continue
-                url = _public_url_from_image_part(part)
-                raw_asset = part.get("asset_id")
-                try:
-                    if raw_asset:
-                        aid = uuid.UUID(str(raw_asset))
-                        if self._session is not None:
-                            media = MediaService(self._session)
+            msg = await MessageRepository(session).get_by_id(
+                self._source_user_message_id,
+            )
+            if msg and msg.content_json and isinstance(
+                msg.content_json.get("parts"),
+                list,
+            ):
+                for part in msg.content_json["parts"]:
+                    if part.get("type") != "image_url":
+                        continue
+                    url = _public_url_from_image_part(part)
+                    raw_asset = part.get("asset_id")
+                    try:
+                        if raw_asset:
+                            aid = uuid.UUID(str(raw_asset))
+                            media = MediaService(session)
                             result = await media.get_bytes(aid)
                             if result is not None:
                                 data, _mime = result
                                 return data, f"{aid}.png"
-                    if url:
-                        return await self._load_init_image(url)
-                except (ValueError, FileNotFoundError, RuntimeError) as exc:
-                    logger.warning(
-                        "img2img: part user-сообщения не загружен: %s",
-                        exc,
-                    )
+                        if url:
+                            return await self._load_init_image(url)
+                    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+                        logger.warning(
+                            "img2img: part user-сообщения не загружен: %s",
+                            exc,
+                        )
 
         return None
 
@@ -366,14 +438,24 @@ class ToolExecutor:
                 self._poll_sd_progress(tool_name, poll_stop),
             )
         try:
-            text = await heavy_job_queue.run_sync(
-                lambda: func(**filtered),
-                cancel_event=self._cancel_event,
-                operation=tool_name,
+            text = await self._with_tool_timeout(
+                tool_name,
+                heavy_job_queue.run_sync(
+                    lambda: func(**filtered),
+                    cancel_event=self._cancel_event,
+                    operation=tool_name,
+                ),
             )
+        except TimeoutError:
+            return self._tool_timeout_result(tool_name)
         except JobCancelled:
             return ToolResult(
                 content="Генерация отменена",
+                image_urls=[],
+            )
+        except ShutdownInProgress:
+            return ToolResult(
+                content="Сервер завершает работу — генерация прервана. Обновите страницу позже.",
                 image_urls=[],
             )
         except SdUnavailableError as exc:
@@ -402,28 +484,20 @@ class ToolExecutor:
         )
         url_map: dict[str, str] = {}
         asset_ids: list[str] = []
-        if self._session is not None:
-            t1 = time.monotonic()
-            media = MediaService(self._session)
+        t1 = time.monotonic()
+        async with self._borrow_session() as session:
+            media = MediaService(session)
             ingested, url_map, raw_ids = await media.ingest_sd_output_files(
                 text,
                 conversation_id=self._conversation_id,
             )
-            ingest_elapsed = time.monotonic() - t1
             if ingested:
                 urls = ingested
                 asset_ids = [str(i) for i in raw_ids]
-                logger.info(
-                    "%s ingest OK за %.1fs: %d asset(s)",
-                    tool_name,
-                    ingest_elapsed,
-                    len(asset_ids),
-                )
-            else:
+            elif urls:
                 logger.warning(
-                    "%s ingest пустой за %.1fs (parsed urls=%d)",
+                    "%s ingest пустой (parsed urls=%d), пробуем normalize",
                     tool_name,
-                    ingest_elapsed,
                     len(urls),
                 )
                 urls = await media.normalize_image_urls(
@@ -434,8 +508,23 @@ class ToolExecutor:
                     aid = parse_asset_id_from_url(u)
                     if aid:
                         asset_ids.append(str(aid))
-        else:
-            logger.warning("%s: нет сессии БД — ingest пропущен", tool_name)
+            if self._session is None:
+                await session.commit()
+        ingest_elapsed = time.monotonic() - t1
+        if asset_ids:
+            logger.info(
+                "%s ingest OK за %.1fs: %d asset(s)",
+                tool_name,
+                ingest_elapsed,
+                len(asset_ids),
+            )
+        elif urls:
+            logger.warning(
+                "%s без asset в БД за %.1fs (urls=%d)",
+                tool_name,
+                ingest_elapsed,
+                len(urls),
+            )
         logger.info(
             "%s итог за %.1fs: urls=%d assets=%d",
             tool_name,
@@ -443,6 +532,14 @@ class ToolExecutor:
             len(urls),
             len(asset_ids),
         )
+        if url_map:
+            from app.services.message_builder import rewrite_media_urls_in_text
+
+            text = rewrite_media_urls_in_text(text, url_map)
+        if asset_ids:
+            from app.services.message_builder import canonical_stored_image_urls
+
+            urls = canonical_stored_image_urls(urls, asset_ids)
         return ToolResult(
             content=text,
             image_urls=urls,
@@ -494,6 +591,10 @@ class ToolExecutor:
         if self._session is not None:
             service = AttachmentService(self._session)
             try:
+                attachment = await service.get_by_id(attachment_id)
+                if attachment is None:
+                    raise ValueError(f"Вложение не найдено: {attachment_id}")
+                self._assert_attachment_scope(attachment)
                 return await service.extract_text(
                     attachment_id,
                     max_chars=max_chars,
@@ -502,9 +603,13 @@ class ToolExecutor:
             except ValueError as exc:
                 return f"Ошибка extract_text: {exc}"
 
-        async with async_session_factory() as session:
+        async with db_session.async_session_factory() as session:
             service = AttachmentService(session)
             try:
+                attachment = await service.get_by_id(attachment_id)
+                if attachment is None:
+                    raise ValueError(f"Вложение не найдено: {attachment_id}")
+                self._assert_attachment_scope(attachment)
                 text = await service.extract_text(
                     attachment_id,
                     max_chars=max_chars,

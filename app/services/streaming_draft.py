@@ -1,43 +1,38 @@
 """
-Черновик ответа ассистента во время стриминга — сохранение в БД для перезагрузки страницы.
+Черновик ответа ассистента во время стрима — сохранение в БД для перезагрузки страницы.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.api.ws_manager import manager
+from app.services.turn_realtime import turn_realtime
 from app.config import settings
-from app.db.models import Conversation, Message, MessageRole
+from app.db.models import MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository
+from app.services.turn_db import open_turn_session
 from app.services.turn_status import STREAMING, TOOL_RUNNING, patch_active_turn_phase
 
 logger = logging.getLogger(__name__)
 
-EventEmitter = Any  # Callable[[str, dict], Awaitable[None]]
+EventEmitter = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 class AssistantStreamDraft:
-    """Накопление текста стрима с периодической записью в БД."""
+    """Накопление текста стрима с периодической записью в БД (короткие сессии)."""
 
     def __init__(
         self,
-        session: AsyncSession,
-        msg_repo: MessageRepository,
-        conv_repo: ConversationRepository,
-        conversation: Conversation,
+        conversation_id: uuid.UUID,
         emit: EventEmitter,
     ) -> None:
-        self._session = session
-        self._msg_repo = msg_repo
-        self._conv_repo = conv_repo
-        self._conversation = conversation
+        self._conversation_id = conversation_id
         self._emit = emit
-        self._message: Message | None = None
+        self._draft_id: uuid.UUID | None = None
         self._json_cache: dict[str, Any] = {}
         self._buffer = ""
         self._reasoning_buffer = ""
@@ -47,8 +42,13 @@ class AssistantStreamDraft:
         self._is_discarded = False
 
     @property
-    def message(self) -> Message | None:
-        return self._message
+    def message_id(self) -> uuid.UUID | None:
+        return self._draft_id
+
+    @property
+    def message(self) -> None:
+        """Устарело: ORM не хранится между сессиями; используйте message_id."""
+        return None
 
     @property
     def text(self) -> str:
@@ -59,74 +59,84 @@ class AssistantStreamDraft:
         return self._reasoning_buffer
 
     def _content_json(self) -> dict[str, Any]:
-        """Только in-memory кэш — не читать ORM после commit (MissingGreenlet)."""
         return dict(self._json_cache)
 
-    def _current_content_text(self) -> str:
-        if self._message is None:
-            return self._buffer
-        return self._buffer or (self._message.content_text or "")
-
-    async def _ensure_message(self) -> Message:
+    async def _ensure_message(self) -> uuid.UUID:
         """Гарантировать черновик assistant в БД."""
-        if self._message is not None:
-            return self._message
-        stale = await self._msg_repo.settle_stale_streaming_assistant_messages(
-            self._conversation.id,
-            keep_message_id=None,
-        )
-        if stale:
-            logger.info(
-                "Снят streaming с %d зависших черновиков (conv=%s)",
-                stale,
-                self._conversation.id,
+        if self._draft_id is not None:
+            return self._draft_id
+        async with open_turn_session() as session:
+            msg_repo = MessageRepository(session)
+            conv_repo = ConversationRepository(session)
+            stale = await msg_repo.settle_stale_streaming_assistant_messages(
+                self._conversation_id,
+                keep_message_id=None,
             )
-        initial_json = patch_active_turn_phase(
-            {
-                "images": [],
-                "image_asset_ids": [],
-                "streaming": True,
-            },
-            turn_phase=STREAMING,
-            legacy_phase="text",
-        )
-        self._json_cache = dict(initial_json)
-        self._message = await self._msg_repo.create(
-            conversation_id=self._conversation.id,
-            role=MessageRole.ASSISTANT,
-            content_text="",
-            content_json=initial_json,
-        )
-        await self._conv_repo.touch(self._conversation)
-        await self._session.commit()
-        manager.set_streaming_message(self._conversation.id, self._message.id)
+            if stale:
+                logger.info(
+                    "Снят streaming с %d зависших черновиков (conv=%s)",
+                    stale,
+                    self._conversation_id,
+                )
+            initial_json = patch_active_turn_phase(
+                {
+                    "images": [],
+                    "image_asset_ids": [],
+                    "streaming": True,
+                },
+                turn_phase=STREAMING,
+                legacy_phase="text",
+            )
+            self._json_cache = dict(initial_json)
+            message = await msg_repo.create(
+                conversation_id=self._conversation_id,
+                role=MessageRole.ASSISTANT,
+                content_text="",
+                content_json=initial_json,
+            )
+            conv = await conv_repo.get_by_id(self._conversation_id)
+            if conv is not None:
+                await conv_repo.touch(conv)
+            await session.commit()
+            self._draft_id = message.id
+        turn_realtime().set_streaming_message(self._conversation_id, self._draft_id)
         await self._emit(
             "assistant_draft",
-            {"assistant_message_id": str(self._message.id)},
+            {"assistant_message_id": str(self._draft_id)},
         )
-        logger.info("Черновик ответа %s создан", self._message.id)
-        return self._message
+        logger.info("Черновик ответа %s создан", self._draft_id)
+        return self._draft_id
 
     async def _update_content_json(self, patch: dict[str, Any]) -> None:
+        if self._draft_id is None or self._is_discarded:
+            return
         async with self._flush_lock:
-            if self._message is None or self._is_discarded:
+            if self._draft_id is None or self._is_discarded:
                 return
             merged = self._content_json()
             merged.update(patch)
             self._json_cache = merged
-            await self._msg_repo.update_content(
-                self._message,
-                content_text=self._current_content_text(),
-                content_json=merged,
-            )
-            await self._conv_repo.touch(self._conversation)
-            await self._session.commit()
+            async with open_turn_session() as session:
+                msg_repo = MessageRepository(session)
+                conv_repo = ConversationRepository(session)
+                message = await msg_repo.get_by_id(self._draft_id)
+                if message is None:
+                    return
+                await msg_repo.update_content(
+                    message,
+                    content_text=self._buffer,
+                    content_json=merged,
+                )
+                conv = await conv_repo.get_by_id(self._conversation_id)
+                if conv is not None:
+                    await conv_repo.touch(conv)
+                await session.commit()
 
     async def on_reasoning_delta(self, chunk: str) -> None:
         if not chunk:
             return
         self._reasoning_buffer += chunk
-        if self._message is None:
+        if self._draft_id is None:
             await self._ensure_message()
         await self._emit("reasoning_delta", {"content": chunk})
 
@@ -134,7 +144,7 @@ class AssistantStreamDraft:
         if not chunk:
             return
         self._buffer += chunk
-        if self._message is None:
+        if self._draft_id is None:
             await self._ensure_message()
         elif self._content_json().get("phase") == "tool":
             await self._update_content_json(
@@ -158,34 +168,37 @@ class AssistantStreamDraft:
         try:
             await self.flush()
         except Exception:
-            # Фоновая задача: не даём исключению “утечь” как unhandled task.
             logger.exception("AssistantStreamDraft: debounced flush failed")
 
     async def _flush_safe(self) -> None:
-        """Безопасный flush для фоновых задач (не кидает исключения наружу)."""
         try:
             await self.flush()
         except Exception:
             logger.exception("AssistantStreamDraft: flush task failed")
 
     async def flush(self) -> None:
+        if self._draft_id is None or self._is_discarded:
+            return
         async with self._flush_lock:
-            if self._message is None or self._is_discarded:
+            if self._draft_id is None or self._is_discarded:
                 return
-            await self._msg_repo.update_content(
-                self._message,
-                content_text=self._buffer,
-            )
-            await self._conv_repo.touch(self._conversation)
-            await self._session.commit()
+            async with open_turn_session() as session:
+                msg_repo = MessageRepository(session)
+                conv_repo = ConversationRepository(session)
+                message = await msg_repo.get_by_id(self._draft_id)
+                if message is None:
+                    return
+                await msg_repo.update_content(
+                    message,
+                    content_text=self._buffer,
+                )
+                conv = await conv_repo.get_by_id(self._conversation_id)
+                if conv is not None:
+                    await conv_repo.touch(conv)
+                await session.commit()
             self._last_flushed_len = len(self._buffer)
 
     async def enter_tool_round(self, active_tool: str | None = None) -> None:
-        """
-        Перейти к фазе tools, сохранив черновик (не удалять из БД).
-
-        Нужно для восстановления UI после перезагрузки во время SD/MCP.
-        """
         await self._ensure_message()
         cj = self._content_json()
         patch = patch_active_turn_phase(
@@ -199,17 +212,16 @@ class AssistantStreamDraft:
             legacy_phase="tool",
         )
         await self._update_content_json(patch)
-        manager.set_streaming_message(self._conversation.id, self._message.id)
-        # Не очищаем _buffer: текст всех раундов LLM накапливается до финального persist.
+        if self._draft_id is not None:
+            turn_realtime().set_streaming_message(self._conversation_id, self._draft_id)
         logger.info(
             "Черновик %s: фаза tool (%s)",
-            self._message.id,
+            self._draft_id,
             active_tool,
         )
 
     async def set_active_tool(self, name: str) -> None:
-        """Обновить имя активного инструмента в черновике."""
-        if self._message is None:
+        if self._draft_id is None:
             return
         await self._update_content_json(
             patch_active_turn_phase(
@@ -224,19 +236,21 @@ class AssistantStreamDraft:
         urls: list[str],
         asset_ids: list[str] | None = None,
     ) -> None:
-        """Дописать URL сгенерированных картинок в content_json черновика."""
-        if self._message is None or not urls:
+        from app.services.message_builder import canonical_stored_image_urls
+
+        canonical = canonical_stored_image_urls(urls, asset_ids)
+        if self._draft_id is None or not canonical and not asset_ids:
             return
         cj = self._content_json()
-        images = list(cj.get("images") or [])
         aids = list(cj.get("image_asset_ids") or [])
-        for url in urls:
-            if url not in images:
-                images.append(url)
         if asset_ids:
             for aid in asset_ids:
                 if aid not in aids:
                     aids.append(aid)
+        images = canonical_stored_image_urls(
+            list(cj.get("images") or []) + canonical,
+            aids,
+        )
         await self._update_content_json(
             {
                 "images": images,
@@ -244,19 +258,3 @@ class AssistantStreamDraft:
                 "streaming": True,
             }
         )
-
-    async def discard(self) -> None:
-        """Удалить черновик (только при отмене / ошибке)."""
-        async with self._flush_lock:
-            if self._message is None or self._is_discarded:
-                return
-            self._is_discarded = True
-            self._pending_flush = False
-            mid = self._message.id
-            await self._msg_repo.delete(self._message)
-            await self._session.commit()
-            manager.clear_streaming_message(self._conversation.id)
-            logger.info("Черновик ответа %s удалён", mid)
-            self._message = None
-            self._buffer = ""
-            self._reasoning_buffer = ""

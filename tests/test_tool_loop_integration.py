@@ -61,15 +61,13 @@ async def test_fifth_img2img_in_turn_raises_tool_loop(
     orchestrator = AgentOrchestrator(llm=mock_llm, tool_executor=mock_tools)
     emit = AsyncMock()
 
-    async with db_session.async_session_factory() as session:
-        result = await orchestrator.run_conversation_turn(
-            session,
-            conv_id,
-            "нарисуй",
-            [],
-            emit,
-            asyncio.Event(),
-        )
+    result = await orchestrator.run_conversation_turn(
+        conv_id,
+        "нарисуй",
+        [],
+        emit,
+        asyncio.Event(),
+    )
 
     assert mock_tools.run.await_count == 3
     assert result.image_urls == []

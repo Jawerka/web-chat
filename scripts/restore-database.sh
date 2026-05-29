@@ -101,6 +101,17 @@ _resolve_archive() {
 ARCHIVE="$(_resolve_archive)"
 echo "Архив: ${ARCHIVE}"
 
+if [[ "$ASSUME_YES" != "1" ]]; then
+  echo ""
+  echo "ВНИМАНИЕ: будут перезаписаны данные активной БД (${WEB_CHAT_DB_BACKEND} из .env)."
+  echo "Остановите сервис: systemctl stop web-chat"
+  read -r -p "Продолжить распаковку и восстановление? [y/N] " ans
+  case "${ans,,}" in
+    y | yes) ;;
+    *) echo "Отменено."; exit 0 ;;
+  esac
+fi
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 tar -xzf "${ARCHIVE}" -C "${TMP}"
@@ -134,23 +145,17 @@ LEGACY_IN_ARCHIVE="${_MF[4]}"
 
 echo "Бэкап: backend=${BACKEND}, stamp из manifest"
 
-if [[ "$ASSUME_YES" != "1" ]]; then
-  echo ""
-  echo "ВНИМАНИЕ: будут перезаписаны данные активной БД (${WEB_CHAT_DB_BACKEND} из .env)."
-  echo "Остановите сервис: systemctl stop web-chat"
-  read -r -p "Продолжить? [y/N] " ans
-  case "${ans,,}" in
-    y | yes) ;;
-    *) echo "Отменено."; exit 0 ;;
-  esac
-fi
-
 _stop_web_chat() {
+  local stopped=0
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active web-chat >/dev/null 2>&1; then
-    echo "Останавливаю web-chat…" >&2
+    echo "Останавливаю web-chat (systemctl stop web-chat)…" >&2
     systemctl stop web-chat || true
+    stopped=1
   fi
-  pkill -f 'uvicorn app.main:app' 2>/dev/null || true
+  if [[ "$stopped" -eq 0 ]] && pgrep -f 'uvicorn app.main:app' >/dev/null 2>&1; then
+    echo "web-chat не через systemd — завершаю uvicorn (fallback pkill)…" >&2
+    pkill -f 'uvicorn app.main:app' 2>/dev/null || true
+  fi
   sleep 2
 }
 
@@ -186,13 +191,13 @@ print(shell_exports(settings.database_url))
 ")"
 
   echo "Восстановление PostgreSQL (${PGDATABASE})…" >&2
-  PGPASSWORD="${PGPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d postgres -v ON_ERROR_STOP=1 <<SQL || true
+  PGPASSWORD="${PGPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d postgres -v ON_ERROR_STOP=1 <<SQL
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname = '${PGDATABASE}' AND pid <> pg_backend_pid();
 SQL
 
-  dropdb -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" --if-exists "${PGDATABASE}" 2>/dev/null || true
+  dropdb -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" --if-exists "${PGDATABASE}"
   createdb -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -O "${PGUSER}" "${PGDATABASE}"
 
   if [[ "${PG_FMT}" == "plain" ]]; then
@@ -258,6 +263,49 @@ if [[ "$RESTORE_LEGACY_SQLITE" == "1" && "$LEGACY_IN_ARCHIVE" == "1" ]]; then
   _restore_legacy_sqlite
 fi
 
+_post_restore_verify() {
+  echo ""
+  echo "Проверка БД после restore…" >&2
+  if ! "${WEB_CHAT_ROOT}/.venv/bin/python" - <<'PY' 2>&1; then
+import asyncio
+import sys
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from app.config import settings
+
+
+async def main() -> None:
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.connect() as conn:
+            one = (await conn.execute(text("SELECT 1"))).scalar_one()
+            if one != 1:
+                raise RuntimeError(f"unexpected SELECT 1 → {one!r}")
+    finally:
+        await engine.dispose()
+    print("  OK: подключение к БД, SELECT 1", file=sys.stderr)
+
+
+asyncio.run(main())
+PY
+    echo "Проверка БД не удалась." >&2
+    return 1
+  fi
+  if [[ "${WEB_CHAT_DB_BACKEND}" == "postgresql" ]]; then
+    if "${WEB_CHAT_ROOT}/.venv/bin/python" -m alembic current 2>&1 | head -5; then
+      echo "  OK: alembic current" >&2
+    else
+      echo "  Предупреждение: alembic current не выполнен (запустите сервис — upgrade при старте)" >&2
+    fi
+  fi
+  return 0
+}
+
+_post_restore_verify || exit 1
+
 echo ""
 echo "Восстановление завершено."
 echo "Запуск: systemctl start web-chat"
+echo "После старта: curl -sS http://127.0.0.1:8099/api/health | head -c 200"

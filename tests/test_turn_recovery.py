@@ -12,6 +12,7 @@ from app.db.repositories import ConversationRepository, MessageRepository, Prese
 from app.db import session as db_session
 from app.db.session import dispose_database, init_db
 from tests.safety import assert_not_using_production_database, safe_configure_database
+from app.api.websocket import _commit_or_settle_turn
 from app.services.turn_recovery import settle_interrupted_turn
 
 
@@ -95,3 +96,69 @@ async def test_settle_deletes_empty_draft(tmp_path, repo_conv_title: str) -> Non
         await session.commit()
         assert kept is False
         assert await MessageRepository(session).get_by_id(draft_id) is None
+
+
+@pytest.mark.asyncio
+async def test_commit_or_settle_survives_broken_db_commit(
+    tmp_path,
+    repo_conv_title: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """P3.4: сбой commit после settle не должен бросать наружу (сохранить код ошибки WS)."""
+    await dispose_database()
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'broken_commit.sqlite'}"
+    safe_configure_database(db_url)
+    await init_db()
+    assert_not_using_production_database()
+
+    async with db_session.async_session_factory() as session:
+        preset = await PresetRepository(session).get_default()
+        assert preset is not None
+        conv = await ConversationRepository(session).create(
+            title=repo_conv_title,
+            preset_id=preset.id,
+        )
+        draft = await MessageRepository(session).create(
+            conversation_id=conv.id,
+            role=MessageRole.ASSISTANT,
+            content_text="partial",
+            content_json={"streaming": True, "phase": "text"},
+        )
+        await session.commit()
+        conv_id = conv.id
+        draft_id = draft.id
+
+    manager.set_streaming_message(conv_id, draft_id)
+
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock, patch
+
+    broken_session = AsyncMock()
+    broken_session.commit = AsyncMock(
+        side_effect=RuntimeError("database connection lost"),
+    )
+    broken_session.rollback = AsyncMock()
+
+    @asynccontextmanager
+    async def broken_factory():
+        yield broken_session
+
+    with (
+        caplog.at_level("CRITICAL"),
+        patch(
+            "app.api.websocket.settle_interrupted_turn",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "app.api.websocket.db_session.async_session_factory",
+            broken_factory,
+        ),
+    ):
+        await _commit_or_settle_turn(
+            conv_id,
+            status_code="llm_error",
+            status_message="timeout",
+        )
+
+    assert any("Не удалось зафиксировать прерванный turn" in r.message for r in caplog.records)

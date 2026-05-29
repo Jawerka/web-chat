@@ -60,6 +60,10 @@ class MediaService:
         self._session = session
         self._repo = MediaAssetRepository(session)
 
+    async def get_asset(self, asset_id: uuid.UUID) -> MediaAsset | None:
+        """Загрузить MediaAsset по id."""
+        return await self._repo.get_by_id(asset_id)
+
     @staticmethod
     def public_url(asset_id: uuid.UUID) -> str:
         return asset_media_url(asset_id)
@@ -163,6 +167,10 @@ class MediaService:
             return None
         return asset.data, asset.mime_type
 
+    async def asset_exists(self, asset_id: uuid.UUID) -> bool:
+        """Проверка MediaAsset без загрузки data/thumb_data/llm_data (P4.6)."""
+        return await self._repo.exists(asset_id)
+
     async def is_image_url_available(self, url: str) -> bool:
         """Проверить, что изображение по локальному /media/ URL доступно для LLM vision."""
         raw = (url or "").strip()
@@ -177,7 +185,7 @@ class MediaService:
 
         asset_id = parse_asset_id_from_url(check_path) or parse_asset_id_from_url(raw)
         if asset_id is not None:
-            return (await self.get_bytes(asset_id)) is not None
+            return await self.asset_exists(asset_id)
 
         gen = _GENERATED_URL_RE.search(check_path)
         if gen:
@@ -221,21 +229,24 @@ class MediaService:
         return await self.get_thumb_bytes(asset_id)
 
     async def get_llm_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
-        """Байты изображения для vision API (кэш llm_data или сжатие)."""
-        asset = await self._repo.get_by_id(asset_id)
-        if asset is None:
+        """Байты для vision API: сначала llm_data без data BLOB; иначе сжатие (P4.3)."""
+        cached = await self._repo.get_cached_llm_data(asset_id)
+        if cached is not None:
+            data, mime_type = cached
+            return data, sniff_image_mime(data) or mime_type or "image/jpeg"
+
+        source = await self._repo.get_source_data_for_llm(asset_id)
+        if source is None:
             return None
-        if asset.llm_data:
-            return asset.llm_data, sniff_image_mime(asset.llm_data) or "image/jpeg"
-        if len(asset.data) <= settings.llm_vision_max_bytes:
-            return asset.data, asset.mime_type
+        data, mime_type = source
+        if len(data) <= settings.llm_vision_max_bytes:
+            return data, mime_type
         compressed = await asyncio.to_thread(
             compress_image_for_llm,
-            asset.data,
-            asset.mime_type,
+            data,
+            mime_type,
         )
-        asset.llm_data = compressed[0]
-        await self._session.flush()
+        await self._repo.set_llm_data(asset_id, compressed[0])
         return compressed
 
     async def normalize_image_url(
@@ -462,12 +473,13 @@ class MediaService:
         asset_ids: list[str] = list(cj.get("image_asset_ids") or [])
         images: list[str] = list(cj.get("images") or [])
 
-        if asset_ids and not images:
-            images = [
-                asset_media_url(uid) for aid in asset_ids if (uid := _safe_uuid(aid)) is not None
-            ]
+        from app.services.message_builder import canonical_stored_image_urls
 
-        candidates: list[str] = list(dict.fromkeys(images))
+        if asset_ids:
+            images = canonical_stored_image_urls(images, asset_ids)
+            candidates = list(images)
+        else:
+            candidates = list(dict.fromkeys(images))
         if content_text:
             for match in _MARKDOWN_IMG_RE.finditer(content_text):
                 url = match.group(1).strip()
@@ -584,9 +596,20 @@ def _generated_url_variants(filename: str) -> list[str]:
     safe = safe_filename(filename)
     path = f"/media/generated/{safe}"
     variants: set[str] = {path, f"URL: {path}"}
+    stem = Path(safe).stem
+    for thumb_ext in (".webp", ".jpg", ".jpeg", ".png"):
+        thumb_path = f"/media/generated/thumbs/{stem}{thumb_ext}"
+        variants.add(thumb_path)
+        variants.add(f"URL: {thumb_path}")
+        variants.add(f"Thumbnail: {thumb_path}")
     for base in all_public_base_urls():
         variants.add(f"{base}{path}")
         variants.add(f"URL: {base}{path}")
+        for thumb_ext in (".webp", ".jpg", ".jpeg", ".png"):
+            thumb_path = f"/media/generated/thumbs/{stem}{thumb_ext}"
+            variants.add(f"{base}{thumb_path}")
+            variants.add(f"URL: {base}{thumb_path}")
+            variants.add(f"Thumbnail: {base}{thumb_path}")
     return list(variants)
 
 

@@ -28,6 +28,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "live: тесты против WEB_CHAT_TEST_BASE_URL; очистка только [pytest] на live",
     )
+    config.addinivalue_line(
+        "markers",
+        "load: опциональные integration/load-тесты (WS, параллельность, SD tools); pytest -m 'not load' для быстрого прогона",
+    )
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

@@ -50,7 +50,7 @@ def test_assistant_with_tool_calls_gets_image_note() -> None:
     )
     entry = message_to_llm_dict(msg)
     assert entry.get("tool_calls")
-    assert "изображения" in (entry.get("content") or "").lower()
+    assert "generated_images" in (entry.get("content") or "").lower()
 
 
 @pytest.mark.asyncio

@@ -42,5 +42,8 @@ fi
 
 SITE_ARCHIVE="${SITE_DIR}/web-chat-site-${STAMP}.tar.gz"
 tar -czf "${SITE_ARCHIVE}" -C "${TMP}" .
+# shellcheck source=scripts/lib/backup-rotate.sh
+source "${ROOT}/scripts/lib/backup-rotate.sh"
+site_backup_rotate "${SITE_DIR}" "${WEB_CHAT_SITE_BACKUP_KEEP}"
 echo ""
 echo "Архив файлов: ${SITE_ARCHIVE}"
