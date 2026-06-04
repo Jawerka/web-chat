@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.ws_events import broadcast_gallery_update
 from app.db.repositories import MediaFavoriteRepository
 from app.db.session import get_db
+from app.services.gallery_owner import require_gallery_owner_user, resolve_gallery_owner_id
 from app.services.gallery_service import (
     GALLERY_MAX_LIMIT,
     cleanup_gallery_orphans,
@@ -22,6 +23,7 @@ from app.services.gallery_service import (
     list_gallery_images,
     purge_all_gallery,
 )
+from app.services.request_user import RequestUser, get_request_user
 
 _ROOT = Path(__file__).resolve().parents[2]
 templates = Jinja2Templates(directory=str(_ROOT / "templates"))
@@ -39,9 +41,10 @@ class GalleryFavoritePayload(BaseModel):
 async def api_gallery(
     limit: int = GALLERY_MAX_LIMIT,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> dict:
     """JSON-список изображений галереи (БД + локальные файлы)."""
-    items = await list_gallery_images(db, limit=limit)
+    items = await list_gallery_images(db, limit=limit, request_user=user)
     return {
         "images": [i.to_api_dict() for i in items],
         "count": len(items),
@@ -52,19 +55,28 @@ async def api_gallery(
 async def api_gallery_favorite(
     payload: GalleryFavoritePayload,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> dict:
     source = payload.source.strip().lower()
     if source not in {"db", "disk"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source должен быть db или disk")
     media_id = payload.id.strip()
+    owner = await require_gallery_owner_user(db, user)
     repo = MediaFavoriteRepository(db)
     is_favorite = await repo.set_favorite(
         source=source,
         media_id=media_id,
         is_favorite=bool(payload.favorite),
+        user_id=owner.id,
     )
     await db.commit()
-    await broadcast_gallery_update("favorite", source=source, id=media_id, favorite=is_favorite)
+    await broadcast_gallery_update(
+        "favorite",
+        source=source,
+        id=media_id,
+        favorite=is_favorite,
+        user_id=owner.id,
+    )
     return {"ok": True, "source": source, "id": media_id, "is_favorite": is_favorite}
 
 
@@ -73,16 +85,22 @@ async def api_gallery_favorite_state(
     source: str,
     id: str,
     db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
 ) -> dict:
     source_norm = source.strip().lower()
     if source_norm not in {"db", "disk"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source должен быть db или disk")
     media_id = id.strip()
+    owner_id = await resolve_gallery_owner_id(db, user)
     repo = MediaFavoriteRepository(db)
     return {
         "source": source_norm,
         "id": media_id,
-        "is_favorite": await repo.is_favorite(source=source_norm, media_id=media_id),
+        "is_favorite": await repo.is_favorite(
+            source=source_norm,
+            media_id=media_id,
+            user_id=owner_id,
+        ),
     }
 
 

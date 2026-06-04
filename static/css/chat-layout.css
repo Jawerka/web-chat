@@ -4018,6 +4018,10 @@ body.dark-theme .loading-overlay {
   right: calc(max(16px, env(safe-area-inset-right)) + 104px);
 }
 
+.lightbox-promote {
+  right: calc(max(16px, env(safe-area-inset-right)) + 156px);
+}
+
 .lightbox-action.is-favorite {
   background: color-mix(in srgb, #fbbc04 28%, rgba(255, 255, 255, 0.12));
   color: #fff7cc;
@@ -4074,6 +4078,10 @@ body.dark-theme .loading-overlay {
 
   .lightbox-favorite {
     right: calc(max(6px, env(safe-area-inset-right)) + 92px);
+  }
+
+  .lightbox-promote {
+    right: calc(max(6px, env(safe-area-inset-right)) + 138px);
   }
 
   .lightbox-action,

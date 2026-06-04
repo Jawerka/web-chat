@@ -16,13 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import Message
+from app.db.models import GalleryKind
 from app.db.repositories import GalleryAssetMeta, MediaFavoriteRepository, MessageRepository
+from app.services.gallery_owner import resolve_gallery_owner_id
+from app.services.request_user import RequestUser
 from app.services.media_reference_index import collect_referenced_asset_ids
 from app.services.media_registry import MediaRegistry
 from app.integrations.media_utils import asset_media_url, generated_media_url
 from app.services.message_builder import strip_markdown_images
 
-logger = logging.getLogger(__name__)
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     GENERATED_THUMB_ROOT,
@@ -33,6 +35,8 @@ from app.integrations.media_utils import (
     resolve_generated_file,
     safe_filename,
 )
+
+logger = logging.getLogger(__name__)
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
@@ -121,6 +125,8 @@ def _list_local_generated_images(limit: int) -> list[GalleryItem]:
 async def list_gallery_images(
     session: AsyncSession,
     limit: int = GALLERY_MAX_LIMIT,
+    *,
+    request_user: RequestUser | None = None,
 ) -> list[GalleryItem]:
     """
     Объединённая галерея: MediaAsset в SQLite + оставшиеся файлы на диске.
@@ -129,8 +135,13 @@ async def list_gallery_images(
     показываем только запись из БД.
     """
     limit = max(1, min(GALLERY_MAX_LIMIT, int(limit)))
+    owner_id = await resolve_gallery_owner_id(session, request_user)
     registry = MediaRegistry(session)
-    db_assets = await registry.list_gallery_metadata(limit=limit * 2)
+    db_assets = await registry.list_gallery_metadata(
+        limit=limit * 2,
+        owner_user_id=owner_id,
+        gallery_kinds=(GalleryKind.GENERATION.value,),
+    )
 
     db_items = [_item_from_gallery_meta(a) for a in db_assets if is_image_mime(a.mime_type)]
     ingested_names = {(a.original_name or "").lower() for a in db_assets if a.original_name}
@@ -142,7 +153,7 @@ async def list_gallery_images(
         local_items.append(item)
 
     fav_repo = MediaFavoriteRepository(session)
-    favorite_map = await fav_repo.favorite_map()
+    favorite_map = await fav_repo.favorite_map(owner_id)
 
     merged = db_items + local_items
     for item in merged:

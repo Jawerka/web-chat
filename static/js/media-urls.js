@@ -120,6 +120,39 @@ function parseMediaGalleryTarget(url) {
  * Скачивание медиа. Для same-origin /media/* — прямая ссылка без blob
  * (на HTTP не появляется предупреждение Chrome про insecure blob).
  */
+/** Иконка «в галерею загрузок» (как в gallery lightbox). */
+const ICON_PROMOTE_TO_UPLOADS =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+
+/**
+ * Копия изображения в галерею загрузок (без перехода со страницы).
+ * @returns {Promise<{ ok: boolean, upload_id?: string, url?: string }>}
+ */
+async function promoteMediaToUploads(url) {
+  const target = parseMediaGalleryTarget(url);
+  if (!target) {
+    throw new Error('Неизвестный адрес изображения');
+  }
+  let res;
+  if (target.source === 'db') {
+    res = await fetch(`/api/gallery/${encodeURIComponent(target.id)}/promote-to-uploads`, {
+      method: 'POST',
+    });
+  } else {
+    res = await fetch(
+      `/api/gallery/disk/${encodeURIComponent(target.filename)}/promote-to-uploads`,
+      { method: 'POST' },
+    );
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = body.detail;
+    const msg = typeof detail === 'string' ? detail : res.statusText;
+    throw new Error(msg || 'Не удалось добавить в галерею загрузок');
+  }
+  return res.json();
+}
+
 async function downloadMediaFile(url, filename = '') {
   const full = mediaFullUrl(url);
   if (!full) throw new Error('Некорректный URL');
@@ -164,4 +197,9 @@ async function downloadMediaFile(url, filename = '') {
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.ICON_PROMOTE_TO_UPLOADS = ICON_PROMOTE_TO_UPLOADS;
+  window.promoteMediaToUploads = promoteMediaToUploads;
 }

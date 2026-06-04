@@ -68,6 +68,9 @@ class UserRepository:
         login_norm = login.strip().lower()
         slug_val = (slug or login_norm).strip().lower()
         role_val = role.value if isinstance(role, UserRole) else str(role)
+        from app.security.media_encryption import generate_media_token
+        from datetime import UTC, datetime
+
         user = User(
             login=login_norm,
             slug=slug_val,
@@ -75,6 +78,8 @@ class UserRepository:
             password_hash=password_hash,
             role=role_val,
             is_active=True,
+            media_token=generate_media_token(),
+            media_token_created_at=datetime.now(UTC),
         )
         self._session.add(user)
         await self._session.flush()
@@ -401,6 +406,14 @@ class GalleryAssetMeta:
     created_at: datetime
     size_bytes: int
     has_thumb: bool
+    gallery_kind: str | None = None
+    sd_prompt: str | None = None
+    sd_negative: str | None = None
+    sd_params: str | None = None
+
+    @property
+    def has_metadata(self) -> bool:
+        return bool(self.sd_prompt or self.sd_negative or self.sd_params)
 
 
 class MediaAssetRepository:
@@ -467,22 +480,40 @@ class MediaAssetRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def list_gallery_metadata(self, limit: int = 1000) -> list[GalleryAssetMeta]:
+    async def list_gallery_metadata(
+        self,
+        limit: int = 1000,
+        *,
+        owner_user_id: uuid.UUID | None = None,
+        gallery_kind: str | None = None,
+        gallery_kinds: tuple[str, ...] | None = None,
+    ) -> list[GalleryAssetMeta]:
         """Метаданные для галереи без чтения data/thumb_data из SQLite."""
         cap = max(1, int(limit))
-        stmt = (
-            select(
-                MediaAsset.id,
-                MediaAsset.mime_type,
-                MediaAsset.original_name,
-                MediaAsset.created_at,
-                func.length(MediaAsset.data).label("size_bytes"),
-                MediaAsset.thumb_data.isnot(None).label("has_thumb"),
+        stmt = select(
+            MediaAsset.id,
+            MediaAsset.mime_type,
+            MediaAsset.original_name,
+            MediaAsset.created_at,
+            func.length(MediaAsset.data).label("size_bytes"),
+            MediaAsset.thumb_data.isnot(None).label("has_thumb"),
+            MediaAsset.gallery_kind,
+            MediaAsset.sd_prompt,
+            MediaAsset.sd_negative,
+            MediaAsset.sd_params,
+        ).where(MediaAsset.mime_type.like("image/%"))
+        if owner_user_id is not None:
+            stmt = stmt.where(MediaAsset.owner_user_id == owner_user_id)
+        if gallery_kind is not None:
+            stmt = stmt.where(MediaAsset.gallery_kind == gallery_kind)
+        elif gallery_kinds:
+            stmt = stmt.where(
+                or_(
+                    MediaAsset.gallery_kind.in_(gallery_kinds),
+                    MediaAsset.gallery_kind.is_(None),
+                ),
             )
-            .where(MediaAsset.mime_type.like("image/%"))
-            .order_by(MediaAsset.created_at.desc())
-            .limit(cap)
-        )
+        stmt = stmt.order_by(MediaAsset.created_at.desc()).limit(cap)
         result = await self._session.execute(stmt)
         rows: list[GalleryAssetMeta] = []
         for row in result.all():
@@ -494,6 +525,10 @@ class MediaAssetRepository:
                     created_at=row.created_at,
                     size_bytes=int(row.size_bytes or 0),
                     has_thumb=bool(row.has_thumb),
+                    gallery_kind=row.gallery_kind,
+                    sd_prompt=row.sd_prompt,
+                    sd_negative=row.sd_negative,
+                    sd_params=row.sd_params,
                 )
             )
         return rows
@@ -507,6 +542,13 @@ class MediaAssetRepository:
         original_name: str | None = None,
         thumb_data: bytes | None = None,
         asset_id: uuid.UUID | None = None,
+        owner_user_id: uuid.UUID | None = None,
+        gallery_kind: str | None = None,
+        encryption_version: int = 0,
+        sd_prompt: str | None = None,
+        sd_negative: str | None = None,
+        sd_params: str | None = None,
+        sd_meta_extracted_at: datetime | None = None,
     ) -> MediaAsset:
         asset = MediaAsset(
             id=asset_id or uuid.uuid4(),
@@ -515,6 +557,13 @@ class MediaAssetRepository:
             data=data,
             thumb_data=thumb_data,
             original_name=original_name,
+            owner_user_id=owner_user_id,
+            gallery_kind=gallery_kind,
+            encryption_version=encryption_version,
+            sd_prompt=sd_prompt,
+            sd_negative=sd_negative,
+            sd_params=sd_params,
+            sd_meta_extracted_at=sd_meta_extracted_at,
         )
         self._session.add(asset)
         await self._session.flush()
@@ -523,7 +572,7 @@ class MediaAssetRepository:
 
 
 class MediaFavoriteRepository:
-    """Избранное изображений (глобально для галереи)."""
+    """Избранное изображений галереи (per-user)."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -532,32 +581,49 @@ class MediaFavoriteRepository:
     def make_key(source: str, media_id: str) -> str:
         return f"{source}:{media_id}"
 
+    async def list_for_user(self, user_id: uuid.UUID) -> list[MediaFavorite]:
+        result = await self._session.execute(
+            select(MediaFavorite)
+            .where(MediaFavorite.user_id == user_id)
+            .order_by(MediaFavorite.created_at.desc()),
+        )
+        return list(result.scalars().all())
+
     async def list_all(self) -> list[MediaFavorite]:
         result = await self._session.execute(
             select(MediaFavorite).order_by(MediaFavorite.created_at.desc()),
         )
         return list(result.scalars().all())
 
-    async def favorite_map(self) -> dict[str, datetime]:
-        items = await self.list_all()
+    async def favorite_map(self, user_id: uuid.UUID | None = None) -> dict[str, datetime]:
+        if user_id is not None:
+            items = await self.list_for_user(user_id)
+        else:
+            items = await self.list_all()
         out: dict[str, datetime] = {}
         for item in items:
             out[self.make_key(item.media_source, item.media_id)] = item.created_at
         return out
 
-    async def set_favorite(self, *, source: str, media_id: str, is_favorite: bool) -> bool:
+    async def set_favorite(
+        self,
+        *,
+        source: str,
+        media_id: str,
+        is_favorite: bool,
+        user_id: uuid.UUID | None = None,
+    ) -> bool:
         source_norm = source.strip().lower()
         media_norm = media_id.strip()
         if not source_norm or not media_norm:
             return False
-        result = await self._session.execute(
-            select(MediaFavorite)
-            .where(
-                MediaFavorite.media_source == source_norm,
-                MediaFavorite.media_id == media_norm,
-            )
-            .limit(1),
+        stmt = select(MediaFavorite).where(
+            MediaFavorite.media_source == source_norm,
+            MediaFavorite.media_id == media_norm,
         )
+        if user_id is not None:
+            stmt = stmt.where(MediaFavorite.user_id == user_id)
+        result = await self._session.execute(stmt.limit(1))
         item = result.scalar_one_or_none()
         if is_favorite:
             if item is not None:
@@ -566,6 +632,7 @@ class MediaFavoriteRepository:
                 MediaFavorite(
                     media_source=source_norm,
                     media_id=media_norm,
+                    user_id=user_id,
                 ),
             )
             await self._session.flush()
@@ -576,15 +643,20 @@ class MediaFavoriteRepository:
         await self._session.flush()
         return False
 
-    async def is_favorite(self, *, source: str, media_id: str) -> bool:
-        result = await self._session.execute(
-            select(MediaFavorite.id)
-            .where(
-                MediaFavorite.media_source == source.strip().lower(),
-                MediaFavorite.media_id == media_id.strip(),
-            )
-            .limit(1),
+    async def is_favorite(
+        self,
+        *,
+        source: str,
+        media_id: str,
+        user_id: uuid.UUID | None = None,
+    ) -> bool:
+        stmt = select(MediaFavorite.id).where(
+            MediaFavorite.media_source == source.strip().lower(),
+            MediaFavorite.media_id == media_id.strip(),
         )
+        if user_id is not None:
+            stmt = stmt.where(MediaFavorite.user_id == user_id)
+        result = await self._session.execute(stmt.limit(1))
         return result.scalar_one_or_none() is not None
 
 class AttachmentRepository:

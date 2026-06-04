@@ -43,6 +43,7 @@ async def run_sqlite_migrations(engine: AsyncEngine) -> None:
         await _migrate_users_and_conversation_owner(conn)
         await _migrate_users_auth(conn)
         await _migrate_preset_prompts(conn)
+        await _migrate_gallery_plan_new(conn)
         await _normalize_dashed_uuid_ids(conn)
         await _normalize_sqlite_enum_names(conn)
 
@@ -202,6 +203,87 @@ async def _normalize_dashed_uuid_ids(conn) -> None:
     )
     await conn.execute(text("PRAGMA foreign_keys=ON"))
     logger.info("Миграция: нормализованы UUID пресетов (убраны дефисы)")
+
+
+async def _migrate_gallery_plan_new(conn) -> None:
+    """Галерея загрузок: media_token, gallery_kind, sd_*, favorites.user_id."""
+    import secrets
+
+    users = await conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'"),
+    )
+    if users.fetchone() is not None:
+        result = await conn.execute(text("PRAGMA table_info(users)"))
+        ucols = {row[1] for row in result.fetchall()}
+        if "media_token" not in ucols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN media_token BLOB"))
+            logger.info("Миграция: users.media_token")
+        if "media_token_created_at" not in ucols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN media_token_created_at DATETIME"))
+            logger.info("Миграция: users.media_token_created_at")
+
+    result = await conn.execute(text("PRAGMA table_info(media_assets)"))
+    acols = {row[1] for row in result.fetchall()}
+    if "owner_user_id" not in acols:
+        await conn.execute(
+            text("ALTER TABLE media_assets ADD COLUMN owner_user_id TEXT REFERENCES users(id)"),
+        )
+        logger.info("Миграция: media_assets.owner_user_id")
+    if "gallery_kind" not in acols:
+        await conn.execute(text("ALTER TABLE media_assets ADD COLUMN gallery_kind VARCHAR(16)"))
+        logger.info("Миграция: media_assets.gallery_kind")
+    if "encryption_version" not in acols:
+        await conn.execute(
+            text(
+                "ALTER TABLE media_assets ADD COLUMN encryption_version "
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+        )
+        logger.info("Миграция: media_assets.encryption_version")
+    for col in ("sd_prompt", "sd_negative", "sd_params"):
+        if col not in acols:
+            await conn.execute(text(f"ALTER TABLE media_assets ADD COLUMN {col} TEXT"))
+            logger.info("Миграция: media_assets.%s", col)
+    if "sd_meta_extracted_at" not in acols:
+        await conn.execute(
+            text("ALTER TABLE media_assets ADD COLUMN sd_meta_extracted_at DATETIME"),
+        )
+        logger.info("Миграция: media_assets.sd_meta_extracted_at")
+
+    fav = await conn.execute(text("PRAGMA table_info(media_favorites)"))
+    fcols = {row[1] for row in fav.fetchall()}
+    if fcols and "user_id" not in fcols:
+        await conn.execute(
+            text("ALTER TABLE media_favorites ADD COLUMN user_id TEXT REFERENCES users(id)"),
+        )
+        logger.info("Миграция: media_favorites.user_id")
+
+    admin = await conn.execute(
+        text("SELECT id FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1"),
+    )
+    admin_row = admin.fetchone()
+    if admin_row is None:
+        admin = await conn.execute(text("SELECT id FROM users ORDER BY created_at LIMIT 1"))
+        admin_row = admin.fetchone()
+    if admin_row is not None:
+        aid = admin_row[0]
+        await conn.execute(
+            text(
+                "UPDATE media_assets SET gallery_kind = 'generation', owner_user_id = :uid "
+                "WHERE mime_type LIKE 'image/%' "
+                "AND (gallery_kind IS NULL OR gallery_kind = '')",
+            ),
+            {"uid": aid},
+        )
+        await conn.execute(
+            text("UPDATE media_favorites SET user_id = :uid WHERE user_id IS NULL"),
+            {"uid": aid},
+        )
+        tok = secrets.token_bytes(32)
+        await conn.execute(
+            text("UPDATE users SET media_token = :tok WHERE id = :uid AND media_token IS NULL"),
+            {"tok": tok, "uid": aid},
+        )
 
 
 async def _migrate_preset_prompts(conn) -> None:

@@ -411,7 +411,18 @@ async def websocket_system_events(websocket: WebSocket) -> None:
     """Системные события: gallery_update, logs_append (P1.3)."""
     check_api_key(websocket)
     check_ws_origin(websocket)
-    await manager.connect_system(websocket)
+    subscriber_user_id = None
+    from app.db import session as db_session
+    from app.services.request_user import resolve_request_user_from_websocket
+
+    async with db_session.async_session_factory() as session:
+        request_user = await resolve_request_user_from_websocket(websocket, session)
+        if request_user is not None:
+            subscriber_user_id = request_user.id
+    await manager.connect_system(
+        websocket,
+        subscriber_user_id=subscriber_user_id,
+    )
     try:
         await websocket.send_json({"type": "connected", "channel": "system"})
         while True:

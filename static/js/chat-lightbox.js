@@ -160,6 +160,11 @@
       const url = currentUrl(app);
       if (url) void app._toggleFavoriteByUrl(url, app.$.lightboxFavorite);
     });
+    app.$.lightboxPromote?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const url = currentUrl(app);
+      if (url) void app._promoteToUploadsByUrl(url, app.$.lightboxPromote);
+    });
     app.$.lightboxAttachCurrent?.addEventListener('click', (e) => {
       e.stopPropagation();
       void attachToComposer(app);

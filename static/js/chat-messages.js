@@ -121,6 +121,10 @@
     '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
   const MSG_IMAGE_ICON_STAR =
     '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 15.1 8.5 22 9.3 17 14.1 18.3 21 12 17.5 5.7 21 7 14.1 2 9.3 8.9 8.5 12 2"/></svg>';
+  const MSG_IMAGE_ICON_PROMOTE =
+    typeof ICON_PROMOTE_TO_UPLOADS === 'string'
+      ? ICON_PROMOTE_TO_UPLOADS
+      : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
 
   const MESSAGE_STATUS_HTML = `
   <div class="message-status" role="status" aria-live="polite">
@@ -978,11 +982,15 @@
     const favoriteBtn = target
       ? `<button type="button" class="gallery-card-action message-image-favorite" data-media-key="${escapeAttr(mediaKey)}" data-full-url="${escapeAttr(full)}" title="В избранное" aria-label="В избранное">${MSG_IMAGE_ICON_STAR}</button>`
       : '';
+    const promoteBtn = target
+      ? `<button type="button" class="gallery-card-action message-image-promote" data-full-url="${escapeAttr(full)}" title="В галерею загрузок" aria-label="В галерею загрузок">${MSG_IMAGE_ICON_PROMOTE}</button>`
+      : '';
     frame.insertAdjacentHTML(
       'beforeend',
       `<button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl message-image-attach" data-full-url="${escapeAttr(full)}" title="Прикрепить это изображение к сообщению" aria-label="Прикрепить к сообщению">${MSG_IMAGE_ICON_ATTACH}</button>
       <div class="gallery-card-actions">
         ${favoriteBtn}
+        ${promoteBtn}
         <button type="button" class="gallery-card-action gallery-card-save message-image-save" data-full-url="${escapeAttr(full)}" title="Сохранить" aria-label="Сохранить">${MSG_IMAGE_ICON_SAVE}</button>
         ${deleteBtn}
       </div>`,
@@ -1017,6 +1025,13 @@
         e.preventDefault();
         e.stopPropagation();
         void app._toggleFavoriteByUrl(favoriteBtn.dataset.fullUrl, favoriteBtn);
+        return;
+      }
+      const promoteBtn = e.target.closest('.message-image-promote');
+      if (promoteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        void app._promoteToUploadsByUrl(promoteBtn.dataset.fullUrl, promoteBtn);
         return;
       }
       const deleteBtn = e.target.closest('.message-image-delete');

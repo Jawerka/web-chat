@@ -15,9 +15,11 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import MediaAsset
+from app.db.models import GalleryKind, MediaAsset
 from app.db.repositories import MediaAssetRepository
+from app.services.gallery_owner import assert_gallery_media_access
 from app.services.media_registry import MediaRegistry
+from app.services.request_user import RequestUser
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     asset_media_url,
@@ -88,12 +90,18 @@ class MediaService:
         """Сохранить изображение в БД (в текущей сессии)."""
         if thumb_data is None and is_image_mime(mime_type):
             thumb_data = await asyncio.to_thread(make_asset_thumb_bytes, data)
+        kind = (
+            GalleryKind.CHAT.value
+            if conversation_id is not None
+            else GalleryKind.GENERATION.value
+        )
         return await self._repo.create(
             data=data,
             mime_type=mime_type,
             conversation_id=conversation_id,
             original_name=original_name,
             thumb_data=thumb_data,
+            gallery_kind=kind,
         )
 
     @staticmethod
@@ -161,11 +169,40 @@ class MediaService:
             operation=f"media_assets_batch({n})",
         )
 
-    async def get_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
+    async def _plaintext_for_asset(self, asset: MediaAsset) -> bytes:
+        from app.services.media_asset_crypto import decrypt_asset_data, load_owner_for_asset
+
+        owner = await load_owner_for_asset(self._session, asset)
+        return decrypt_asset_data(asset, owner)
+
+    async def _asset_for_media_read(
+        self,
+        asset_id: uuid.UUID,
+        *,
+        request_user: RequestUser | None = None,
+    ) -> MediaAsset | None:
         asset = await self._repo.get_by_id(asset_id)
         if asset is None:
             return None
-        return asset.data, asset.mime_type
+        await assert_gallery_media_access(self._session, asset, request_user)
+        return asset
+
+    async def get_bytes(
+        self,
+        asset_id: uuid.UUID,
+        *,
+        request_user: RequestUser | None = None,
+    ) -> tuple[bytes, str] | None:
+        try:
+            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+            if asset is None:
+                return None
+            data = await self._plaintext_for_asset(asset)
+        except PermissionError:
+            raise
+        except ValueError:
+            return None
+        return data, asset.mime_type
 
     async def asset_exists(self, asset_id: uuid.UUID) -> bool:
         """Проверка MediaAsset без загрузки data/thumb_data/llm_data (P4.6)."""
@@ -206,39 +243,79 @@ class MediaService:
 
         return False
 
-    async def get_thumb_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
-        asset = await self._repo.get_by_id(asset_id)
-        if asset is None:
+    async def get_thumb_bytes(
+        self,
+        asset_id: uuid.UUID,
+        *,
+        request_user: RequestUser | None = None,
+    ) -> tuple[bytes, str] | None:
+        from app.services.media_asset_crypto import decrypt_asset_thumb, load_owner_for_asset
+
+        try:
+            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+            if asset is None:
+                return None
+            owner = await load_owner_for_asset(self._session, asset)
+            if asset.thumb_data:
+                thumb = decrypt_asset_thumb(asset, owner)
+                if thumb:
+                    return thumb, sniff_image_mime(thumb)
+            plain = await self._plaintext_for_asset(asset)
+        except PermissionError:
+            raise
+        except ValueError:
             return None
-        if asset.thumb_data:
-            return asset.thumb_data, sniff_image_mime(asset.thumb_data)
-        thumb = await asyncio.to_thread(make_asset_thumb_bytes, asset.data)
+        thumb = await asyncio.to_thread(make_asset_thumb_bytes, plain)
         if thumb:
             return thumb, "image/webp"
-        return asset.data, asset.mime_type
+        return plain, asset.mime_type
 
-    async def get_preview_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
+    async def get_preview_bytes(
+        self,
+        asset_id: uuid.UUID,
+        *,
+        request_user: RequestUser | None = None,
+    ) -> tuple[bytes, str] | None:
         """Облегчённое WebP-превью (из thumb или полного кадра)."""
-        asset = await self._repo.get_by_id(asset_id)
-        if asset is None:
+        try:
+            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+            if asset is None:
+                return None
+            thumb_result = await self.get_thumb_bytes(asset_id, request_user=request_user)
+            source = thumb_result[0] if thumb_result else await self._plaintext_for_asset(asset)
+        except PermissionError:
+            raise
+        except ValueError:
             return None
-        source = asset.thumb_data or asset.data
         preview = await asyncio.to_thread(make_asset_preview_bytes, source)
         if preview:
             return preview, "image/webp"
-        return await self.get_thumb_bytes(asset_id)
+        return await self.get_thumb_bytes(asset_id, request_user=request_user)
 
-    async def get_llm_bytes(self, asset_id: uuid.UUID) -> tuple[bytes, str] | None:
+    async def get_llm_bytes(
+        self,
+        asset_id: uuid.UUID,
+        *,
+        request_user: RequestUser | None = None,
+    ) -> tuple[bytes, str] | None:
         """Байты для vision API: сначала llm_data без data BLOB; иначе сжатие (P4.3)."""
+        try:
+            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+        except PermissionError:
+            raise
+        if asset is None:
+            return None
+
         cached = await self._repo.get_cached_llm_data(asset_id)
         if cached is not None:
             data, mime_type = cached
             return data, sniff_image_mime(data) or mime_type or "image/jpeg"
 
-        source = await self._repo.get_source_data_for_llm(asset_id)
-        if source is None:
+        try:
+            data = await self._plaintext_for_asset(asset)
+        except ValueError:
             return None
-        data, mime_type = source
+        mime_type = asset.mime_type
         if len(data) <= settings.llm_vision_max_bytes:
             return data, mime_type
         compressed = await asyncio.to_thread(

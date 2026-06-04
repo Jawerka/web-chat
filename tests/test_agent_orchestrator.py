@@ -55,17 +55,19 @@ async def test_run_turn_with_tool_call() -> None:
             ),
         ]
     )
+    # canonical_stored_image_urls отбрасывает /media/generated/ (после ingest — только asset)
+    asset_url = "/media/asset/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     mock_tools = MagicMock()
     mock_tools.run = AsyncMock(
         return_value=MagicMock(
-            content="URL: http://test/media/generated/sd_test.png",
-            image_urls=["http://test/media/generated/sd_test.png"],
+            content=f"URL: {asset_url}",
+            image_urls=[asset_url],
         )
     )
     orchestrator = AgentOrchestrator(llm=mock_llm, tool_executor=mock_tools)
     result = await orchestrator.run_turn("Нарисуй кота", system_prompt="test")
     assert "кота" in result.assistant_text
-    assert len(result.image_urls) == 1
+    assert result.image_urls == [asset_url]
     assert mock_llm.complete.await_count == 2
 
 

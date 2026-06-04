@@ -39,6 +39,28 @@
 4. Бэкапы: `data/backups/` — вынести архивы на другой диск ([DATABASE-BACKUP.md](../deploy/DATABASE-BACKUP.md)).
 5. PostgreSQL: `VACUUM` / размер БД, если `MediaAsset` разросся (BLOB).
 
+### Галерея загрузок и размер БД
+
+- **Галерея загрузок** (`/gallery/uploads`): BLOB шифруются per-user (`users.media_token`); рост БД ≈ сумма загрузок всех пользователей, **без автоудаления**.
+- Мониторинг: периодически смотреть размер `data/web_chat.db` или PostgreSQL + число строк `media_assets` с `gallery_kind=upload`.
+- Квота в config пока не задана; при переполнении — удаление через UI или admin purge по пользователю.
+
+---
+
+## Ротация `media_token` (галерея загрузок)
+
+**Симптомы:** после смены/потери токена изображения в `/gallery/uploads` не открываются (decrypt error), `has_media_token` в `/api/auth/me` — `false`.
+
+1. **Потеря токена без бэкапа:** расшифровать старые upload-активы **невозможно**. Восстановление только из бэкапа БД с прежним `users.media_token`.
+2. **Плановая ротация (ещё нет API):** остановить web-chat → бэкап БД → для каждого пользователя: сгенерировать новый `media_token`, **перешифровать** все `gallery_kind=upload` (и при необходимости generation) — фоновый скрипт:
+   ```bash
+   cd /root/web-chat && source .venv/bin/activate
+   python -m app.scripts.reencrypt_gallery_assets --batch 50
+   ```
+   Скрипт переводит только `encryption_version=0` → `1` (legacy plaintext). Upload-записи уже зашифрованы при создании.
+3. Перед миграцией схемы: снимок по [DATABASE-BACKUP.md](../deploy/DATABASE-BACKUP.md) (`./scripts/backup-database.sh`).
+4. `GET /api/auth/me` отдаёт **`has_media_token`**, не сам токен — токен хранить только в БД и в защищённом бэкапе.
+
 ---
 
 ## Очередь / генерация «зависла»

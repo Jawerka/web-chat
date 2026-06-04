@@ -42,6 +42,7 @@ async def broadcast_gallery_update(
     *,
     asset_id: str | None = None,
     count: int | None = None,
+    user_id: uuid.UUID | None = None,
     **extra: Any,
 ) -> None:
     """Уведомить подписчиков /ws/events об изменении галереи."""
@@ -50,9 +51,11 @@ async def broadcast_gallery_update(
         payload["asset_id"] = asset_id
     if count is not None:
         payload["count"] = count
+    if user_id is not None:
+        payload["user_id"] = str(user_id)
     if extra:
         payload.update(extra)
-    await manager.broadcast_system(payload)
+    await manager.broadcast_system(payload, target_user_id=user_id)
 
 
 async def _flush_logs_batch() -> None:

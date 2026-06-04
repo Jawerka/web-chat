@@ -59,6 +59,14 @@ class UserRole(enum.StrEnum):
     USER = "user"
 
 
+class GalleryKind(enum.StrEnum):
+    """Разделение MediaAsset: галерея генераций, загрузок или вложение чата."""
+
+    GENERATION = "generation"
+    UPLOAD = "upload"
+    CHAT = "chat"
+
+
 class PromptMacroCategory(enum.StrEnum):
     """Категория быстрого промпта (@alias)."""
 
@@ -91,6 +99,15 @@ class User(Base):
         nullable=False,
     )
     last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    media_token: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+        comment="Ключ шифрования галереи загрузок (32 байта)",
+    )
+    media_token_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
@@ -211,6 +228,31 @@ class MediaAsset(Base):
         comment="Кэш JPEG для GET /media/asset/{id}/llm (vision)",
     )
     original_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    gallery_kind: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        index=True,
+        comment="generation | upload | chat",
+    )
+    encryption_version: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        server_default="0",
+    )
+    sd_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sd_negative: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sd_params: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sd_meta_extracted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utc_now,
@@ -225,6 +267,12 @@ class MediaFavorite(Base):
     __tablename__ = "media_favorites"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     media_source: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     media_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(

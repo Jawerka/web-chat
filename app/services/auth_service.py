@@ -186,6 +186,9 @@ async def ensure_bootstrap_admin(db: AsyncSession) -> User:
             "Создан учётная запись admin (%s). Смените пароль после первого входа.",
             login,
         )
+    from app.services.gallery_owner import ensure_user_media_token
+
+    await ensure_user_media_token(admin)
     assigned = await ConversationRepository(db).assign_orphan_conversations(admin.id)
     if assigned:
         logger.info(

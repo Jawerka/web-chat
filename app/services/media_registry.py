@@ -14,7 +14,9 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import MediaAsset
+from datetime import UTC, datetime
+
+from app.db.models import GalleryKind, MediaAsset
 from app.db.repositories import GalleryAssetMeta, MediaAssetRepository
 from app.db.uow import SqlAlchemyUnitOfWork
 from app.integrations.media_utils import (
@@ -55,17 +57,36 @@ class MediaRegistry:
         conversation_id: uuid.UUID | None = None,
         original_name: str | None = None,
         thumb_data: bytes | None = None,
+        owner_user_id: uuid.UUID | None = None,
+        gallery_kind: str | None = None,
     ) -> RegisteredAsset:
         """Создать MediaAsset в БД и вернуть URL для UI/LLM."""
+        from app.services.sd_metadata import extract_sd_metadata_from_bytes
+
         thumb = thumb_data
         if thumb is None and is_image_mime(mime_type):
             thumb = make_asset_thumb_bytes(data)
+        kind = gallery_kind
+        if kind is None:
+            kind = (
+                GalleryKind.CHAT.value
+                if conversation_id is not None
+                else GalleryKind.GENERATION.value
+            )
+        sd = extract_sd_metadata_from_bytes(data) if is_image_mime(mime_type) else None
+        now = datetime.now(UTC)
         asset = await self._repo.create(
             data=data,
             mime_type=mime_type,
             conversation_id=conversation_id,
             original_name=original_name,
             thumb_data=thumb,
+            owner_user_id=owner_user_id,
+            gallery_kind=kind,
+            sd_prompt=sd.prompt if sd else None,
+            sd_negative=sd.negative if sd else None,
+            sd_params=sd.params if sd else None,
+            sd_meta_extracted_at=now if sd and sd.has_metadata else None,
         )
         url = asset_media_url(asset.id)
         logger.info("media_registry: зарегистрирован %s (%s)", asset.id, original_name or mime_type)
@@ -116,9 +137,21 @@ class MediaRegistry:
             logger.warning("media_registry: не удалось удалить %s: %s", path, exc)
         return reg
 
-    async def list_gallery_metadata(self, limit: int = 1000) -> list[GalleryAssetMeta]:
+    async def list_gallery_metadata(
+        self,
+        limit: int = 1000,
+        *,
+        owner_user_id: uuid.UUID | None = None,
+        gallery_kind: str | None = None,
+        gallery_kinds: tuple[str, ...] | None = None,
+    ) -> list[GalleryAssetMeta]:
         """Метаданные изображений из БД (без BLOB)."""
-        return await self._repo.list_gallery_metadata(limit=limit)
+        return await self._repo.list_gallery_metadata(
+            limit,
+            owner_user_id=owner_user_id,
+            gallery_kind=gallery_kind,
+            gallery_kinds=gallery_kinds,
+        )
 
     async def get_by_id(self, asset_id: uuid.UUID) -> MediaAsset | None:
         return await self._repo.get_by_id(asset_id)

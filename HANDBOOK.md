@@ -1899,6 +1899,7 @@ Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 - [x] Шаблон reverse proxy (nginx) — [deploy/nginx-web-chat.conf.template](deploy/nginx-web-chat.conf.template), [DEPLOY.md §11](deploy/DEPLOY.md#11-reverse-proxy-nginx); **развёртывание Basic Auth на стенде** — ops, см. [§7](#7-чеклист-перед-production)
 - [x] `img2img` + инструкции denoising (см. image-gen TODO)
 - [x] Вкладка «Галерея» (`/gallery`, ссылка в сайдбаре)
+- [x] Галерея загрузок `/gallery/uploads` — сетка как `/gallery`, шифрование BLOB, ref-lightbox; см. README § Галерея и `docs/RUNBOOK.md`
 - [x] RAG по документам (пилот) — [deploy/RAG.md](deploy/RAG.md)
 - [x] Multi-user + auth: login/password, сессии, изоляция бесед — [deploy/AUTH.md](deploy/AUTH.md), [deploy/MULTI-USER.md](deploy/MULTI-USER.md)
 - [x] Embeddings для @alias (semantic search) — `macro_context=semantic`, reindex API

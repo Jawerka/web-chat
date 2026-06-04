@@ -1,0 +1,380 @@
+/* Лайтбокс галереи загрузок (layout meta-sd-to-markdown + токены web-chat) */
+
+body.uploads-ref-lightbox-open {
+  overflow: hidden;
+}
+
+.uploads-ref-lightbox {
+  --ref-overlay: #0e0e0e;
+  --ref-panel: var(--color-surface-2, #1e1e1e);
+  --ref-field: var(--color-surface, #1e1e1e);
+  --ref-field-text: var(--color-text, #eee);
+  --ref-muted: var(--color-text-muted, #8b98a5);
+  --ref-strip: var(--color-bg-elevated, #1a1a1a);
+  --ref-accent: var(--color-primary, #3ea6ff);
+  --ref-copy-idle: 0.32;
+  --ref-copy-hover: 1;
+
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-lightbox, 2000);
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--ref-overlay) 94%, transparent);
+  color: var(--ref-field-text);
+  font-family: inherit;
+}
+
+html:not(.gallery-dark) .uploads-ref-lightbox {
+  --ref-overlay: #0f1419;
+  --ref-field: #f7f8fb;
+  --ref-field-text: var(--color-text);
+  --ref-panel: var(--color-surface);
+}
+
+.uploads-ref-lightbox.hidden {
+  display: none;
+}
+
+/* ── Top bar ── */
+.uploads-ref-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  padding-top: max(var(--space-2), env(safe-area-inset-top));
+  min-height: 48px;
+}
+
+.uploads-ref-counter {
+  font-size: var(--type-meta-size, 0.8125rem);
+  color: var(--ref-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.uploads-ref-topbar .uploads-ref-attach {
+  margin-left: auto;
+}
+
+.uploads-ref-close {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s var(--ease-motion, ease);
+}
+
+.uploads-ref-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+html:not(.gallery-dark) .uploads-ref-close {
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+
+html:not(.gallery-dark) .uploads-ref-close:hover {
+  background: color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+
+/* ── Main row ── */
+.uploads-ref-main {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.uploads-ref-image-pane {
+  flex: 3 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: var(--space-2) 56px;
+}
+
+.uploads-ref-image-pane img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  cursor: zoom-in;
+  box-shadow: var(--shadow-md);
+}
+
+.uploads-ref-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, background 0.2s ease, transform 0.2s ease;
+  z-index: 2;
+}
+
+.uploads-ref-image-pane:hover .uploads-ref-arrow,
+.uploads-ref-arrow:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.uploads-ref-arrow:hover {
+  background: rgba(255, 255, 255, 0.14);
+  transform: translateY(-50%) scale(1.05);
+}
+
+.uploads-ref-prev {
+  left: max(var(--space-2), env(safe-area-inset-left));
+}
+
+.uploads-ref-next {
+  right: max(var(--space-2), env(safe-area-inset-right));
+}
+
+/* ── Info panel ── */
+.uploads-ref-info {
+  flex: 0 0 42%;
+  width: 42%;
+  max-width: 520px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  padding: var(--space-2);
+  box-sizing: border-box;
+  position: relative;
+}
+
+.uploads-ref-block {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.uploads-ref-block.uploads-ref-prompt {
+  flex: 5 1 0;
+}
+
+.uploads-ref-block.uploads-ref-negative {
+  flex: 2 1 0;
+}
+
+.uploads-ref-block.uploads-ref-params {
+  flex: 3 1 0;
+}
+
+.uploads-ref-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  padding: 0 2px;
+}
+
+.uploads-ref-label {
+  font-size: var(--type-hint-size, 0.75rem);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ref-muted);
+}
+
+.uploads-ref-block textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  resize: none;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--ref-field-text);
+  background: var(--ref-field);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb, #555) transparent;
+}
+
+.uploads-ref-block textarea:focus {
+  outline: none;
+  box-shadow: var(--focus-ring, 0 0 0 2px var(--color-primary));
+}
+
+/* Copy — как в референсе: ghost-иконка, ярче при hover блока */
+.uploads-ref-copy,
+.uploads-ref-copy-all {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--ref-muted);
+  cursor: pointer;
+  opacity: var(--ref-copy-idle);
+  transition: opacity 0.2s ease, color 0.2s ease;
+}
+
+.uploads-ref-block:hover .uploads-ref-copy,
+.uploads-ref-copy:focus-visible,
+.uploads-ref-copy-all:hover,
+.uploads-ref-copy-all:focus-visible {
+  opacity: var(--ref-copy-hover);
+  color: var(--ref-field-text);
+}
+
+.uploads-ref-copy-all {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 3;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+}
+
+.uploads-ref-copy-all:hover {
+  background: color-mix(in srgb, var(--ref-field-text) 8%, transparent);
+}
+
+.uploads-ref-extract {
+  position: absolute;
+  left: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 3;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ref-field-text) 10%, transparent);
+  color: var(--ref-muted);
+  font-size: var(--type-hint-size, 0.75rem);
+  cursor: pointer;
+}
+
+.uploads-ref-extract:hover {
+  color: var(--ref-field-text);
+}
+
+.uploads-ref-extract.hidden {
+  display: none;
+}
+
+/* ── Thumbnail strip ── */
+.uploads-ref-strip {
+  flex: 0 0 110px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: var(--space-2) var(--space-3);
+  padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
+  background: var(--ref-strip);
+  cursor: grab;
+  scrollbar-width: thin;
+}
+
+.uploads-ref-strip:active {
+  cursor: grabbing;
+}
+
+.uploads-ref-strip img {
+  height: 80px;
+  width: auto;
+  max-width: 120px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 2px solid transparent;
+  flex-shrink: 0;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.uploads-ref-strip img:hover {
+  transform: scale(1.06);
+}
+
+.uploads-ref-strip img.is-active {
+  border-color: var(--ref-accent);
+}
+
+/* ── Zoom overlay ── */
+.uploads-ref-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-lightbox, 2000) + 10);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.88);
+  cursor: zoom-out;
+}
+
+.uploads-ref-zoom img {
+  max-width: 95vw;
+  max-height: 95vh;
+  object-fit: contain;
+}
+
+.uploads-ref-zoom.hidden {
+  display: none;
+}
+
+/* ── Mobile ── */
+@media (max-width: 768px) {
+  .uploads-ref-main {
+    flex-direction: column;
+  }
+
+  .uploads-ref-info {
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    max-height: 42vh;
+  }
+
+  .uploads-ref-image-pane {
+    flex: 1 1 50%;
+    padding: var(--space-2) 44px;
+  }
+
+  .uploads-ref-arrow {
+    opacity: 0.7;
+    pointer-events: auto;
+  }
+}

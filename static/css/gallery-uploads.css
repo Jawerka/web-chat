@@ -1,0 +1,7 @@
+/* Галерея загрузок: только drag-and-drop поверх gallery.css */
+
+.gallery-page.uploads-dragover {
+  outline: 2px dashed var(--color-primary);
+  outline-offset: 4px;
+  border-radius: var(--radius-md);
+}

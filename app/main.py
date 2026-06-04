@@ -17,6 +17,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.gallery import router as gallery_router
+from app.api.gallery_uploads import router as gallery_uploads_router
 from app.api.media import router as media_router
 from app.api.pages import router as pages_router
 from app.api.router import api_router
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app.add_middleware(AccessControlMiddleware)
     app.include_router(pages_router)
     app.include_router(gallery_router)
+    app.include_router(gallery_uploads_router)
     app.include_router(api_router, prefix="/api")
     app.include_router(media_router)
     app.include_router(ws_router)

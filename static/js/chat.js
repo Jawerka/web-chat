@@ -203,6 +203,7 @@ class ChatApp {
       lightboxCounter: document.getElementById('lightbox-counter'),
       lightboxSave: document.getElementById('lightbox-save'),
       lightboxFavorite: document.getElementById('lightbox-favorite'),
+      lightboxPromote: document.getElementById('lightbox-promote'),
       lightboxAttachCurrent: document.getElementById('lightbox-attach-current'),
       themeToggle: document.getElementById('theme-toggle'),
       themeToggleLabel: document.getElementById('theme-toggle-label'),
@@ -2821,6 +2822,24 @@ class ChatApp {
       this._setFavoriteButtonState(btn, favored);
     } catch {
       /* ignore */
+    }
+  }
+
+  async _promoteToUploadsByUrl(url, btn) {
+    const full = mediaFullUrl(url);
+    if (!full) {
+      this.showError('Нет адреса изображения');
+      return;
+    }
+    const prevDisabled = btn?.disabled;
+    if (btn) btn.disabled = true;
+    try {
+      await promoteMediaToUploads(full);
+      this.showSuccess('Добавлено в галерею загрузок');
+    } catch (err) {
+      this.showError(err.message || 'Не удалось добавить в галерею загрузок');
+    } finally {
+      if (btn) btn.disabled = prevDisabled ?? false;
     }
   }
 

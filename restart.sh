@@ -144,6 +144,19 @@ vacuum_journal_if_requested() {
   journalctl --vacuum-time="$JOURNAL_VACUUM_TIME"
 }
 
+wait_for_health() {
+  local url="${WEB_CHAT_BASE_URL%/}/api/health"
+  local max_wait="${WEB_CHAT_HEALTH_WAIT_SEC:-30}"
+  local i
+  for ((i = 1; i <= max_wait; i++)); do
+    if curl -sf "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 health_check() {
   local url="${WEB_CHAT_BASE_URL%/}/api/health"
   if curl -sf "$url" >/dev/null 2>&1; then
@@ -258,11 +271,12 @@ restart_uvicorn_dev() {
   info "uvicorn :$port (лог: $log_file)"
   info "MCP in-process на :$MCP_PORT (поднимается вместе с app.main)"
   nohup "$venv_uvicorn" app.main:app --host 0.0.0.0 --port "$port" >>"$log_file" 2>&1 &
-  sleep 2
-  health_check || {
+  info "ожидание health (до ${WEB_CHAT_HEALTH_WAIT_SEC:-30} с)…"
+  if ! wait_for_health; then
     warn "см. $log_file и logs/web-chat.log"
     return 1
-  }
+  fi
+  health_check
 }
 
 restart_systemd_stack() {
@@ -285,18 +299,19 @@ restart_systemd_stack() {
 
   info "systemctl restart $WEB_CHAT_SERVICE"
   systemctl restart "$WEB_CHAT_SERVICE"
-  sleep 2
   print_unit_line "$WEB_CHAT_SERVICE"
 
   restart_cleanup_timer
   reload_nginx_if_present
   run_retention_cleanup_now
 
-  health_check || {
+  info "ожидание health (до ${WEB_CHAT_HEALTH_WAIT_SEC:-30} с)…"
+  if ! wait_for_health; then
     warn "после restart health не отвечает — journalctl -u ${WEB_CHAT_SERVICE%.service} -n 80"
     systemctl --no-pager --full status "$WEB_CHAT_SERVICE" 2>/dev/null | head -25 || true
     return 1
-  }
+  fi
+  health_check
 }
 
 cmd_status() {

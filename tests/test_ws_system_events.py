@@ -66,7 +66,7 @@ def _reset_log_broadcast_state() -> None:
 @pytest.mark.asyncio
 async def test_broadcast_gallery_update_delivered() -> None:
     ws = AsyncMock()
-    manager._system_websockets.add(ws)
+    await manager.connect_system(ws, subscriber_user_id=None)
     try:
         await broadcast_gallery_update("created", count=2)
         ws.send_json.assert_awaited()
@@ -76,6 +76,25 @@ async def test_broadcast_gallery_update_delivered() -> None:
         assert payload["count"] == 2
     finally:
         manager.disconnect_system(ws)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_gallery_update_user_scoped() -> None:
+    import uuid
+
+    uid_a = uuid.uuid4()
+    uid_b = uuid.uuid4()
+    ws_a = AsyncMock()
+    ws_b = AsyncMock()
+    await manager.connect_system(ws_a, subscriber_user_id=uid_a)
+    await manager.connect_system(ws_b, subscriber_user_id=uid_b)
+    try:
+        await broadcast_gallery_update("created", kind="upload", count=1, user_id=uid_a)
+        ws_a.send_json.assert_awaited()
+        ws_b.send_json.assert_not_awaited()
+    finally:
+        manager.disconnect_system(ws_a)
+        manager.disconnect_system(ws_b)
 
 
 @pytest.mark.asyncio

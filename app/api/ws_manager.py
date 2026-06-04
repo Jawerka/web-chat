@@ -44,6 +44,7 @@ class ConnectionManager:
     def __init__(self) -> None:
         self._sessions: dict[uuid.UUID, ConversationSessionState] = {}
         self._system_websockets: set[WebSocket] = set()
+        self._system_subscriber_ids: dict[WebSocket, uuid.UUID | None] = {}
         self._sweeper_task: asyncio.Task[None] | None = None
         self._turn_locks: dict[uuid.UUID, threading.Lock] = defaultdict(threading.Lock)
 
@@ -114,22 +115,45 @@ class ConnectionManager:
             del self._sessions[conversation_id]
         logger.debug("WS state очищен (%s): conv=%s", reason, conversation_id)
 
-    async def connect_system(self, websocket: WebSocket) -> None:
+    async def connect_system(
+        self,
+        websocket: WebSocket,
+        *,
+        subscriber_user_id: uuid.UUID | None = None,
+    ) -> None:
         """Системный канал: галерея, логи (без conversation_id)."""
         await websocket.accept()
         self._system_websockets.add(websocket)
+        self._system_subscriber_ids[websocket] = subscriber_user_id
         self.ensure_sweeper()
-        logger.info("WS system подключён (всего %d)", len(self._system_websockets))
+        logger.info(
+            "WS system подключён (всего %d, user=%s)",
+            len(self._system_websockets),
+            subscriber_user_id,
+        )
 
     def disconnect_system(self, websocket: WebSocket) -> None:
         self._system_websockets.discard(websocket)
+        self._system_subscriber_ids.pop(websocket, None)
 
-    async def broadcast_system(self, payload: dict) -> None:
-        """Отправить JSON всем подписчикам /ws/events."""
+    async def broadcast_system(
+        self,
+        payload: dict,
+        *,
+        target_user_id: uuid.UUID | None = None,
+    ) -> None:
+        """Отправить JSON подписчикам /ws/events (опционально только владельцу)."""
         if not self._system_websockets:
             return
         dead: list[WebSocket] = []
         for ws in list(self._system_websockets):
+            sub = self._system_subscriber_ids.get(ws)
+            if (
+                target_user_id is not None
+                and sub is not None
+                and sub != target_user_id
+            ):
+                continue
             try:
                 await ws.send_json(payload)
             except Exception:

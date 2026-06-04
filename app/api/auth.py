@@ -35,6 +35,7 @@ class UserOut(BaseModel):
     slug: str
     display_name: str
     role: str
+    has_media_token: bool = False
 
 
 class ChangePasswordBody(BaseModel):
@@ -70,6 +71,7 @@ async def login(
         slug=view.slug,
         display_name=view.display_name,
         role=view.role,
+        has_media_token=bool(user.media_token and len(user.media_token) >= 16),
     )
 
 
@@ -129,4 +131,5 @@ async def auth_me(
         slug=view.slug,
         display_name=view.display_name,
         role=view.role,
+        has_media_token=bool(user.media_token and len(user.media_token) >= 16),
     )

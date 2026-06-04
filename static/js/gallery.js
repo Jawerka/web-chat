@@ -1,7 +1,7 @@
 /**
  * Галерея генераций: сетка, lightbox, удаление, сохранение, автообновление.
  */
-/* global escapeHtml, escapeAttr */
+/* global escapeHtml, escapeAttr, promoteMediaToUploads, ICON_PROMOTE_TO_UPLOADS */
 
 const POLL_MS = 5000;
 const POLL_FALLBACK_MS = typeof SYSTEM_EVENTS_POLL_FALLBACK_MS === 'number'
@@ -9,10 +9,6 @@ const POLL_FALLBACK_MS = typeof SYSTEM_EVENTS_POLL_FALLBACK_MS === 'number'
   : 30000;
 const GALLERY_LIMIT = 1000;
 /** См. chat.js — восстановление вложений после перехода в чат */
-const PENDING_ATTACHMENTS_KEY = 'webchat_pending_attachments';
-const DEFAULT_CONV_TITLE = 'Новая беседа';
-const IMG2IMG_PRESET_SLUG = 'img2img';
-
 const ICON_ATTACH =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 const ICON_SAVE =
@@ -21,6 +17,7 @@ const ICON_DELETE =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 const ICON_STAR =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 15.1 8.5 22 9.3 17 14.1 18.3 21 12 17.5 5.7 21 7 14.1 2 9.3 8.9 8.5 12 2"/></svg>';
+const ICON_PROMOTE = typeof ICON_PROMOTE_TO_UPLOADS === 'string' ? ICON_PROMOTE_TO_UPLOADS : '';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -51,6 +48,7 @@ class GalleryApp {
       lightboxSave: $('#gallery-lightbox-save'),
       lightboxFavorite: $('#gallery-lightbox-favorite'),
       lightboxAttach: $('#gallery-lightbox-attach'),
+      lightboxPromote: $('#gallery-lightbox-promote'),
       lightboxDelete: $('#gallery-lightbox-delete'),
     };
   }
@@ -83,7 +81,10 @@ class GalleryApp {
         this._eventsLive = false;
         this._startPoll(POLL_MS);
       },
-      onGalleryUpdate: () => this.refresh(false),
+      onGalleryUpdate: (msg) => {
+        if (msg?.kind === 'upload') return;
+        this.refresh(false);
+      },
     });
     this._eventsSocket.connect();
   }
@@ -121,6 +122,11 @@ class GalleryApp {
       const item = this.currentItem();
       if (item) void this.attachToNewChat(item, this.els.lightboxAttach);
     });
+    this.els.lightboxPromote?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = this.currentItem();
+      if (item) void this.promoteToUploads(item, this.els.lightboxPromote);
+    });
     this.els.lightboxDelete?.addEventListener('click', (e) => {
       e.stopPropagation();
       const item = this.currentItem();
@@ -157,6 +163,16 @@ class GalleryApp {
         if (item) this.saveItem(item);
         return;
       }
+      const promoteBtn = e.target.closest('.gallery-card-promote');
+      if (promoteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = promoteBtn.closest('.gallery-card');
+        const item = card ? this.itemById.get(card.dataset.id) : null;
+        if (item) void this.promoteToUploads(item, promoteBtn);
+        return;
+      }
+
       const favoriteBtn = e.target.closest('.gallery-card-favorite');
       if (favoriteBtn) {
         e.preventDefault();
@@ -325,6 +341,7 @@ class GalleryApp {
         <button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl" data-id="${escapeAttr(item.id)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${ICON_ATTACH}</button>
         <div class="gallery-card-actions">
           <button type="button" class="gallery-card-action gallery-card-favorite${item.is_favorite ? ' is-favorite' : ''}" data-id="${escapeAttr(item.id)}" title="${item.is_favorite ? 'Убрать из избранного' : 'В избранное'}" aria-label="Избранное">${ICON_STAR}</button>
+          <button type="button" class="gallery-card-action gallery-card-promote" data-id="${escapeAttr(item.id)}" title="В галерею загрузок" aria-label="В галерею загрузок">${ICON_PROMOTE}</button>
           <button type="button" class="gallery-card-action gallery-card-save" data-id="${escapeAttr(item.id)}" title="Сохранить" aria-label="Сохранить">${ICON_SAVE}</button>
           <button type="button" class="gallery-card-action gallery-card-delete danger" data-id="${escapeAttr(item.id)}" title="Удалить" aria-label="Удалить">${ICON_DELETE}</button>
         </div>
@@ -456,58 +473,29 @@ class GalleryApp {
   }
 
   async attachToNewChat(item, btn) {
-    if (!item?.url) return;
+    if (!window.GalleryCommon?.attachImageToNewChat) {
+      this.flashStatus('Не загружен gallery-common.js', true);
+      return;
+    }
+    await window.GalleryCommon.attachImageToNewChat(item, {
+      btn,
+      onStatus: (text, isError) => this.flashStatus(text, Boolean(isError)),
+    });
+  }
+
+  async promoteToUploads(item, btn) {
+    if (!item?.url) {
+      this.flashStatus('Нет адреса изображения', true);
+      return;
+    }
     const prevDisabled = btn?.disabled;
     if (btn) btn.disabled = true;
-    this.flashStatus('Создаём чат…');
     try {
-      const presetsRes = await fetch('/api/presets');
-      if (!presetsRes.ok) throw new Error('Не удалось загрузить пресеты');
-      const presets = await presetsRes.json();
-      const img2imgPreset = presets.find((p) => p.slug === IMG2IMG_PRESET_SLUG);
-
-      const convBody = { title: DEFAULT_CONV_TITLE };
-      if (img2imgPreset?.id) convBody.preset_id = img2imgPreset.id;
-
-      const convRes = await fetch('/api/conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(convBody),
-      });
-      if (!convRes.ok) {
-        const errBody = await convRes.json().catch(() => ({}));
-        throw new Error(errBody.detail || convRes.statusText);
-      }
-      const conv = await convRes.json();
-
-      const imgRes = await fetch(item.url);
-      if (!imgRes.ok) throw new Error('Не удалось загрузить изображение');
-      const blob = await imgRes.blob();
-      const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
-      const file = new File([blob], item.filename || 'image.png', { type: mime });
-
-      const fd = new FormData();
-      fd.append('files', file);
-      fd.append('conversation_id', conv.id);
-
-      const upRes = await fetch('/api/upload', { method: 'POST', body: fd });
-      if (!upRes.ok) {
-        const errBody = await upRes.json().catch(() => ({}));
-        throw new Error(errBody.detail || 'Ошибка загрузки вложения');
-      }
-      const uploadData = await upRes.json();
-
-      sessionStorage.setItem(
-        PENDING_ATTACHMENTS_KEY,
-        JSON.stringify({
-          conversation_id: conv.id,
-          attachments: uploadData.attachments || [],
-        }),
-      );
-      localStorage.setItem('webchat_conv_id', conv.id);
-      window.location.href = '/';
+      await promoteMediaToUploads(item.url);
+      this.flashStatus('Добавлено в галерею загрузок');
     } catch (err) {
       this.flashStatus(err.message || 'Ошибка', true);
+    } finally {
       if (btn) btn.disabled = prevDisabled ?? false;
     }
   }
