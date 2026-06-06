@@ -18,6 +18,7 @@ from app.security.media_encryption import (
     encryption_version_encrypted,
     encryption_version_plain,
 )
+from app.integrations.sd_filename import resolve_upload_display_name
 from app.services.sd_metadata import SdMetadata, extract_sd_metadata_from_bytes
 
 
@@ -65,6 +66,7 @@ async def encrypt_upload_payload(
     mime_type: str,
     original_name: str | None,
     sd: SdMetadata | None,
+    gallery_sort_order: int | None = None,
 ) -> MediaAsset:
     """Создать MediaAsset gallery_kind=upload с шифрованием."""
     if user.media_token is None:
@@ -99,6 +101,7 @@ async def encrypt_upload_payload(
         sd_negative=sd.negative if sd else None,
         sd_params=sd.params if sd else None,
         sd_meta_extracted_at=now if sd and sd.has_metadata else None,
+        gallery_sort_order=gallery_sort_order,
     )
 
 
@@ -130,14 +133,25 @@ async def copy_generation_to_upload(
         )
     else:
         sd = extract_sd_metadata_from_bytes(plain)
+    repo = MediaAssetRepository(session)
+    sort_order = None
+    if await repo.upload_gallery_has_custom_order(user.id):
+        sort_order = (await repo.max_upload_sort_order(user.id)) + 1
+    display_name = resolve_upload_display_name(
+        plain,
+        mime_type=source.mime_type,
+        fallback_name=source.original_name,
+        created_at=source.created_at,
+    )
     return await encrypt_upload_payload(
         session,
         user,
         data=plain,
         thumb_data=thumb_plain,
         mime_type=source.mime_type,
-        original_name=source.original_name,
+        original_name=display_name,
         sd=sd,
+        gallery_sort_order=sort_order,
     )
 
 

@@ -190,7 +190,7 @@ sudo systemctl status web-chat
 
 ### Создание и выбор
 
-- **Новая беседа** — модальное окно: название (опционально) и пресет.
+- **Новая беседа** — кнопка «+» сразу создаёт чат с последним использованным пресетом (txt2img, img2img или по умолчанию).
 - Текущая беседа запоминается в `localStorage` (`webchat_conv_id`).
 - Заголовок можно менять в настройках (поле «Название беседы») или получить автоматически после первых сообщений (LLM).
 
@@ -350,8 +350,9 @@ sudo systemctl status web-chat
 Пользовательские загрузки: BLOB в БД **шифруются** ключом `users.media_token` (AES-GCM).
 
 - Сетка карточек как в `/gallery` (те же `gallery.css` и тема).
-- Клик по карточке — лайтбокс с панелями SD prompt / negative / params (layout как в `refs/meta-sd-to-markdown`).
+- Клик по карточке — лайтбокс с панелями SD prompt / negative / params (`uploads-ref-lightbox`).
 - Drag-and-drop и кнопка «Загрузить»; хранение без срока.
+- Имена файлов с SD Seed: `MM-DD HH-MM [md5×5] - Seed.ext` (как в `refs/main.py`), в `original_name` и при скачивании.
 - **В чат** — новая беседа с вложением (как в галерее генераций).
 - Deep link: `#upload-{uuid}`.
 
@@ -587,7 +588,7 @@ app/
   db/               models, repositories, seed, migrate
 static/
   js/chat.js        основной UI
-  css/chat.css
+  css/              tokens.css, chat-layout.css, chat-messages.css, gallery.css, …
 templates/          chat.html, gallery.html, macros.html
 deploy/             install.sh, systemd templates, DEPLOY.md
 docs/images/        скриншоты для README
@@ -597,7 +598,7 @@ tests/
 ### Миграции и данные
 
 - **PostgreSQL** (production): `DATABASE_URL=postgresql+asyncpg://…`, Alembic — [deploy/POSTGRES.md](deploy/POSTGRES.md).
-- **SQLite** (резерв / dev): `data/db/web_chat.sqlite` — не удалять после миграции; бэкап включается в `backup-all.sh`.
+- **SQLite** (dev / тесты): опционально `sqlite+aiosqlite:///./data/db/web_chat.sqlite` — см. [data/db/README.md](data/db/README.md).
 - Первый запуск: seed пресетов из `app/db/seed.py`.
 - Обновление промптов в существующей БД: `app/db/migrate.py`.
 - Legacy user-сообщения без `parts`: `python -m app.scripts.migrate_missing_parts`.

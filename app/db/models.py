@@ -253,6 +253,12 @@ class MediaAsset(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    gallery_sort_order: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
+        comment="Пользовательский порядок в галерее загрузок",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utc_now,

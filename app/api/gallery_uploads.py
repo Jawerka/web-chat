@@ -22,6 +22,7 @@ from app.services.gallery_uploads_service import (
     list_upload_gallery,
     promote_disk_to_uploads,
     promote_generation_to_uploads,
+    reorder_upload_gallery,
     upload_to_gallery,
 )
 from app.services.request_user import RequestUser, get_request_user
@@ -35,6 +36,10 @@ router = APIRouter(tags=["gallery-uploads"])
 class UploadFavoritePayload(BaseModel):
     id: str = Field(min_length=1)
     favorite: bool = True
+
+
+class UploadReorderPayload(BaseModel):
+    ids: list[str] = Field(min_length=1)
 
 
 @router.get("/gallery/uploads", response_class=HTMLResponse, include_in_schema=False)
@@ -57,6 +62,55 @@ async def api_list_uploads(
         "images": [i.to_api_dict() for i in items],
         "count": len(items),
     }
+
+
+@router.post("/api/gallery/uploads/reorder")
+async def api_reorder_uploads(
+    payload: UploadReorderPayload,
+    db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
+) -> dict:
+    try:
+        ordered: list[uuid.UUID] = []
+        for raw in payload.ids:
+            try:
+                ordered.append(uuid.UUID(raw.strip()))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Некорректный id: {raw}",
+                ) from exc
+        await reorder_upload_gallery(db, request_user=user, ordered_ids=ordered)
+        await db.commit()
+        return {"ok": True, "count": len(ordered)}
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ запрещён") from exc
+
+
+@router.post("/api/gallery/uploads/favorite")
+async def api_uploads_favorite(
+    payload: UploadFavoritePayload,
+    db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
+) -> dict:
+    body = payload
+    owner = await require_gallery_owner_user(db, user)
+    repo = MediaFavoriteRepository(db)
+    is_fav = await repo.set_favorite(
+        source="db",
+        media_id=body.id.strip(),
+        is_favorite=body.favorite,
+        user_id=owner.id,
+    )
+    await db.commit()
+    await broadcast_gallery_update(
+        "favorite",
+        kind="upload",
+        id=body.id,
+        favorite=is_fav,
+        user_id=owner.id,
+    )
+    return {"ok": True, "id": body.id, "is_favorite": is_fav}
 
 
 @router.get("/api/gallery/uploads/{asset_id}")
@@ -184,29 +238,3 @@ async def api_promote_to_uploads(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ запрещён") from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-
-@router.post("/api/gallery/uploads/favorite")
-async def api_uploads_favorite(
-    payload: UploadFavoritePayload,
-    db: AsyncSession = Depends(get_db),
-    user: RequestUser | None = Depends(get_request_user),
-) -> dict:
-    body = payload
-    owner = await require_gallery_owner_user(db, user)
-    repo = MediaFavoriteRepository(db)
-    is_fav = await repo.set_favorite(
-        source="db",
-        media_id=body.id.strip(),
-        is_favorite=body.favorite,
-        user_id=owner.id,
-    )
-    await db.commit()
-    await broadcast_gallery_update(
-        "favorite",
-        kind="upload",
-        id=body.id,
-        favorite=is_fav,
-        user_id=owner.id,
-    )
-    return {"ok": True, "id": body.id, "is_favorite": is_fav}

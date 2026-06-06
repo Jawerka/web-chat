@@ -66,20 +66,19 @@ DATABASE_URL=sqlite+aiosqlite:///./data/db/web_chat.sqlite alembic stamp head
 **Перед записью:** остановите web-chat или работайте с **копией** файла SQLite.
 
 ```bash
-cp data/db/web_chat.sqlite data/db/web_chat.sqlite.bak
-
+# Путь к копии SQLite (снимок или бэкап из restore-database.sh --legacy-sqlite)
+export SQLITE_SOURCE=sqlite+aiosqlite:///./data/db/web_chat.sqlite.bak
 export DATABASE_URL=postgresql+asyncpg://webchat:SECRET@127.0.0.1:5432/web_chat
-export MIGRATE_TARGET_URL="$DATABASE_URL"   # опционально
 
 # Подсчёт строк без записи
 python -m app.scripts.migrate_sqlite_to_postgres \
-  --source sqlite+aiosqlite:///./data/db/web_chat.sqlite.bak \
+  --source "$SQLITE_SOURCE" \
   --target "$DATABASE_URL" \
   --dry-run
 
 # Полный перенос (очистка приёмника + вставка)
 python -m app.scripts.migrate_sqlite_to_postgres \
-  --source sqlite+aiosqlite:///./data/db/web_chat.sqlite.bak \
+  --source "$SQLITE_SOURCE" \
   --target "$DATABASE_URL" \
   --truncate-target --yes
 ```
@@ -98,11 +97,11 @@ python -m app.scripts.migrate_sqlite_to_postgres \
 1. **Сверка:**  
    `python -m app.scripts.verify_migration --target "$DATABASE_URL"` → «ИТОГ: миграция согласована».
 2. **`.env`:** `DATABASE_URL=postgresql+asyncpg://…` (см. `.env.example`).
-3. **SQLite не удалять** — оставить `data/db/web_chat.sqlite` для отката (`chmod 444`, см. [data/db/README.md](../data/db/README.md)).
+3. **Бэкап:** `./scripts/backup-database.sh` — основной способ отката (см. [data/db/README.md](../data/db/README.md)).
 4. **Сервис:** `systemctl enable postgresql web-chat && systemctl restart web-chat`.
 5. **Проверка:** `curl -s http://127.0.0.1:8090/api/health`.
 
-Откат: в `.env` вернуть SQLite URL и перезапустить сервис (файл SQLite сохранён).
+Откат: `./scripts/restore-database.sh` или восстановление SQLite из архива (`--legacy-sqlite`), затем смена `DATABASE_URL` в `.env`.
 
 ## Резервное копирование и восстановление
 

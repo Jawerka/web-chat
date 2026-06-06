@@ -19,12 +19,14 @@ from datetime import UTC, datetime
 from app.db.models import GalleryKind, MediaAsset
 from app.db.repositories import GalleryAssetMeta, MediaAssetRepository
 from app.db.uow import SqlAlchemyUnitOfWork
+from app.integrations.sd_filename import resolve_upload_display_name
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     asset_media_url,
     is_image_mime,
     make_asset_thumb_bytes,
     safe_filename,
+    safe_generated_filename,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,11 +77,25 @@ class MediaRegistry:
             )
         sd = extract_sd_metadata_from_bytes(data) if is_image_mime(mime_type) else None
         now = datetime.now(UTC)
+        display_name = original_name
+        if is_image_mime(mime_type):
+            seed_override = None
+            if sd and sd.params:
+                from app.integrations.sd_filename import extract_seed_from_parameters
+
+                seed_override = extract_seed_from_parameters(sd.params)
+            display_name = resolve_upload_display_name(
+                data,
+                mime_type=mime_type,
+                fallback_name=original_name,
+                created_at=now,
+                seed_override=seed_override,
+            )
         asset = await self._repo.create(
             data=data,
             mime_type=mime_type,
             conversation_id=conversation_id,
-            original_name=original_name,
+            original_name=display_name,
             thumb_data=thumb,
             owner_user_id=owner_user_id,
             gallery_kind=kind,
@@ -89,7 +105,7 @@ class MediaRegistry:
             sd_meta_extracted_at=now if sd and sd.has_metadata else None,
         )
         url = asset_media_url(asset.id)
-        logger.info("media_registry: зарегистрирован %s (%s)", asset.id, original_name or mime_type)
+        logger.info("media_registry: зарегистрирован %s (%s)", asset.id, display_name or mime_type)
         return RegisteredAsset(asset=asset, url=url)
 
     async def register_batch(
@@ -124,7 +140,7 @@ class MediaRegistry:
         """Перенести файл из data/generated/ в БД; удалить файл с диска при успехе."""
         if not path.is_file():
             return None
-        filename = safe_filename(path.name)
+        filename = safe_generated_filename(path.name) or safe_filename(path.name)
         data = path.read_bytes()
         guessed = mime_type or _guess_mime(filename)
         reg = await self.register_image(

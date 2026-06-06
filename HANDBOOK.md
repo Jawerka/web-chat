@@ -1017,7 +1017,7 @@ python -m app.scripts.test_agent "Нарисуй закат над морем"
 | `image-gen/code/app/settings.py` | `app/config.py` | Перенести идеи, не дублировать весь файл |
 | `image-gen/code/app/server.py` | `app/integrations/mcp_server.py` | Паттерн MCP thread + middleware |
 | `image-gen/code/deploy/*` | `deploy/` | timer cleanup, service |
-| `prompt-extension/sidebar.css` | `static/css/chat.css` | Адаптация селекторов |
+| `prompt-extension/sidebar.css` | `static/css/chat-layout.css`, `tokens.css` | Адаптация селекторов |
 | `prompt-extension/sidebar.js` | `static/js/markdown.js`, `chat.js` | Убрать chrome.* API |
 | `prompt-extension/sidebar.html` | `templates/chat.html` | Layout + sidebar бесед |
 
@@ -1391,7 +1391,7 @@ sequenceDiagram
 
 **Design tokens** (`static/css/tokens.css`): шкала скруглений `--radius-xs` (4px, хвост пузыря) → `--radius-2xs` (6px) → `--radius-sm/md/lg/xl`; для 8px в кнопках допустим `--space-2`. Новые UI-элементы — только токены, не «магические» px.
 
-**CSS (P7.6):** `tokens.css` → `chat-layout.css` (shell, composer, lightbox, macros) + `chat-messages.css` на `/chat`; `gallery.css` и `login.css` — отдельно для своих страниц. Старый `chat.css` — указатель на схему подключения.
+**CSS (P7.6):** `tokens.css` → `chat-layout.css` (shell, composer, lightbox, macros) + `chat-messages.css` на `/chat`; `gallery.css` и `login.css` — отдельно для своих страниц.
 
 ### 10.2. Класс ChatSocket (скелет)
 
@@ -2016,7 +2016,7 @@ MVP считается готовым после завершения **этап
 | Vision | `GET /media/asset/{id}/llm` — JPEG ≤ `LLM_VISION_MAX_BYTES`; повторные запросы из кэша `MediaAsset.llm_data` |
 | Корзина | Вкладка «Корзина», `deleted_at`, `TRASH_RETENTION_DAYS`, confirm на «Очистить корзину» |
 | Health | `/health` — дашборд; в чате кнопка в шапке (иконка журнала → `/health`) |
-| Motion | `prefers-reduced-motion: reduce` в `chat.css` — отключает лишние анимации |
+| Motion | `prefers-reduced-motion: reduce` в `chat-layout.css` — отключает лишние анимации |
 | RAG в ответе | При `document_rag` и запросе ≥3 символов — collapsible «Ответ основан на документах»; hits в `content_json.rag_sources` (переживают F5) |
 | Reasoning | WS `reasoning_delta` + `content_json.reasoning`; collapsible «Размышления модели» (если LLM отдаёт `reasoning_content` в stream) |
 | Resume / F5 + SD | `_syncStreamImagesFromServer`: при resume не перезатирает сетку картинок, только дополняет (`_appendImagesToGrid`) |

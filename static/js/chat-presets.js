@@ -7,6 +7,7 @@
 
   const DRAFTS_KEY = 'webchat_preset_drafts_v1';
   const LAST_EDIT_KEY = 'webchat_preset_last_edit_id';
+  const LAST_CHAT_PRESET_KEY = 'webchat_last_chat_preset_id';
   const SHORT_LABELS = {
     default: 'Default',
     image_gen: 'txt2img',
@@ -90,11 +91,6 @@
     const optionsHtml = app.presets
       .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
       .join('');
-    if (app.$.newConvPreset) {
-      app.$.newConvPreset.innerHTML = optionsHtml;
-      const def = app.presets.find((p) => p.is_default);
-      if (def) app.$.newConvPreset.value = def.id;
-    }
     populateGlobalSelect(app);
     populateConvSelect(app, app.currentConv?.preset_id);
     WebChatImg2imgPreset?.refreshPresetCache?.(app);
@@ -150,6 +146,30 @@
     return SHORT_LABELS[preset.slug] ?? preset.name;
   }
 
+  function rememberLastChatPreset(app, presetId) {
+    if (!presetId || !app.presets.some((p) => p.id === presetId)) return;
+    try {
+      localStorage.setItem(LAST_CHAT_PRESET_KEY, presetId);
+    } catch (err) {
+      app.log?.warn('settings', `Не удалось сохранить последний пресет чата: ${err.message}`);
+    }
+  }
+
+  function getLastUsedPresetId(app) {
+    const fromSelect = app.$.chatPresetSelect?.value;
+    if (fromSelect && app.presets.some((p) => p.id === fromSelect)) return fromSelect;
+    const fromConv = app.currentConv?.preset_id;
+    if (fromConv && app.presets.some((p) => p.id === fromConv)) return fromConv;
+    try {
+      const stored = localStorage.getItem(LAST_CHAT_PRESET_KEY);
+      if (stored && app.presets.some((p) => p.id === stored)) return stored;
+    } catch {
+      /* ignore */
+    }
+    const def = app.presets.find((p) => p.is_default);
+    return def?.id ?? app.presets[0]?.id ?? null;
+  }
+
   function populateConvSelect(app, selectedId) {
     if (app.presets.length === 0) return;
     const fallback = app.presets.find((p) => p.is_default)?.id ?? app.presets[0].id;
@@ -181,6 +201,7 @@
     if (app.$.convPresetSelect && activeId != null) {
       app.$.convPresetSelect.value = String(activeId);
     }
+    if (activeId != null) rememberLastChatPreset(app, activeId);
     updateChatToolbar(app);
   }
 
@@ -193,6 +214,7 @@
   async function onChatPresetChange(app) {
     const presetId = app.$.chatPresetSelect?.value;
     if (!presetId || !app.currentConvId) return;
+    rememberLastChatPreset(app, presetId);
     if (app.$.convPresetSelect) app.$.convPresetSelect.value = presetId;
     WebChatImg2imgPreset?.syncVisibility?.(app);
     await applyConversationPreset(app, presetId);
@@ -386,5 +408,7 @@
     flushDraftsToStorage,
     hasUnsyncedDrafts,
     bindPresetEvents,
+    getLastUsedPresetId,
+    rememberLastChatPreset,
   };
 })();

@@ -477,6 +477,18 @@ body {
   background: color-mix(in srgb, var(--bg) 55%, var(--surface));
 }
 
+.settings-inline-row--title {
+  margin-bottom: 0;
+}
+
+.settings-inline-row--title .settings-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding-inline: var(--space-2);
+}
+
 .settings-inline-row .settings-field-input {
   flex: 1 1 280px;
   min-width: 220px;

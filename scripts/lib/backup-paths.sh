@@ -12,7 +12,7 @@ WEB_CHAT_DB_BACKUP_KEEP="${WEB_CHAT_DB_BACKUP_KEEP:-3}"
 WEB_CHAT_DB_BACKUP_PREFIX="web-chat-db"
 WEB_CHAT_DB_BACKUP_EXT=".tar.gz"
 
-# Опционально: полный бэкап (БД + generated/uploads) — отдельный каталог
+# Устаревший каталог site-архивов (до v2 — отдельный web-chat-site-*.tar.gz)
 WEB_CHAT_SITE_BACKUP_DIR="${WEB_CHAT_SITE_BACKUP_DIR:-${WEB_CHAT_ROOT}/data/backups/site}"
 WEB_CHAT_SITE_BACKUP_KEEP="${WEB_CHAT_SITE_BACKUP_KEEP:-3}"
 

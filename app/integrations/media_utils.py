@@ -12,6 +12,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from PIL import Image
 
@@ -63,6 +64,22 @@ def safe_filename(filename: str) -> str:
 
     allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
     result = "".join(c for c in safe if c in allowed)
+    return result if result else ""
+
+
+def safe_generated_filename(filename: str) -> str:
+    """
+    Имя файла в data/generated/ (пробелы допустимы — шаблон SD refs/main.py).
+
+    Raises:
+        ValueError: недопустимое имя.
+    """
+    raw = unquote(filename.strip())
+    name = Path(raw).name
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\0" in name:
+        return ""
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-. ")
+    result = "".join(c for c in name if c in allowed).strip()
     return result if result else ""
 
 
@@ -182,7 +199,7 @@ def resolve_generated_file(filename: str, *, thumbs: bool = False) -> Path:
         ValueError: Недопустимое имя или выход за каталог.
         FileNotFoundError: Файл не найден.
     """
-    safe = safe_filename(filename)
+    safe = safe_generated_filename(filename)
     if not safe:
         raise ValueError("Недопустимое имя файла")
 
@@ -436,8 +453,11 @@ def _fit_image_max_side(img: Image.Image, max_side: int) -> Image.Image:
 
 def generated_media_url(filename: str, *, absolute: bool = False, for_llm: bool = False) -> str:
     """URL сгенерированного изображения (legacy, до ingest в БД)."""
-    safe = safe_filename(filename)
-    path = f"/media/generated/{safe}"
+    safe = safe_generated_filename(filename)
+    if not safe:
+        safe = safe_filename(filename)
+    encoded = quote(safe, safe="")
+    path = f"/media/generated/{encoded}"
     if absolute:
         return absolute_media_path(path, for_llm=for_llm)
     return path
@@ -445,8 +465,9 @@ def generated_media_url(filename: str, *, absolute: bool = False, for_llm: bool 
 
 def generated_thumb_url(thumb_filename: str, *, absolute: bool = False) -> str:
     """URL миниатюры generated."""
-    safe = safe_filename(thumb_filename)
-    path = f"/media/generated/thumbs/{safe}"
+    safe = safe_generated_filename(thumb_filename) or safe_filename(thumb_filename)
+    encoded = quote(safe, safe="")
+    path = f"/media/generated/thumbs/{encoded}"
     if absolute:
         return absolute_media_path(path, for_llm=False)
     return path
@@ -546,5 +567,5 @@ def _resolve_generated_media_suffix(suffix: str) -> Path:
     prefix = "/media/generated/"
     if not suffix.startswith(prefix):
         raise ValueError(f"Путь не из галереи generated: {suffix}")
-    filename = Path(suffix[len(prefix) :]).name
+    filename = Path(unquote(suffix[len(prefix) :])).name
     return resolve_generated_file(filename, thumbs=False)

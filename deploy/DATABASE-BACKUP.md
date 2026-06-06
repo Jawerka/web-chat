@@ -1,16 +1,16 @@
 # Резервное копирование и восстановление БД
 
-Единый каталог: **`data/backups/database/`** (на сервере можно задать `WEB_CHAT_DB_BACKUP_DIR`, например `/var/backups/web-chat/database`).
+Единый каталог: **`data/backups/database/`** (на сервере: `WEB_CHAT_DB_BACKUP_DIR`, например `/var/backups/web-chat/database`).
 
-Хранится **не более 3** архивов `web-chat-db-<UTC-stamp>.tar.gz` (ротация при каждом новом бэкапе). Старые имена `web-chat-backup-*` / `web-chat-pg-backup-*` тоже учитываются.
+Каждый запуск создаёт **один** архив `web-chat-db-<UTC-stamp>.tar.gz`. Хранится не более **3** архивов (ротация при каждом новом бэкапе). Старые имена `web-chat-backup-*` / `web-chat-pg-backup-*` по-прежнему видны в `--list` для восстановления.
 
 ## Бэкап
 
 ```bash
-# Только база данных (рекомендуется)
+# Только PostgreSQL (production)
 ./scripts/backup-database.sh
 
-# БД + опционально generated/uploads → data/backups/site/
+# БД + файлы на диске (generated, uploads) в том же архиве
 WEB_CHAT_BACKUP_GENERATED=1 WEB_CHAT_BACKUP_UPLOADS=1 ./scripts/backup-all.sh
 ```
 
@@ -18,18 +18,19 @@ Production:
 
 ```bash
 ./deploy/backup-database.sh
-# или полный (БД + файлы):
-./deploy/backup-data.sh
+# полный (БД + файлы в одном архиве):
+WEB_CHAT_BACKUP_GENERATED=1 WEB_CHAT_BACKUP_UPLOADS=1 ./deploy/backup-data.sh
 ```
 
 Переменные:
 
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
-| `WEB_CHAT_DB_BACKUP_DIR` | `data/backups/database` | Каталог архивов БД |
+| `WEB_CHAT_DB_BACKUP_DIR` | `data/backups/database` | Каталог архивов |
 | `WEB_CHAT_DB_BACKUP_KEEP` | `3` | Сколько архивов хранить |
 | `WEB_CHAT_PG_DUMP_FORMAT` | `custom` | `custom` (`.dump`) или `plain` (`.sql.gz`) |
-| `WEB_CHAT_BACKUP_LEGACY_SQLITE` | `auto` | При Postgres — положить в архив `data/db/web_chat.sqlite` |
+| `WEB_CHAT_BACKUP_GENERATED` | `0` | Включить `data/generated/` в архив |
+| `WEB_CHAT_BACKUP_UPLOADS` | `0` | Включить `data/uploads/` в архив |
 
 Cron (ежедневно в 03:00):
 
@@ -44,50 +45,52 @@ Cron (ежедневно в 03:00):
 ```bash
 systemctl stop web-chat
 
-# Список архивов (1 = самый новый)
 ./scripts/restore-database.sh --list
-
-# Последний бэкап (по умолчанию)
 ./scripts/restore-database.sh --yes
-
-# Конкретный бэкап
 ./scripts/restore-database.sh --index 2 --yes
 ./scripts/restore-database.sh --stamp 20260523T120000Z --yes
-./scripts/restore-database.sh --file /path/to/web-chat-db-….tar.gz --yes
 ```
 
 Перед восстановлением создаётся **страховочный бэкап** текущей БД (если не указано `--no-safety-backup`).
 
-Восстановление подстраивается под **`DATABASE_URL` в `.env`**:
-
-- Postgres в `.env` → `pg_restore` / `psql` из архива с `database_backend=postgresql`
-- SQLite в `.env` → копирование `data/db/*.sqlite` из архива
-
-Дополнительно: `--legacy-sqlite` — скопировать legacy SQLite из архива в `data/db/` (при работе на Postgres).
-
-После восстановления:
+`restore-database.sh` восстанавливает **только базу данных**. Файлы `data/generated/` и `data/uploads/` из полного архива (`backup_type: full`) при необходимости распакуйте вручную:
 
 ```bash
-systemctl start web-chat
-python -m app.scripts.verify_migration --target "$DATABASE_URL"   # при сравнении с SQLite
+tar -xzf web-chat-db-….tar.gz -C /tmp/restore-inspect data/generated data/uploads
 ```
 
-## Содержимое архива
+## Содержимое архива (manifest v2)
+
+```json
+{
+  "app": "web-chat",
+  "backup_version": 2,
+  "backup_type": "database",
+  "database_backend": "postgresql",
+  "postgres_dump": "data/postgres/web_chat.dump",
+  "postgres_dump_format": "custom",
+  "site_files": { "generated": false, "uploads": false }
+}
+```
+
+Файлы:
 
 ```
 manifest.json
-data/postgres/web_chat.dump    # при Postgres (custom)
-data/db/web_chat.sqlite        # опционально (legacy)
+data/postgres/web_chat.dump     # PostgreSQL (custom)
+data/db/*.sqlite                # только при backend=sqlite в .env
+data/generated/                 # опционально (backup_type=full)
+data/uploads/                   # опционально (backup_type=full)
 ```
 
-## Эксплуатация (один оператор)
+## Эксплуатация
 
-- **Не запускайте** `backup-database.sh` и `restore-database.sh` **одновременно** — дождитесь завершения одной операции (модель «один оператор» из [HANDBOOK](../HANDBOOK.md)).
-- Перед restore скрипт останавливает приложение: сначала `systemctl stop web-chat`, `pkill` uvicorn — только если сервис не под systemd и процесс ещё жив.
-- **Postgres:** `PGPASSWORD` может быть виден в `ps` на время `pg_dump`/`psql`. На production предпочитайте `~/.pgpass` (mode `0600`) и экспорт `PGPASSFILE` в cron/unit — см. [документацию libpq](https://www.postgresql.org/docs/current/libpq-pgpass.html).
+- Не запускайте `backup-database.sh` и `restore-database.sh` одновременно.
+- Перед restore скрипт останавливает `web-chat` через systemctl.
+- **Postgres:** на production предпочитайте `~/.pgpass` вместо пароля в окружении.
 
 ## См. также
 
 - [POSTGRES.md](POSTGRES.md) — установка Postgres, ETL
 - [DEPLOY.md](DEPLOY.md) — общая эксплуатация
-- [data/db/README.md](../data/db/README.md) — откат на SQLite
+- [data/db/README.md](../data/db/README.md) — dev SQLite

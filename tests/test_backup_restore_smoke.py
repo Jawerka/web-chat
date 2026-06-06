@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
@@ -86,7 +87,14 @@ def test_sqlite_backup_and_restore_roundtrip() -> None:
 
         with tarfile.open(archive, "r:gz") as tar:
             names = tar.getnames()
-        assert any(n.rstrip("/").endswith("manifest.json") for n in names)
+            manifest_member = next(
+                (m for m in tar.getmembers() if m.name.rstrip("/").endswith("manifest.json")),
+                None,
+            )
+            assert manifest_member is not None
+            manifest = json.loads(tar.extractfile(manifest_member).read().decode())
+        assert manifest.get("backup_version") == 2
+        assert manifest.get("database_backend") == "sqlite"
         assert any(n.endswith("web_chat.sqlite") for n in names)
 
         _write_marker(db_path, "v2")

@@ -20,6 +20,8 @@ from app.db.repositories import MediaAssetRepository
 from app.services.gallery_owner import assert_gallery_media_access
 from app.services.media_registry import MediaRegistry
 from app.services.request_user import RequestUser
+from urllib.parse import unquote
+
 from app.integrations.media_utils import (
     GENERATED_ROOT,
     asset_media_url,
@@ -33,6 +35,7 @@ from app.integrations.media_utils import (
     resolve_generated_file,
     resolve_upload_file,
     safe_filename,
+    safe_generated_filename,
     sniff_image_mime,
 )
 from app.public_url import is_trusted_media_url, strip_public_base
@@ -239,7 +242,10 @@ class MediaService:
         if gen:
             thumbs = "/thumbs/" in check_path
             try:
-                resolve_generated_file(safe_filename(gen.group(1)), thumbs=thumbs)
+                resolve_generated_file(
+                    _generated_filename_from_url(gen.group(1)),
+                    thumbs=thumbs,
+                )
                 return True
             except (ValueError, FileNotFoundError):
                 return False
@@ -436,7 +442,7 @@ class MediaService:
 
         gen = _GENERATED_URL_RE.search(path)
         if gen:
-            filename = safe_filename(gen.group(1))
+            filename = _generated_filename_from_url(gen.group(1))
             thumbs = "/thumbs/" in path
             file_path = resolve_generated_file(filename, thumbs=thumbs)
             data = file_path.read_bytes()
@@ -474,7 +480,7 @@ class MediaService:
         pending_meta: list[tuple[str, Path]] = []
 
         for match in _GENERATED_URL_RE.finditer(tool_output):
-            filename = safe_filename(match.group(1))
+            filename = _generated_filename_from_url(match.group(1))
             if not filename or filename in seen_files:
                 continue
             seen_files.add(filename)
@@ -566,11 +572,13 @@ class MediaService:
 
         gen = _GENERATED_URL_RE.search(url)
         if gen:
-            filename = safe_filename(gen.group(1))
+            filename = _generated_filename_from_url(gen.group(1))
             path = GENERATED_ROOT / filename
             if path.is_file():
+                from app.integrations.media_utils import generated_media_url
+
                 ingested, url_map, _ = await self.ingest_sd_output_files(
-                    f"/media/generated/{filename}",
+                    f"URL: {generated_media_url(filename)}",
                     conversation_id=conversation_id,
                 )
                 if ingested:
@@ -719,6 +727,12 @@ async def _fetch_url_bytes(url: str) -> tuple[bytes, str]:
             return b"".join(chunks), content_type
 
 
+def _generated_filename_from_url(captured: str) -> str:
+    """Имя файла из URL /media/generated/… (в т.ч. percent-encoded SD-шаблон)."""
+    decoded = unquote(captured)
+    return safe_generated_filename(decoded) or safe_filename(decoded)
+
+
 def _safe_uuid(value: str) -> uuid.UUID | None:
     try:
         return uuid.UUID(str(value))
@@ -730,8 +744,10 @@ def _generated_url_variants(filename: str) -> list[str]:
     """Все варианты URL для одного generated-файла (для замены в тексте)."""
     from app.public_url import all_public_base_urls
 
-    safe = safe_filename(filename)
-    path = f"/media/generated/{safe}"
+    from app.integrations.media_utils import generated_media_url
+
+    path = generated_media_url(filename)
+    safe = safe_generated_filename(filename) or safe_filename(filename)
     variants: set[str] = {path, f"URL: {path}"}
     stem = Path(safe).stem
     for thumb_ext in (".webp", ".jpg", ".jpeg", ".png"):

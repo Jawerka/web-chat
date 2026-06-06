@@ -15,6 +15,7 @@ from app.db.models import (
     Attachment,
     Conversation,
     DocumentChunk,
+    GalleryKind,
     MediaAsset,
     MediaFavorite,
     Message,
@@ -407,6 +408,7 @@ class GalleryAssetMeta:
     size_bytes: int
     has_thumb: bool
     gallery_kind: str | None = None
+    gallery_sort_order: int | None = None
     sd_prompt: str | None = None
     sd_negative: str | None = None
     sd_params: str | None = None
@@ -507,6 +509,7 @@ class MediaAssetRepository:
             func.length(MediaAsset.data).label("size_bytes"),
             MediaAsset.thumb_data.isnot(None).label("has_thumb"),
             MediaAsset.gallery_kind,
+            MediaAsset.gallery_sort_order,
             MediaAsset.sd_prompt,
             MediaAsset.sd_negative,
             MediaAsset.sd_params,
@@ -535,12 +538,50 @@ class MediaAssetRepository:
                     size_bytes=int(row.size_bytes or 0),
                     has_thumb=bool(row.has_thumb),
                     gallery_kind=row.gallery_kind,
+                    gallery_sort_order=row.gallery_sort_order,
                     sd_prompt=row.sd_prompt,
                     sd_negative=row.sd_negative,
                     sd_params=row.sd_params,
                 )
             )
         return rows
+
+    async def upload_gallery_has_custom_order(self, owner_user_id: uuid.UUID) -> bool:
+        stmt = (
+            select(func.count())
+            .select_from(MediaAsset)
+            .where(
+                MediaAsset.owner_user_id == owner_user_id,
+                MediaAsset.gallery_kind == GalleryKind.UPLOAD.value,
+                MediaAsset.gallery_sort_order.isnot(None),
+            )
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar() or 0) > 0
+
+    async def max_upload_sort_order(self, owner_user_id: uuid.UUID) -> int:
+        stmt = select(func.max(MediaAsset.gallery_sort_order)).where(
+            MediaAsset.owner_user_id == owner_user_id,
+            MediaAsset.gallery_kind == GalleryKind.UPLOAD.value,
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar() if result.scalar() is not None else -1)
+
+    async def set_upload_gallery_order(
+        self,
+        owner_user_id: uuid.UUID,
+        ordered_ids: list[uuid.UUID],
+    ) -> None:
+        for pos, asset_id in enumerate(ordered_ids):
+            asset = await self.get_by_id(asset_id)
+            if asset is None:
+                continue
+            if asset.owner_user_id != owner_user_id:
+                raise PermissionError("forbidden")
+            if asset.gallery_kind != GalleryKind.UPLOAD.value:
+                continue
+            asset.gallery_sort_order = pos
+        await self._session.flush()
 
     async def create(
         self,
@@ -558,6 +599,7 @@ class MediaAssetRepository:
         sd_negative: str | None = None,
         sd_params: str | None = None,
         sd_meta_extracted_at: datetime | None = None,
+        gallery_sort_order: int | None = None,
     ) -> MediaAsset:
         asset = MediaAsset(
             id=asset_id or uuid.uuid4(),
@@ -573,6 +615,7 @@ class MediaAssetRepository:
             sd_negative=sd_negative,
             sd_params=sd_params,
             sd_meta_extracted_at=sd_meta_extracted_at,
+            gallery_sort_order=gallery_sort_order,
         )
         self._session.add(asset)
         await self._session.flush()

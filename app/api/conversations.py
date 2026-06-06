@@ -14,6 +14,7 @@ from app.api.schemas import (
     ConversationCreate,
     ConversationOut,
     ConversationUpdate,
+    GenerateTitleCreate,
     TurnCreate,
     TurnStartedOut,
 )
@@ -310,6 +311,51 @@ async def update_conversation(
         preset_id=body.preset_id,
     )
     return ConversationOut.model_validate(conversation)
+
+
+@router.post("/{conversation_id}/generate-title", response_model=ConversationOut)
+async def generate_conversation_title_endpoint(
+    conversation_id: uuid.UUID,
+    body: GenerateTitleCreate | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: RequestUser | None = Depends(get_request_user),
+) -> ConversationOut:
+    """Сгенерировать название беседы через LLM по первым сообщениям."""
+    from app.integrations.llm_client import LLMClient, LLMError
+    from app.services.conversation_title_service import generate_conversation_title
+
+    conversation = await get_accessible_conversation(db, conversation_id, user)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Беседа не найдена",
+        )
+
+    payload = body or GenerateTitleCreate()
+    llm_url = parse_optional_url(payload.llm_base_url)
+    llm = LLMClient(base_url=llm_url)
+    try:
+        await generate_conversation_title(
+            db,
+            conversation_id,
+            llm,
+            model=payload.model,
+        )
+        await db.commit()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM недоступен: {exc}",
+        ) from exc
+
+    updated = await ConversationRepository(db).get_by_id(conversation_id)
+    assert updated is not None
+    return ConversationOut.model_validate(updated)
 
 
 @router.get("/{conversation_id}/export")

@@ -151,6 +151,7 @@ class ChatApp {
       documentRagPreview: document.getElementById('document-rag-preview'),
       macroInsertMenuBtn: document.getElementById('macro-insert-menu-btn'),
       settingsChatTitle: document.getElementById('settings-chat-title'),
+      generateConversationTitleBtn: document.getElementById('generate-conversation-title-btn'),
       exportConversationBtn: document.getElementById('export-conversation-btn'),
       convPresetSelect: document.getElementById('conv-preset-select'),
       chatPresetToolbar: document.getElementById('chat-preset-toolbar'),
@@ -192,8 +193,6 @@ class ChatApp {
       errorBannerRetry: document.getElementById('error-banner-retry'),
       scrollBtn: document.getElementById('scroll-to-bottom-btn'),
       loadingOverlay: document.getElementById('loading-overlay'),
-      newConvModal: document.getElementById('new-conv-modal'),
-      newConvPreset: document.getElementById('new-conv-preset'),
       lightbox: document.getElementById('lightbox'),
       lightboxStage: document.getElementById('lightbox-stage'),
       lightboxImg: document.getElementById('lightbox-img'),
@@ -375,6 +374,9 @@ class ChatApp {
       }
     });
     this.$.settingsSaveBtn?.addEventListener('click', () => this.saveSettings());
+    this.$.generateConversationTitleBtn?.addEventListener('click', () => {
+      void WebChatSettings.generateConversationTitle(this);
+    });
     this.$.exportConversationBtn?.addEventListener('click', () => this.exportCurrentConversation());
     this.$.settingsChatTitle?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -409,7 +411,6 @@ class ChatApp {
         }
         this.closeLightbox();
         this.closeSidebar();
-        if (this.$.newConvModal.open) this.$.newConvModal.close();
       }
     });
 
@@ -511,7 +512,6 @@ class ChatApp {
     if (!this.$.settingsPanel?.classList.contains('hidden')) return true;
     if (!this.$.logsPanel?.classList.contains('hidden')) return true;
     if (!this.$.lightbox?.classList.contains('hidden')) return true;
-    if (this.$.newConvModal?.open) return true;
     return false;
   }
 
@@ -923,10 +923,6 @@ class ChatApp {
 
   _updateConvTitleTooltips() {
     WebChatConversations.updateTitleTooltips(this);
-  }
-
-  openNewConvModal() {
-    WebChatConversations.openNewConvModal(this);
   }
 
   async createConversation() {

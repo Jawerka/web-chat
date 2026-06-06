@@ -127,8 +127,7 @@ def test_img2img_auto_dimensions_from_init(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(mod, "get_sd_session", lambda: type("S", (), {"post": fake_post})())
     monkeypatch.setattr(mod, "resolve_sd_webui_url", lambda u=None: "http://test")
-    monkeypatch.setattr(mod, "save_image_from_base64", lambda b: "out.png")
-    monkeypatch.setattr(mod, "make_thumbnail", lambda f: None)
+    monkeypatch.setattr(mod, "save_sd_generated_image", lambda *a, **k: ("out.png", None))
     monkeypatch.setattr(
         mod,
         "generated_media_url",

@@ -44,6 +44,7 @@ async def run_sqlite_migrations(engine: AsyncEngine) -> None:
         await _migrate_users_auth(conn)
         await _migrate_preset_prompts(conn)
         await _migrate_gallery_plan_new(conn)
+        await _migrate_upload_gallery_sort_order(conn)
         await _normalize_dashed_uuid_ids(conn)
         await _normalize_sqlite_enum_names(conn)
 
@@ -292,6 +293,17 @@ async def _migrate_gallery_plan_new(conn) -> None:
             text("UPDATE users SET media_token = :tok WHERE id = :uid AND media_token IS NULL"),
             {"tok": tok, "uid": aid},
         )
+
+
+async def _migrate_upload_gallery_sort_order(conn) -> None:
+    """Пользовательский порядок карточек в галерее загрузок."""
+    result = await conn.execute(text("PRAGMA table_info(media_assets)"))
+    acols = {row[1] for row in result.fetchall()}
+    if "gallery_sort_order" not in acols:
+        await conn.execute(
+            text("ALTER TABLE media_assets ADD COLUMN gallery_sort_order INTEGER"),
+        )
+        logger.info("Миграция: media_assets.gallery_sort_order")
 
 
 async def _migrate_preset_prompts(conn) -> None:

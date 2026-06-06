@@ -53,8 +53,11 @@ def test_img2img_multiple_denoise_same_init(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(mod, "get_sd_session", lambda: type("S", (), {"post": fake_post})())
     monkeypatch.setattr(mod, "resolve_sd_webui_url", lambda u=None: "http://test")
-    monkeypatch.setattr(mod, "save_image_from_base64", lambda b: f"out_{len(denoise_seen)}.png")
-    monkeypatch.setattr(mod, "make_thumbnail", lambda f: None)
+    monkeypatch.setattr(
+        mod,
+        "save_sd_generated_image",
+        lambda *a, **k: (f"out_{len(denoise_seen)}.png", None),
+    )
     monkeypatch.setattr(
         mod,
         "generated_media_url",

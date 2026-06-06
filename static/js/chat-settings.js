@@ -7,18 +7,67 @@
 
   function setSettingsChatTitle(app, title) {
     const el = app.$.settingsChatTitle;
+    const genBtn = app.$.generateConversationTitleBtn;
     if (!el) return;
     if (!app.currentConvId) {
       el.disabled = true;
       el.value = '';
       el.placeholder = 'Выберите или создайте беседу';
+      if (genBtn) genBtn.disabled = true;
       app._updateExportButton();
       return;
     }
     el.disabled = false;
     el.value = title ?? app.currentConv?.title ?? '';
     el.placeholder = 'Название беседы';
+    if (genBtn) genBtn.disabled = false;
     app._updateExportButton();
+  }
+
+  async function generateConversationTitle(app) {
+    if (!app.currentConvId || app._generatingConversationTitle) return;
+
+    const btn = app.$.generateConversationTitleBtn;
+    const prevLabel = btn?.getAttribute('aria-label');
+    if (btn) {
+      btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+      btn.setAttribute('aria-label', 'Генерация названия…');
+    }
+    showSaveStatus(app, 'info', 'Запрашиваем название у LLM…');
+    app._generatingConversationTitle = true;
+
+    try {
+      const llmBase = normalizeServiceUrl(app, app.$.llmBaseUrlInput?.value);
+      const model = getActiveLlmModel(app);
+      const body = {};
+      if (llmBase) body.llm_base_url = llmBase;
+      if (model) body.model = model;
+
+      const updated = await app.api(`/api/conversations/${app.currentConvId}/generate-title`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      app.currentConv = updated;
+      setSettingsChatTitle(app, updated.title);
+      const conv = app.conversations.find((c) => c.id === app.currentConvId);
+      if (conv) conv.title = updated.title;
+      app._conversationsFingerprint = WebChatConversations.fingerprintFrom(app.conversations);
+      app.renderConvList();
+      showSaveStatus(app, 'success', `Название: ${updated.title}`);
+      app.log?.info('settings', `Название беседы сгенерировано: ${updated.title}`);
+    } catch (err) {
+      showSaveStatus(app, 'error', err.message || 'Не удалось сгенерировать название');
+    } finally {
+      app._generatingConversationTitle = false;
+      if (btn) {
+        btn.disabled = !app.currentConvId;
+        btn.removeAttribute('aria-busy');
+        btn.setAttribute('aria-label', prevLabel || 'Сгенерировать название через LLM');
+      }
+    }
   }
 
   function settingsChatTitleDraft(app) {
@@ -369,6 +418,7 @@
   window.WebChatSettings = {
     setSettingsChatTitle,
     settingsChatTitleDraft,
+    generateConversationTitle,
     save,
     hideSaveStatus,
     showSaveStatus,

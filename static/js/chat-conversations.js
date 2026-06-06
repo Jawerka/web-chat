@@ -117,7 +117,7 @@
         return `<li class="conv-trash-item" data-id="${c.id}" role="listitem">
           <div class="conv-trash-item-row">
             <div class="conv-trash-item-main">
-              <div class="conv-trash-item-title">${escapeHtml(c.title)}</div>
+              <div class="conv-trash-item-title">${escapeHtml(listTitle(c.title))}</div>
               <div class="conv-trash-item-meta">${meta}</div>
             </div>
             <div class="conv-trash-item-actions">
@@ -242,6 +242,10 @@
     }
   }
 
+  function listTitle(title) {
+    return WebChatConvTitleFormat?.formatConvTitleForList(title) ?? title;
+  }
+
   function renderList(app) {
     cancelPendingDelete(app);
     const empty = !app.conversations.length;
@@ -257,7 +261,7 @@
           <div class="conv-item-row">
             <div class="conv-item-main">
               <div class="conv-item-title" data-id="${c.id}" aria-label="${escapeAttr(c.title)}">
-                <span class="conv-item-title-text">${escapeHtml(c.title)}</span>
+                <span class="conv-item-title-text">${escapeHtml(listTitle(c.title))}</span>
                 <span class="conv-item-title-tooltip" role="tooltip" aria-hidden="true">
                   <span class="conv-item-title-tooltip-body">${escapeHtml(c.title)}</span>
                   <span class="conv-item-title-tooltip-hint">Двойной клик — переименовать</span>
@@ -282,6 +286,8 @@
     app.$.convList.querySelectorAll('.conv-item').forEach((el) => {
       el.addEventListener('click', (e) => {
         if (e.target.closest('.conv-item-delete')) return;
+        if (app._inlineTitleConvId) return;
+        if (e.target.closest('.conv-item-title') && (e.detail > 1 || app._convTitleEditGuard)) return;
         app.selectConversation(el.dataset.id);
         app.closeSidebar();
       });
@@ -310,9 +316,17 @@
   function bindConvTitleInlineEdit(app) {
     app.$.convList.querySelectorAll('.conv-item-title').forEach((el) => {
       el.addEventListener('dblclick', (e) => {
+        e.preventDefault();
         e.stopPropagation();
         const convId = el.dataset.id || el.closest('.conv-item')?.dataset.id;
-        if (convId) startInlineTitleEdit(convId, el);
+        if (convId) {
+          app._convTitleEditGuard = true;
+          clearTimeout(app._convTitleEditGuardTimer);
+          app._convTitleEditGuardTimer = setTimeout(() => {
+            app._convTitleEditGuard = false;
+          }, 400);
+          void startInlineTitleEdit(app, convId, el);
+        }
       });
     });
   }
@@ -338,13 +352,13 @@
       const tipBody = titleEl.querySelector('.conv-item-title-tooltip-body');
       const prevTitle = conv.title;
       if (save && next !== prevTitle) {
-        if (textEl) textEl.textContent = next;
-        else titleEl.textContent = next;
+        if (textEl) textEl.textContent = listTitle(next);
+        else titleEl.textContent = listTitle(next);
         if (tipBody) tipBody.textContent = next;
         titleEl.setAttribute('aria-label', next);
       } else {
-        if (textEl) textEl.textContent = prevTitle;
-        else titleEl.textContent = prevTitle;
+        if (textEl) textEl.textContent = listTitle(prevTitle);
+        else titleEl.textContent = listTitle(prevTitle);
         if (tipBody) tipBody.textContent = prevTitle;
         titleEl.setAttribute('aria-label', prevTitle);
       }
@@ -353,7 +367,7 @@
       app._inlineTitleConvId = null;
       updateTitleTooltips(app);
       if (save && next !== prevTitle) {
-        await patchConversationTitle(convId, next);
+        await patchConversationTitle(app, convId, next);
       }
     };
 
@@ -514,7 +528,7 @@
         const msgId = h.message_id || '';
         return `<li class="conv-search-hit" role="listitem" tabindex="0"
           data-conv-id="${h.conversation_id}" data-message-id="${msgId}">
-          <div class="conv-search-hit-title">${escapeHtml(h.conversation_title)}</div>
+          <div class="conv-search-hit-title">${escapeHtml(listTitle(h.conversation_title))}</div>
           <div class="conv-search-hit-meta">
             <span class="conv-search-hit-kind">${kindLabel}</span>
             <div class="conv-search-hit-snippet">${highlightSearchSnippet(h.snippet, q)}</div>
@@ -653,35 +667,6 @@
     }
   }
 
-  function openNewConvModal(app) {
-    document.getElementById('new-conv-title').value = '';
-    app.$.newConvModal.showModal();
-    bindDialogFocusTrap(app, app.$.newConvModal);
-    setTimeout(() => document.getElementById('new-conv-title').focus(), 50);
-  }
-
-  function bindDialogFocusTrap(app, dialog) {
-    if (!dialog || dialog.dataset.focusTrapBound) return;
-    dialog.dataset.focusTrapBound = '1';
-    const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    dialog.addEventListener('keydown', (e) => {
-      if (e.key !== 'Tab' || !dialog.open) return;
-      const nodes = [...dialog.querySelectorAll(selector)].filter(
-        (el) => !el.disabled && el.offsetParent !== null,
-      );
-      if (nodes.length < 2) return;
-      const first = nodes[0];
-      const last = nodes[nodes.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    });
-  }
-
   function upsertInList(app, conv) {
     const idx = app.conversations.findIndex((c) => c.id === conv.id);
     if (idx >= 0) {
@@ -693,11 +678,10 @@
   }
 
   async function create(app) {
-    const title = document.getElementById('new-conv-title').value.trim() || 'Новая беседа';
-    const presetId = app.$.newConvPreset.value || null;
+    const title = 'Новая беседа';
+    const presetId = WebChatPresets.getLastUsedPresetId(app);
     const body = { title };
     if (presetId) body.preset_id = presetId;
-    app.$.newConvModal.close();
     const conv = await app.api('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -709,17 +693,11 @@
   }
 
   function bindSidebarEvents(app) {
-    document.getElementById('btn-new-chat')?.addEventListener('click', () => openNewConvModal(app));
+    const onNewChat = () => void create(app);
+    document.getElementById('btn-new-chat')?.addEventListener('click', onNewChat);
     app.$.convTrashTabBtn?.addEventListener('click', () => toggleTrashPanel(app));
     app.$.convTrashEmptyAll?.addEventListener('click', () => onEmptyTrashClick(app));
-    document.getElementById('placeholder-new-chat')?.addEventListener('click', () => openNewConvModal(app));
-    const closeNewConvModal = () => app.$.newConvModal.close();
-    document.getElementById('new-conv-cancel')?.addEventListener('click', closeNewConvModal);
-    document.getElementById('new-conv-close')?.addEventListener('click', closeNewConvModal);
-    document.getElementById('new-conv-form')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      void create(app);
-    });
+    document.getElementById('placeholder-new-chat')?.addEventListener('click', onNewChat);
     app.$.convSearchToggle?.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleConvSearchPanel(app);
@@ -755,9 +733,9 @@
     closeSearchPanel,
     cancelPendingDelete,
     upsertInList,
-    openNewConvModal,
     create,
     updateTitleTooltips,
     bindSidebarEvents,
+    patchConversationTitle,
   };
 })();

@@ -12,9 +12,14 @@ from app.constants import DEFAULT_CONVERSATION_TITLE
 from app.db import session as db_session
 from app.db.models import Message, MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository, PresetRepository
+from app.services.conversation_title_format import (
+    format_conversation_title_for_display,
+    strip_generic_conversation_title_prefix,
+)
 from app.services.conversation_title_service import (
     _excerpts_from_messages,
     _normalize_title,
+    generate_conversation_title,
     maybe_generate_conversation_title,
 )
 from tests.cleanup import record_test_conversation_id
@@ -32,8 +37,17 @@ def test_normalize_title_from_reasoning_with_quote() -> None:
         'и Рэйнбоу Дэш" - это 6 слов'
     )
     title = _normalize_title(raw)
-    assert title == "Создание изображения Твайлайт Спаркл и Рэйнбоу Дэш"
+    assert title == "Твайлайт Спаркл и Рэйнбоу Дэш"
     assert len(title.split()) <= 7
+
+
+def test_strip_generic_generation_prefix() -> None:
+    assert (
+        strip_generic_conversation_title_prefix("Генерация изображений Твайлайт в саду")
+        == "Твайлайт в саду"
+    )
+    assert strip_generic_conversation_title_prefix("Генерация изображений") == "Генерация изображений"
+    assert format_conversation_title_for_display("Генерация: портрет кота") == "портрет кота"
 
 
 def test_normalize_title_truncates_long_plain() -> None:
@@ -136,6 +150,48 @@ async def test_maybe_generate_skips_after_second_user_message(client: AsyncClien
 
     assert result is None
     llm.complete_plain_text.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_conversation_title_manual_overwrites_custom(
+    client: AsyncClient,
+    repo_conv_title: str,
+) -> None:
+    """Ручная генерация перезаписывает пользовательский заголовок."""
+    async with db_session.async_session_factory() as session:
+        preset = await PresetRepository(session).get_default()
+        assert preset is not None
+
+        conv_repo = ConversationRepository(session)
+        conv = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
+        conv_id = conv.id
+        record_test_conversation_id(conv_id)
+
+        msg_repo = MessageRepository(session)
+        await msg_repo.create(
+            conversation_id=conv_id,
+            role=MessageRole.USER,
+            content_text="Нарисуй закат над морем",
+        )
+        await msg_repo.create(
+            conversation_id=conv_id,
+            role=MessageRole.ASSISTANT,
+            content_text="Генерация завершена, вот закат.",
+        )
+        await session.commit()
+
+        llm = AsyncMock()
+        llm.complete_plain_text = AsyncMock(return_value="Закат над морем")
+
+        new_title = await generate_conversation_title(session, conv_id, llm)
+        await session.commit()
+
+    assert new_title == "Закат над морем"
+
+    async with db_session.async_session_factory() as session:
+        updated = await ConversationRepository(session).get_by_id(conv_id)
+    assert updated is not None
+    assert updated.title == "Закат над морем"
 
 
 @pytest.mark.asyncio

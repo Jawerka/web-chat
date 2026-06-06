@@ -4,6 +4,9 @@
 /* global escapeHtml, escapeAttr, mediaPreviewUrl, downloadMediaFile */
 
 const UPLOADS_LIMIT = 5000;
+const CARD_DRAG_MIME = 'application/x-upload-card-id';
+const ICON_GRIP =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg>';
 
 const ICON_SAVE =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
@@ -22,6 +25,8 @@ class GalleryUploadsApp {
     this.itemById = new Map();
     this._pendingDeleteId = null;
     this._pendingDeleteBtn = null;
+    this._dragCardId = null;
+    this._reorderSaving = false;
     this.lightbox = new UploadsRefLightbox();
     this.lightbox.onExtract = (item) => void this.extractMetadata(item);
     this.lightbox.onAttach = (item, btn) => void this.attachToNewChat(item, btn);
@@ -47,6 +52,7 @@ class GalleryUploadsApp {
     });
     this.bindDropzone();
     this.bindGrid();
+    this.bindReorder();
     this.bindSystemEvents();
     void this.refresh(true);
     this.openHashIfAny();
@@ -58,10 +64,17 @@ class GalleryUploadsApp {
     this._eventsSocket = new SystemEventsSocket({
       onGalleryUpdate: (msg) => {
         if (msg?.kind && msg.kind !== 'upload') return;
+        if (this._reorderSaving || this._dragCardId) return;
         void this.refresh(false);
       },
     });
     this._eventsSocket.connect();
+  }
+
+  _isCardReorderDrag(e) {
+    const types = e.dataTransfer?.types;
+    if (!types) return false;
+    return Array.from(types).includes(CARD_DRAG_MIME);
   }
 
   bindDropzone() {
@@ -69,21 +82,126 @@ class GalleryUploadsApp {
     if (!root) return;
     ['dragenter', 'dragover'].forEach((ev) => {
       root.addEventListener(ev, (e) => {
+        if (this._isCardReorderDrag(e)) return;
         e.preventDefault();
         root.classList.add('uploads-dragover');
       });
     });
     ['dragleave', 'drop'].forEach((ev) => {
       root.addEventListener(ev, (e) => {
+        if (this._isCardReorderDrag(e)) return;
         e.preventDefault();
         if (ev === 'dragleave' && root.contains(e.relatedTarget)) return;
         root.classList.remove('uploads-dragover');
       });
     });
     root.addEventListener('drop', (e) => {
+      if (this._isCardReorderDrag(e)) return;
       const files = e.dataTransfer?.files;
       if (files?.length) void this.uploadFiles(files);
     });
+  }
+
+  bindReorder() {
+    const grid = this.els.grid;
+    if (!grid || grid.dataset.reorderBound) return;
+    grid.dataset.reorderBound = '1';
+
+    grid.addEventListener('dragstart', (e) => {
+      const handle = e.target.closest('.gallery-card-drag');
+      const card = handle?.closest('.gallery-card');
+      if (!handle || !card) return;
+      this._dragCardId = card.dataset.id;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData(CARD_DRAG_MIME, this._dragCardId);
+      card.classList.add('is-dragging');
+      grid.classList.add('is-reordering');
+    });
+
+    grid.addEventListener('dragend', (e) => {
+      const card = e.target.closest('.gallery-card');
+      card?.classList.remove('is-dragging');
+      grid.classList.remove('is-reordering');
+      grid.querySelectorAll('.gallery-card.drop-before').forEach((el) => {
+        el.classList.remove('drop-before');
+      });
+      this._dragCardId = null;
+    });
+
+    grid.addEventListener('dragover', (e) => {
+      if (!this._isCardReorderDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const card = e.target.closest('.gallery-card');
+      grid.querySelectorAll('.gallery-card.drop-before').forEach((el) => {
+        el.classList.remove('drop-before');
+      });
+      if (card && card.dataset.id !== this._dragCardId) {
+        card.classList.add('drop-before');
+      }
+    });
+
+    grid.addEventListener('dragleave', (e) => {
+      const card = e.target.closest('.gallery-card');
+      if (card && !card.contains(e.relatedTarget)) {
+        card.classList.remove('drop-before');
+      }
+    });
+
+    grid.addEventListener('drop', (e) => {
+      if (!this._isCardReorderDrag(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dragId = e.dataTransfer.getData(CARD_DRAG_MIME) || this._dragCardId;
+      const targetCard = e.target.closest('.gallery-card');
+      grid.querySelectorAll('.gallery-card.drop-before').forEach((el) => {
+        el.classList.remove('drop-before');
+      });
+      if (!dragId || !targetCard || targetCard.dataset.id === dragId) return;
+      void this.reorderItems(dragId, targetCard.dataset.id);
+    });
+  }
+
+  reorderItems(dragId, targetId) {
+    const fromIdx = this.items.findIndex((i) => i.id === dragId);
+    const toIdx = this.items.findIndex((i) => i.id === targetId);
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+    const snapshot = this.items.map((i) => ({ ...i }));
+    const [moved] = this.items.splice(fromIdx, 1);
+    const insertIdx = this.items.findIndex((i) => i.id === targetId);
+    this.items.splice(insertIdx, 0, moved);
+    this.items.forEach((item, index) => {
+      item.gallery_sort_order = index;
+    });
+    this.itemById = new Map(this.items.map((i) => [i.id, i]));
+    this.lightbox.setItems(this.items);
+    this.renderGrid();
+    void this.persistOrder(snapshot);
+  }
+
+  async persistOrder(snapshot) {
+    if (this._reorderSaving) return;
+    this._reorderSaving = true;
+    const ids = this.items.map((i) => i.id);
+    try {
+      const res = await fetch('/api/gallery/uploads/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+    } catch (err) {
+      this.items = snapshot;
+      this.itemById = new Map(this.items.map((i) => [i.id, i]));
+      this.lightbox.setItems(this.items);
+      this.renderGrid();
+      this.flashStatus(err.message || 'Не удалось сохранить порядок', true);
+    } finally {
+      this._reorderSaving = false;
+    }
   }
 
   bindGrid() {
@@ -209,6 +327,7 @@ class GalleryUploadsApp {
     card.innerHTML = `
       <div class="gallery-card-media">
         <img src="${escapeAttr(thumb)}" alt="${escapeAttr(item.filename || '')}" loading="lazy" decoding="async">
+        <button type="button" class="gallery-card-drag" draggable="true" title="Перетащите для изменения порядка" aria-label="Изменить порядок">${ICON_GRIP}</button>
         <button type="button" class="gallery-card-action gallery-card-attach gallery-card-attach-tl" data-id="${escapeAttr(item.id)}" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">${ICON_ATTACH}</button>
         <div class="gallery-card-actions">
           <button type="button" class="gallery-card-action gallery-card-favorite${item.is_favorite ? ' is-favorite' : ''}" data-id="${escapeAttr(item.id)}" title="${item.is_favorite ? 'Убрать из избранного' : 'В избранное'}" aria-label="Избранное">${ICON_STAR}</button>

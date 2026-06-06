@@ -1,6 +1,6 @@
 """
 Извлечение метаданных Stable Diffusion из PNG (chunk parameters).
-Порт логики из refs/meta-sd-to-markdown/main.py.
+Извлечение SD prompt/negative/params из PNG/WebP (A1111 parameters chunk).
 """
 
 from __future__ import annotations

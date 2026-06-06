@@ -4,10 +4,9 @@ ETL: перенос данных из SQLite (LAN) в PostgreSQL.
 
 Перед запуском: остановите web-chat или работайте с копией файла БД.
 
-  cp data/db/web_chat.sqlite data/db/web_chat.sqlite.bak
   export DATABASE_URL=postgresql+asyncpg://webchat:SECRET@127.0.0.1:5432/web_chat
   python -m app.scripts.migrate_sqlite_to_postgres \\
-    --source sqlite+aiosqlite:///./data/db/web_chat.sqlite.bak \\
+    --source sqlite+aiosqlite:///path/to/backup.sqlite \\
     --target "$DATABASE_URL" \\
     --truncate-target --yes
 

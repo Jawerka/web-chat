@@ -69,7 +69,7 @@ mtmd_helper_bitmap_init_from_buf: failed to decode image bytes
 ### Галерея загрузок и размер БД
 
 - **Галерея загрузок** (`/gallery/uploads`): BLOB шифруются per-user (`users.media_token`); рост БД ≈ сумма загрузок всех пользователей, **без автоудаления**.
-- Мониторинг: периодически смотреть размер `data/web_chat.db` или PostgreSQL + число строк `media_assets` с `gallery_kind=upload`.
+- Мониторинг: размер PostgreSQL (`pg_database_size`) и число строк `media_assets` с `gallery_kind=upload`.
 - Квота в config пока не задана; при переполнении — удаление через UI или admin purge по пользователю.
 
 ---

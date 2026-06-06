@@ -21,6 +21,7 @@ from app.integrations.media_utils import (
     safe_filename,
     sniff_image_mime,
 )
+from app.integrations.sd_filename import resolve_upload_display_name
 from app.services.gallery_owner import require_gallery_owner_user
 from app.services.media_asset_crypto import (
     apply_sd_metadata_to_asset,
@@ -49,6 +50,7 @@ class UploadGalleryItem:
     sd_negative: str = ""
     sd_params: str = ""
     has_metadata: bool = False
+    gallery_sort_order: int | None = None
 
     def to_api_dict(self) -> dict:
         return {
@@ -65,7 +67,26 @@ class UploadGalleryItem:
             "sd_negative": self.sd_negative,
             "sd_params": self.sd_params,
             "has_metadata": self.has_metadata,
+            "gallery_sort_order": self.gallery_sort_order,
         }
+
+
+def _sort_upload_items(items: list[UploadGalleryItem]) -> None:
+    has_custom = any(i.gallery_sort_order is not None for i in items)
+    if has_custom:
+        items.sort(
+            key=lambda x: (
+                x.gallery_sort_order
+                if x.gallery_sort_order is not None
+                else 10**9,
+                -x.mtime,
+            ),
+        )
+        return
+    items.sort(
+        key=lambda x: (1 if x.is_favorite else 0, x.favorite_at or 0.0, x.mtime),
+        reverse=True,
+    )
 
 
 def _item_from_meta(meta, *, favorite_map: dict[str, datetime]) -> UploadGalleryItem:
@@ -87,6 +108,7 @@ def _item_from_meta(meta, *, favorite_map: dict[str, datetime]) -> UploadGallery
         sd_negative=meta.sd_negative or "",
         sd_params=meta.sd_params or "",
         has_metadata=meta.has_metadata,
+        gallery_sort_order=meta.gallery_sort_order,
     )
 
 
@@ -106,11 +128,34 @@ async def list_upload_gallery(
     )
     fav_map = await MediaFavoriteRepository(session).favorite_map(user.id)
     items = [_item_from_meta(r, favorite_map=fav_map) for r in rows if is_image_mime(r.mime_type)]
-    items.sort(
-        key=lambda x: (1 if x.is_favorite else 0, x.favorite_at or 0.0, x.mtime),
-        reverse=True,
-    )
+    _sort_upload_items(items)
     return items
+
+
+async def reorder_upload_gallery(
+    session: AsyncSession,
+    *,
+    request_user: RequestUser | None,
+    ordered_ids: list[uuid.UUID],
+) -> None:
+    user = await require_gallery_owner_user(session, request_user)
+    if not ordered_ids:
+        return
+    repo = MediaAssetRepository(session)
+    try:
+        await repo.set_upload_gallery_order(user.id, ordered_ids)
+    except PermissionError as exc:
+        raise PermissionError("forbidden") from exc
+
+
+async def next_upload_sort_order(
+    session: AsyncSession,
+    owner_user_id: uuid.UUID,
+) -> int | None:
+    repo = MediaAssetRepository(session)
+    if not await repo.upload_gallery_has_custom_order(owner_user_id):
+        return None
+    return (await repo.max_upload_sort_order(owner_user_id)) + 1
 
 
 async def get_upload_item(
@@ -133,6 +178,14 @@ async def get_upload_item(
         sd = extract_sd_metadata_from_bytes(plain)
         if sd and sd.has_metadata:
             apply_sd_metadata_to_asset(asset, sd)
+            new_name = resolve_upload_display_name(
+                plain,
+                mime_type=asset.mime_type,
+                fallback_name=asset.original_name,
+                created_at=asset.created_at,
+            )
+            if new_name and new_name != asset.original_name:
+                asset.original_name = new_name
             await session.flush()
     from app.db.repositories import GalleryAssetMeta
 
@@ -144,6 +197,7 @@ async def get_upload_item(
         size_bytes=len(asset.data),
         has_thumb=asset.thumb_data is not None,
         gallery_kind=asset.gallery_kind,
+        gallery_sort_order=asset.gallery_sort_order,
         sd_prompt=asset.sd_prompt,
         sd_negative=asset.sd_negative,
         sd_params=asset.sd_params,
@@ -165,14 +219,21 @@ async def upload_to_gallery(
     user = await require_gallery_owner_user(session, request_user)
     thumb = make_asset_thumb_bytes(data)
     sd = extract_sd_metadata_from_bytes(data)
+    sort_order = await next_upload_sort_order(session, user.id)
+    display_name = resolve_upload_display_name(
+        data,
+        mime_type=mime_type,
+        fallback_name=original_name,
+    )
     return await encrypt_upload_payload(
         session,
         user,
         data=data,
         thumb_data=thumb,
         mime_type=mime_type,
-        original_name=original_name,
+        original_name=display_name,
         sd=sd,
+        gallery_sort_order=sort_order,
     )
 
 
@@ -224,7 +285,9 @@ async def promote_disk_to_uploads(
 ) -> MediaAsset:
     """Файл из data/generated/ → копия в галерею загрузок."""
     user = await require_gallery_owner_user(session, request_user)
-    safe = safe_filename(filename)
+    from app.integrations.media_utils import safe_generated_filename
+
+    safe = safe_generated_filename(filename) or safe_filename(filename)
     path = resolve_generated_file(safe, thumbs=False)
     data = path.read_bytes()
     mime = sniff_image_mime(data) or "image/png"
@@ -232,12 +295,19 @@ async def promote_disk_to_uploads(
         raise ValueError("Только изображения")
     sd = extract_sd_metadata_from_bytes(data)
     thumb = make_asset_thumb_bytes(data)
+    sort_order = await next_upload_sort_order(session, user.id)
+    display_name = resolve_upload_display_name(
+        data,
+        mime_type=mime,
+        fallback_name=safe,
+    )
     return await encrypt_upload_payload(
         session,
         user,
         data=data,
         thumb_data=thumb,
         mime_type=mime,
-        original_name=safe,
+        original_name=display_name,
         sd=sd,
+        gallery_sort_order=sort_order,
     )

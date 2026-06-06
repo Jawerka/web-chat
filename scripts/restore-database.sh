@@ -128,11 +128,16 @@ import json
 import sys
 
 m = json.load(open(sys.argv[1], encoding="utf-8"))
+site = m.get("site_files") or {}
+legacy = m.get("legacy_sqlite_included")
 print(m.get("database_backend", ""))
 print(m.get("postgres_dump_format", "custom"))
 print(m.get("postgres_dump", ""))
 print(",".join(m.get("sqlite_files") or []))
-print("1" if m.get("legacy_sqlite_included") else "0")
+print("1" if legacy else "0")
+print(m.get("backup_type", "database"))
+print("1" if site.get("generated") else "0")
+print("1" if site.get("uploads") else "0")
 PY
 }
 
@@ -142,8 +147,14 @@ PG_FMT="${_MF[1]}"
 PG_DUMP_REL="${_MF[2]}"
 SQLITE_CSV="${_MF[3]}"
 LEGACY_IN_ARCHIVE="${_MF[4]}"
+BACKUP_TYPE="${_MF[5]:-database}"
+SITE_GENERATED_IN_ARCHIVE="${_MF[6]:-0}"
+SITE_UPLOADS_IN_ARCHIVE="${_MF[7]:-0}"
 
-echo "Бэкап: backend=${BACKEND}, stamp из manifest"
+echo "Бэкап: backend=${BACKEND}, type=${BACKUP_TYPE}"
+if [[ "${SITE_GENERATED_IN_ARCHIVE}" == "1" || "${SITE_UPLOADS_IN_ARCHIVE}" == "1" ]]; then
+  echo "В архиве также site-файлы (generated=${SITE_GENERATED_IN_ARCHIVE}, uploads=${SITE_UPLOADS_IN_ARCHIVE}) — восстанавливается только БД."
+fi
 
 _stop_web_chat() {
   local stopped=0

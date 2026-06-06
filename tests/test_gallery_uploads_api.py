@@ -62,3 +62,25 @@ async def test_uploads_cross_user_forbidden(
     r_ok = await client.get(f"/media/asset/{upload_id}", headers=alice)
     assert r_ok.status_code == 200
     assert r_ok.content == MINIMAL_PNG
+
+
+@pytest.mark.asyncio
+async def test_uploads_reorder_persists(client: AsyncClient) -> None:
+    ids: list[str] = []
+    for i in range(3):
+        files = {"files": (f"up{i}.png", MINIMAL_PNG, "image/png")}
+        r = await client.post("/api/gallery/uploads", files=files)
+        assert r.status_code == 200
+        ids.append(r.json()["items"][0]["id"])
+
+    reversed_ids = list(reversed(ids))
+    r_reorder = await client.post(
+        "/api/gallery/uploads/reorder",
+        json={"ids": reversed_ids},
+    )
+    assert r_reorder.status_code == 200
+
+    r_list = await client.get("/api/gallery/uploads")
+    assert r_list.status_code == 200
+    listed = [i["id"] for i in r_list.json()["images"] if i["id"] in ids]
+    assert listed == reversed_ids

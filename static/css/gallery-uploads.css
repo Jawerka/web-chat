@@ -1,7 +1,50 @@
-/* Галерея загрузок: только drag-and-drop поверх gallery.css */
+/* Галерея загрузок: drag-and-drop файлов и сортировка карточек */
 
 .gallery-page.uploads-dragover {
   outline: 2px dashed var(--color-primary);
   outline-offset: 4px;
   border-radius: var(--radius-md);
+}
+
+.gallery-card-drag {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgb(0 0 0 / 0.45);
+  color: #fff;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.gallery-card:hover .gallery-card-drag,
+.gallery-card.is-dragging .gallery-card-drag,
+.gallery-grid.is-reordering .gallery-card-drag {
+  opacity: 1;
+}
+
+.gallery-card-drag:active {
+  cursor: grabbing;
+}
+
+.gallery-card.is-dragging {
+  opacity: 0.45;
+}
+
+.gallery-card.drop-before {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.gallery-grid.is-reordering .gallery-card {
+  transition: outline-color 0.15s var(--ease);
 }

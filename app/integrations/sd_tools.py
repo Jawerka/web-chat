@@ -7,6 +7,7 @@ generate_image — txt2img через Automatic1111 WebUI API.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import random
@@ -17,9 +18,6 @@ from typing import TYPE_CHECKING, TypeAlias
 
 import requests
 from fastmcp import FastMCP
-from PIL import Image as PILImage
-from PIL import PngImagePlugin
-
 from app.config import settings
 from app.integrations.img2img_service import (
     Img2ImgRequest,
@@ -36,14 +34,11 @@ from app.integrations.img2img_service import (
     validate_img2img_request,
 )
 from app.integrations.media_utils import (
-    GENERATED_ROOT,
-    generate_filename,
     generated_media_url,
     generated_thumb_url,
-    make_thumbnail,
     resolve_trusted_generated_source,
-    save_image_from_base64,
 )
+from app.integrations.sd_filename import extract_seed_from_parameters, save_sd_generated_image
 from app.integrations.sd_batch import SD_BATCH_SIZE, clamp_txt2img_n_iter
 from app.integrations.sd_http import SdUnavailableError, sd_post_json
 from app.integrations.runtime_config import resolve_sd_webui_url
@@ -191,21 +186,12 @@ def generate_image(
 
     results: list[dict[str, str | int]] = []
     for img_b64 in images_b64:
-        filename = save_image_from_base64(img_b64)
-        make_thumbnail(filename)
-
-        if description or png_info_text:
-            try:
-                img_path = GENERATED_ROOT / filename
-                with PILImage.open(img_path) as img:
-                    meta = PngImagePlugin.PngInfo()
-                    if png_info_text:
-                        meta.add_text("parameters", png_info_text)
-                    if description:
-                        meta.add_text("Description", description)
-                    img.save(img_path, pnginfo=meta)
-            except OSError as exc:
-                logger.warning("Метаданные PNG для %s: %s", filename, exc)
+        filename, _thumb = save_sd_generated_image(
+            img_b64,
+            parameters_text=png_info_text,
+            seed=current_seed,
+            description=description,
+        )
 
         results.append(
             {
@@ -260,25 +246,18 @@ def _save_img2img_outputs(
 ) -> list[dict[str, str | int | float]]:
     """Сохранить результаты одного POST /img2img."""
     results: list[dict[str, str | int | float]] = []
+    parameters_text = png_info_text or png_params
+    extra: dict[str, str] = {"Init image": prepared.source_name}
+    if info_text and info_text != parameters_text:
+        extra["info"] = info_text
     for img_b64 in images_b64:
-        filename = save_image_from_base64(img_b64)
-        thumb_name = make_thumbnail(filename)
-
-        try:
-            img_path = GENERATED_ROOT / filename
-            with PILImage.open(img_path) as img:
-                meta = PngImagePlugin.PngInfo()
-                parameters_text = png_info_text or png_params
-                if parameters_text:
-                    meta.add_text("parameters", parameters_text)
-                if info_text and info_text != parameters_text:
-                    meta.add_text("info", info_text)
-                if description:
-                    meta.add_text("Description", description)
-                meta.add_text("Init image", prepared.source_name)
-                img.save(img_path, pnginfo=meta)
-        except OSError as exc:
-            logger.warning("Метаданные PNG для %s: %s", filename, exc)
+        filename, thumb_name = save_sd_generated_image(
+            img_b64,
+            parameters_text=parameters_text,
+            seed=current_seed,
+            extra_text=extra,
+            description=description,
+        )
 
         item: dict[str, str | int | float] = {
             "filename": filename,
@@ -604,11 +583,21 @@ def upscale_images(
         if not upscaled_b64:
             return f"Ошибка апскейла для {url_or_path}: {last_error}"
 
-        filename = save_image_from_base64(
+        source_params = ""
+        try:
+            from PIL import Image as PILImage
+
+            with PILImage.open(io.BytesIO(img_data)) as src_img:
+                source_params = (src_img.info.get("parameters") or "").strip()
+        except Exception:
+            source_params = ""
+        source_seed = extract_seed_from_parameters(source_params)
+        filename, thumb_name = save_sd_generated_image(
             upscaled_b64,
-            generate_filename(prefix=f"upscaled_{Path(original_name).stem}"),
+            parameters_text=source_params,
+            seed=source_seed,
+            fallback_name=f"upscaled_{Path(original_name).stem}.png",
         )
-        thumb_name = make_thumbnail(filename)
         entry: dict[str, str] = {
             "filename": filename,
             "url": generated_media_url(filename, absolute=True, for_llm=True),

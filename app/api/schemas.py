@@ -28,6 +28,13 @@ class ConversationUpdate(BaseModel):
     preset_id: UUID | None = None
 
 
+class GenerateTitleCreate(BaseModel):
+    """Ручная генерация названия беседы через LLM."""
+
+    model: str | None = Field(None, description="Переопределение модели LLM")
+    llm_base_url: str | None = Field(None, description="Базовый URL LLM API из настроек чата")
+
+
 class ConversationOut(BaseModel):
     """Беседа в ответе API."""
 

@@ -23,13 +23,6 @@ from app.config import settings
 print(shell_exports(settings.database_url))
 ")"
 
-  {
-    echo "host=${PGHOST}"
-    echo "port=${PGPORT}"
-    echo "database=${PGDATABASE}"
-    echo "user=${PGUSER}"
-  } >"${dest_pg_dir}/connection.txt"
-
   if [[ "${dump_format}" == "plain" ]]; then
     pg_dump -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${PGDATABASE}" \
       --no-owner --no-acl | gzip -9 >"${dest_pg_dir}/web_chat.sql.gz"

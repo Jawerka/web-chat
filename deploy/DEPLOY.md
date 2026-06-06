@@ -316,7 +316,7 @@ Retention в `.env`:
 |--------|------------|
 | `scripts/backup-database.sh` | Бэкап БД → `data/backups/database/` |
 | `scripts/restore-database.sh` | Восстановление (`--list`, `--index`, `--stamp`) |
-| `scripts/backup-all.sh` | БД + опционально `data/generated`, `data/uploads` |
+| `scripts/backup-all.sh` | Один архив: БД + опционально `data/generated`, `data/uploads` |
 | `deploy/backup-database.sh` | Production: бэкап БД |
 | `deploy/restore-database.sh` | Production: восстановление |
 
