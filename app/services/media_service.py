@@ -25,8 +25,8 @@ from app.integrations.media_utils import (
     asset_media_url,
     asset_preview_url,
     asset_thumb_url,
-    compress_image_for_llm,
     is_image_mime,
+    prepare_image_for_llm_vision,
     make_asset_preview_bytes,
     make_asset_thumb_bytes,
     parse_asset_id_from_url,
@@ -180,11 +180,17 @@ class MediaService:
         asset_id: uuid.UUID,
         *,
         request_user: RequestUser | None = None,
+        trusted_internal: bool = False,
     ) -> MediaAsset | None:
         asset = await self._repo.get_by_id(asset_id)
         if asset is None:
             return None
-        await assert_gallery_media_access(self._session, asset, request_user)
+        await assert_gallery_media_access(
+            self._session,
+            asset,
+            request_user,
+            trusted_internal=trusted_internal,
+        )
         return asset
 
     async def get_bytes(
@@ -192,9 +198,14 @@ class MediaService:
         asset_id: uuid.UUID,
         *,
         request_user: RequestUser | None = None,
+        trusted_internal: bool = False,
     ) -> tuple[bytes, str] | None:
         try:
-            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+            asset = await self._asset_for_media_read(
+                asset_id,
+                request_user=request_user,
+                trusted_internal=trusted_internal,
+            )
             if asset is None:
                 return None
             data = await self._plaintext_for_asset(asset)
@@ -248,11 +259,16 @@ class MediaService:
         asset_id: uuid.UUID,
         *,
         request_user: RequestUser | None = None,
+        trusted_internal: bool = False,
     ) -> tuple[bytes, str] | None:
         from app.services.media_asset_crypto import decrypt_asset_thumb, load_owner_for_asset
 
         try:
-            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+            asset = await self._asset_for_media_read(
+                asset_id,
+                request_user=request_user,
+                trusted_internal=trusted_internal,
+            )
             if asset is None:
                 return None
             owner = await load_owner_for_asset(self._session, asset)
@@ -275,13 +291,22 @@ class MediaService:
         asset_id: uuid.UUID,
         *,
         request_user: RequestUser | None = None,
+        trusted_internal: bool = False,
     ) -> tuple[bytes, str] | None:
         """Облегчённое WebP-превью (из thumb или полного кадра)."""
         try:
-            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+            asset = await self._asset_for_media_read(
+                asset_id,
+                request_user=request_user,
+                trusted_internal=trusted_internal,
+            )
             if asset is None:
                 return None
-            thumb_result = await self.get_thumb_bytes(asset_id, request_user=request_user)
+            thumb_result = await self.get_thumb_bytes(
+                asset_id,
+                request_user=request_user,
+                trusted_internal=trusted_internal,
+            )
             source = thumb_result[0] if thumb_result else await self._plaintext_for_asset(asset)
         except PermissionError:
             raise
@@ -290,41 +315,63 @@ class MediaService:
         preview = await asyncio.to_thread(make_asset_preview_bytes, source)
         if preview:
             return preview, "image/webp"
-        return await self.get_thumb_bytes(asset_id, request_user=request_user)
+        return await self.get_thumb_bytes(
+            asset_id,
+            request_user=request_user,
+            trusted_internal=trusted_internal,
+        )
 
     async def get_llm_bytes(
         self,
         asset_id: uuid.UUID,
         *,
         request_user: RequestUser | None = None,
+        trusted_internal: bool = False,
     ) -> tuple[bytes, str] | None:
         """Байты для vision API: сначала llm_data без data BLOB; иначе сжатие (P4.3)."""
         try:
-            asset = await self._asset_for_media_read(asset_id, request_user=request_user)
+            asset = await self._asset_for_media_read(
+                asset_id,
+                request_user=request_user,
+                trusted_internal=trusted_internal,
+            )
         except PermissionError:
             raise
         if asset is None:
             return None
 
-        cached = await self._repo.get_cached_llm_data(asset_id)
-        if cached is not None:
-            data, mime_type = cached
-            return data, sniff_image_mime(data) or mime_type or "image/jpeg"
-
         try:
             data = await self._plaintext_for_asset(asset)
         except ValueError:
             return None
-        mime_type = asset.mime_type
-        if len(data) <= settings.llm_vision_max_bytes:
-            return data, mime_type
-        compressed = await asyncio.to_thread(
-            compress_image_for_llm,
+
+        cached = await self._repo.get_cached_llm_data(asset_id)
+        if cached is not None:
+            cached_data, cached_mime = cached
+            try:
+                prepared = await asyncio.to_thread(
+                    prepare_image_for_llm_vision,
+                    cached_data,
+                    cached_mime or asset.mime_type,
+                )
+                return prepared
+            except Exception as exc:
+                logger.warning(
+                    "llm_data cache invalid for %s, regenerate: %s",
+                    asset_id,
+                    exc,
+                )
+                await self._repo.clear_llm_data(asset_id)
+
+        prepared = await asyncio.to_thread(
+            prepare_image_for_llm_vision,
             data,
-            mime_type,
+            asset.mime_type,
         )
-        await self._repo.set_llm_data(asset_id, compressed[0])
-        return compressed
+        out_data, _out_mime = prepared
+        if cached is None or cached[0] != out_data:
+            await self._repo.set_llm_data(asset_id, out_data)
+        return prepared
 
     async def normalize_image_url(
         self,
@@ -443,14 +490,27 @@ class MediaService:
             pending_meta.append((filename, path))
 
         if pending:
+            owner_user_id: uuid.UUID | None = None
+            if conversation_id is not None:
+                from app.db.repositories import ConversationRepository
+
+                conv = await ConversationRepository(self._session).get_by_id(conversation_id)
+                if conv is not None:
+                    owner_user_id = conv.owner_user_id
+
             logger.info(
-                "ingest_sd_output_files: %d файл(ов), conv=%s",
+                "ingest_sd_output_files: %d файл(ов), conv=%s owner=%s",
                 len(pending),
                 conversation_id,
+                owner_user_id,
             )
             registry = MediaRegistry(self._session)
             try:
-                registered = await registry.register_batch(pending)
+                registered = await registry.register_batch(
+                    pending,
+                    gallery_kind=GalleryKind.GENERATION.value,
+                    owner_user_id=owner_user_id,
+                )
             except Exception as exc:
                 logger.error(
                     "Не удалось сохранить изображения в БД (%d шт.): %s",

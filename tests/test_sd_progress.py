@@ -33,6 +33,27 @@ def test_fetch_sd_progress_active_job() -> None:
     assert "9/22" in snap["detail"]
 
 
+def test_fetch_sd_progress_includes_preview() -> None:
+    tiny_png_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "progress": 0.2,
+        "state": {"sampling_step": 2, "sampling_steps": 10, "job_count": 1},
+        "current_image": tiny_png_b64,
+    }
+    mock_session = MagicMock()
+    mock_session.get.return_value = mock_resp
+
+    with patch("app.integrations.sd_progress.get_sd_session", return_value=mock_session):
+        snap = fetch_sd_progress("http://sd.test:7860")
+
+    assert snap is not None
+    assert snap["preview"] == f"data:image/png;base64,{tiny_png_b64}"
+
+
 def test_fetch_sd_progress_idle() -> None:
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()

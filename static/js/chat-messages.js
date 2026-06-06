@@ -128,6 +128,9 @@
 
   const MESSAGE_STATUS_HTML = `
   <div class="message-status" role="status" aria-live="polite">
+    <div class="message-status-preview-wrap hidden" aria-hidden="true">
+      <img class="message-status-preview" alt="" decoding="async" />
+    </div>
     <div class="message-status-pill">
       <span class="message-status-dots" aria-hidden="true">
         <span></span><span></span><span></span>

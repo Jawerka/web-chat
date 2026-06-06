@@ -66,7 +66,7 @@ worst quality, low quality, lowres, bad anatomy, deformed, extra limbs, watermar
 | 16:9        | 1280×768  |
 | 9:16        | 768×1280  |
 
-Несколько вариантов — один вызов с `count` (до 10).
+Несколько вариантов — один вызов с `count` (n_iter, лимит в SD_TXT2IMG_MAX_N_ITER).
 
 ## По умолчанию
 

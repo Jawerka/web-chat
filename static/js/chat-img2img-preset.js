@@ -94,7 +94,7 @@
   function stepCountField(input, delta) {
     if (!input) return;
     const min = 1;
-    const max = 10;
+    const max = 12;
     let n = clampInt(String(input.value ?? '').trim(), min, max);
     if (n == null) n = min;
     n = Math.min(max, Math.max(min, n + delta));
@@ -124,7 +124,7 @@
     const normalize = () => {
       const raw = String(el.value ?? '').trim();
       if (!raw) return;
-      const n = clampInt(raw, 1, 10);
+      const n = clampInt(raw, 1, 12);
       if (n != null) el.value = String(n);
     };
     el.addEventListener('blur', normalize);
@@ -154,7 +154,7 @@
   }
 
   function imageCountPhrase(count) {
-    const n = clampInt(count, 1, 10);
+    const n = clampInt(count, 1, 12);
     if (n == null) return null;
     const mod10 = n % 10;
     const mod100 = n % 100;

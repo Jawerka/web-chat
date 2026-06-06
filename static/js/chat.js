@@ -1910,6 +1910,7 @@ class ChatApp {
       tool: msg.tool,
       percent: msg.percent,
       detail: msg.detail,
+      preview: msg.preview,
     });
     this._scheduleScrollToBottom();
   }
@@ -2650,6 +2651,50 @@ class ChatApp {
     this.connectSocket();
   }
 
+  _ensureStatusPreviewNodes(status) {
+    let wrap = status.querySelector('.message-status-preview-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.className = 'message-status-preview-wrap hidden';
+      wrap.setAttribute('aria-hidden', 'true');
+      const img = document.createElement('img');
+      img.className = 'message-status-preview';
+      img.alt = '';
+      img.decoding = 'async';
+      wrap.appendChild(img);
+      const pill = status.querySelector('.message-status-pill');
+      if (pill) status.insertBefore(wrap, pill);
+      else status.prepend(wrap);
+    }
+    return {
+      wrap,
+      img: wrap.querySelector('.message-status-preview'),
+    };
+  }
+
+  _setStatusPreview(status, previewUrl) {
+    if (!status) return;
+    const { wrap, img } = this._ensureStatusPreviewNodes(status);
+    const msgEl = status.closest('.chat-message');
+    const url = (previewUrl || '').trim();
+    if (!url || !img) {
+      wrap.classList.add('hidden');
+      wrap.setAttribute('aria-hidden', 'true');
+      img?.removeAttribute('src');
+      status.classList.remove('has-preview');
+      msgEl?.classList.remove('has-live-preview');
+      return;
+    }
+    if (img.getAttribute('src') !== url) {
+      img.src = url;
+    }
+    img.alt = 'Превью генерации';
+    wrap.classList.remove('hidden');
+    wrap.setAttribute('aria-hidden', 'false');
+    status.classList.add('has-preview');
+    msgEl?.classList.add('has-live-preview');
+  }
+
   showProgress(text, opts = {}) {
     if (!this.streamEl) return;
     const status = this.streamEl.querySelector('.message-status');
@@ -2678,7 +2723,12 @@ class ChatApp {
       }
     }
 
+    if (opts.preview) {
+      this._setStatusPreview(status, opts.preview);
+    }
+
     status.classList.remove('hidden');
+    this.streamEl.classList.toggle('has-live-preview', status.classList.contains('has-preview'));
     this.streamEl.classList.add('waiting', 'is-busy');
     if (opts.stage) {
       status.dataset.stage = opts.stage;
@@ -2688,6 +2738,8 @@ class ChatApp {
   hideProgress() {
     if (!this.streamEl) return;
     const status = this.streamEl.querySelector('.message-status');
+    if (status) this._setStatusPreview(status, null);
+    this.streamEl?.classList.remove('has-live-preview');
     status?.classList.add('hidden');
     this.streamEl.classList.remove('is-busy');
     const hasBody = this.streamEl.classList.contains('has-content')

@@ -7,6 +7,7 @@ JSON-схемы инструментов для OpenAI-compatible API.
 from __future__ import annotations
 
 from app.config import settings
+from app.integrations.sd_batch import SD_BATCH_SIZE
 
 # Листинг generated/ — не SD HTTP; отдельный потолок от request_timeout.
 _GALLERY_LIST_TIMEOUT_SEC = 120
@@ -21,7 +22,8 @@ TOOL_DEFINITIONS: list[dict] = [
                 "Только для новой картинки с нуля. Пресет беседы: «Генерация с нуля (txt2img)». "
                 "После вызова картинки автоматически появятся в чате; в тексте ответа "
                 "пользователю URL и markdown-картинки не нужны. "
-                "Для нескольких картинок (до 10) укажи count за один вызов."
+                f"Для нескольких картинок укажи count за один вызов "
+                f"(n_iter при batch_size={SD_BATCH_SIZE}, до {settings.sd_txt2img_max_n_iter})."
             ),
             "parameters": {
                 "type": "object",
@@ -45,8 +47,11 @@ TOOL_DEFINITIONS: list[dict] = [
                         "type": "integer",
                         "default": 1,
                         "minimum": 1,
-                        "maximum": 10,
-                        "description": "Сколько изображений сгенерировать за один вызов (1–10)",
+                        "maximum": settings.sd_txt2img_max_n_iter,
+                        "description": (
+                            f"Сколько изображений (n_iter при batch_size={SD_BATCH_SIZE}, "
+                            f"1–{settings.sd_txt2img_max_n_iter})"
+                        ),
                     },
                 },
                 "required": ["prompt"],

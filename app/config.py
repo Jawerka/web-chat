@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     sd_cfg_scale: float = 5.0
     sd_width: int = 1024
     sd_height: int = 1024
+    # txt2img: n_iter = count при batch_size=1; верхняя граница за один вызов generate_image.
+    sd_txt2img_max_n_iter: int = 50
+    # Live preview из /sdapi/v1/progress (current_image) во время SD-инструментов.
+    sd_preview_enabled: bool = True
+    sd_preview_min_interval_sec: float = 0.6
+    # Пропускать кадры, если base64 current_image длиннее (защита WS/памяти).
+    sd_preview_max_b64_chars: int = 600_000
     # HTTP ReadTimeout для тяжелых txt2img/img2img запросов.
     # Дефолт 600с для медленных окружений иногда недостаточен.
     request_timeout: int = 1200

@@ -12,7 +12,8 @@ import logging
 import random
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, TypeAlias
 
 import requests
 from fastmcp import FastMCP
@@ -43,6 +44,7 @@ from app.integrations.media_utils import (
     resolve_trusted_generated_source,
     save_image_from_base64,
 )
+from app.integrations.sd_batch import SD_BATCH_SIZE, clamp_txt2img_n_iter
 from app.integrations.sd_http import SdUnavailableError, sd_post_json
 from app.integrations.runtime_config import resolve_sd_webui_url
 
@@ -50,6 +52,9 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# Вызывается из потока SD после сохранения каждого варианта на диск (см. ToolExecutor).
+Img2ImgVariantCallback: TypeAlias = Callable[[dict[str, str | int | float]], None]
 
 _session: requests.Session | None = None
 
@@ -90,7 +95,7 @@ def generate_image(
     logger.info(
         "SD txt2img запрос: prompt=%r count=%d %dx%d steps=%d seed=%s url=%s",
         prompt[:80],
-        max(1, min(10, int(count))),
+        clamp_txt2img_n_iter(count),
         width,
         height,
         steps,
@@ -114,7 +119,7 @@ def generate_image(
         raise ValueError("cfg_scale должен быть от 1 до 30")
 
     current_seed = seed if seed != -1 else random.randint(0, 2**32 - 1)
-    image_count = max(1, min(10, int(count)))
+    n_iter = clamp_txt2img_n_iter(count)
 
     payload = {
         "prompt": prompt,
@@ -126,8 +131,8 @@ def generate_image(
         "sampler_name": sampler_name or settings.sd_sampler,
         "scheduler": scheduler or settings.sd_schedule_type,
         "seed": current_seed,
-        "n_iter": image_count,
-        "batch_size": 1,
+        "n_iter": n_iter,
+        "batch_size": SD_BATCH_SIZE,
         "tiling": tiling,
         "restore_faces": restore_faces,
     }
@@ -420,6 +425,7 @@ def img2img(
     resize_mode: int = 0,
     description: str = "",
     sd_webui_url: str | None = None,
+    on_variant_saved: Img2ImgVariantCallback | None = None,
 ) -> str:
     """
     img2img: доработка существующего изображения через SD WebUI.
@@ -427,6 +433,7 @@ def img2img(
     init_image_url — URL или имя файла (если bytes не переданы из ToolExecutor).
     width/height = 0 — размер как у исходника (после prepare_init_image).
     denoising_strengths — несколько значений denoise с одним и тем же init (до 12).
+    on_variant_saved — синхронный callback после каждого сохранённого варианта (для стрима в чат).
     """
     if init_image_bytes is None:
         if not init_image_url.strip():
@@ -483,6 +490,9 @@ def img2img(
             sd_webui_url=sd_webui_url,
         )
         all_results.extend(items)
+        if on_variant_saved:
+            for item in items:
+                on_variant_saved(item)
 
     denoise_label = (
         ", ".join(f"{v:g}" for v in strengths)

@@ -95,9 +95,13 @@ def progress_from_sd_snapshot(
     stage = stage_for_tool(tool_name)
     percent = snapshot.get("percent")
     detail = snapshot.get("detail") or ""
-    return build_progress(
+    payload = build_progress(
         stage,
         tool=tool_name,
         percent=percent,
         detail=detail,
     )
+    preview = snapshot.get("preview")
+    if isinstance(preview, str) and preview.startswith("data:image/"):
+        payload["preview"] = preview
+    return payload

@@ -18,6 +18,7 @@ import requests
 from PIL import Image
 
 from app.config import settings
+from app.integrations.sd_batch import SD_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,7 @@ def build_img2img_payload(
         "sampler_name": req.sampler_name or settings.sd_sampler,
         "scheduler": req.scheduler or settings.sd_schedule_type,
         "seed": seed,
-        "batch_size": 1,
+        "batch_size": SD_BATCH_SIZE,
         "n_iter": 1,
         "tiling": req.tiling,
         "restore_faces": req.restore_faces,

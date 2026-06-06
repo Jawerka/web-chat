@@ -413,12 +413,13 @@ GENERATED_RETENTION_DAYS=30
 #### Пайплайн сгенерированных изображений (текущая реализация)
 
 ```text
-generate_image (count 1–10, n_iter=count, batch_size=1)
+generate_image (count 1…SD_TXT2IMG_MAX_N_ITER, n_iter=count, batch_size=1)
   → SD WebUI → base64 → data/generated/{file}.png + thumbs/
-  → ingest_sd_output_files → MediaAsset в SQLite
+  → ingest_sd_output_files → MediaAsset (gallery_kind=generation)
   → публичный URL: {PUBLIC_BASE_URL}/media/asset/{uuid}
   → content_json.images + image_asset_ids; WS type=image
-  → UI: .message-images (не markdown в content_text)
+  → UI: .message-images; live preview: WS progress.preview (SD /sdapi/v1/progress)
+  → /gallery: list по gallery_kind=generation
 ```
 
 Legacy `/media/generated/{file}` остаётся для отладки и импорта старых URL; в новых ответах ассистента предпочтителен `/media/asset/`.
@@ -432,8 +433,9 @@ user: текст + image (attachment → MediaAsset)
   → LLM vision (/media/asset/{id}/llm) + подсказки attachment_id / init_image_url
   → tool_call img2img(prompt, denoising_strength, init_image_url | attachment_id)
   → ToolExecutor: загрузка init (fallback на вложение user-сообщения)
-  → SD POST /sdapi/v1/img2img → data/generated/ → ingest → /media/asset/{uuid}
-  → role=tool: текст + URL; WS image + content_json.images в ответе ассистента
+  → SD POST /sdapi/v1/img2img (цикл по denoising_strengths) → data/generated/
+  → on_variant_saved → ingest → WS image по каждому варианту
+  → role=tool: текст + URL; content_json.images в ответе ассистента
   → (опционально) ещё раунд LLM — финальный текст пользователю
 ```
 
@@ -844,7 +846,7 @@ ALLOWED_MIMES = frozenset({
 - [x] `GET /media/generated/{filename}`, `/media/generated/thumbs/{filename}`.
 - [x] Расширить `/health` — запрос к SD.
 
-**Отличие от image-gen:** параметр `count` (1–10) → `n_iter=count`, `batch_size=1` за один вызов tool (в image-gen — только `n_iter: 1`, несколько картинок = несколько вызовов).
+**Отличие от image-gen:** параметр `count` (1…`SD_TXT2IMG_MAX_N_ITER`, default 50) → `n_iter=count`, `batch_size=1` за один вызов tool.
 
 **URL после ingest (основной путь в чате):**
 
@@ -1127,7 +1129,7 @@ TOOL_DEFINITIONS: list[dict] = [
           "count": {
             "type": "integer",
             "default": 1,
-            "description": "Число вариантов (1–10), n_iter в SD",
+            "description": "Число вариантов (1…SD_TXT2IMG_MAX_N_ITER), n_iter при batch_size=1",
           },
         },
         "required": ["prompt"],
@@ -1616,7 +1618,7 @@ Alias: латиница, цифры, `_`, `-`; в чате — `@alias`.
 | Порты 8080/8081 | 8090 (+8091 MCP) |
 | Нет истории диалогов | Полная история |
 | Клиент — внешний LLM | LLM встроен в оркестратор |
-| `n_iter: 1`, N картинок = N вызовов | `count` 1–10 за один `generate_image` |
+| `n_iter: 1`, N картинок = N вызовов | `count` до `SD_TXT2IMG_MAX_N_ITER` за один `generate_image` |
 | URL только `/media/generated/` | Основной путь: `/media/asset/{uuid}` в БД |
 | LLM вставляет markdown в ответ | UI: сетка под текстом, без `![...](url)` в `content_text` |
 
@@ -1866,7 +1868,7 @@ Timer: `web-chat-cleanup.timer` → `run_cleanup` (retention из `.env`).
 
 Когда пользователь просит создать, нарисовать, сгенерировать, изменить картинку:
 1. Сформируй детальный prompt (на английском предпочтительно для SD).
-2. Вызови generate_image (для нескольких вариантов — параметр count за один вызов, до 10).
+2. Вызови generate_image (для нескольких вариантов — параметр count за один вызов, до SD_TXT2IMG_MAX_N_ITER).
 3. В текстовом ответе НЕ вставляй markdown-картинки (![...](url)) и не перечисляй URL —
    интерфейс сам покажет все сгенерированные изображения под сообщением.
 4. Кратко прокомментируй результат текстом. Не придумывай ссылки. При ошибке — объясни простым языком.

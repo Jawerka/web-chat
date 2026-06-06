@@ -17,6 +17,24 @@
 
 ---
 
+## LLM vision: `Failed to load image` / `failed to decode image bytes`
+
+**Симптомы:** в чате `llm_error`, в логе llama-server:
+
+```text
+handle_media: downloading image from 'http://…/media/asset/{uuid}/llm'
+mtmd_helper_bitmap_init_from_buf: failed to decode image bytes
+```
+
+1. С хоста **LLM** (не браузера):  
+   `curl -sS -o /tmp/llm.jpg -w "%{http_code} %{size_download}\n" "http://<web-chat>/media/asset/<uuid>/llm"`  
+   Ожидается `200` и `file /tmp/llm.jpg` → `JPEG image data` (или PNG).
+2. **401** — IP LLM не в trusted internal: `LLM_BASE_URL` host, `TRUSTED_INTERNAL_IPS`, `POST /api/config/trusted-internal/sync`.
+3. **200, но не JPEG/PNG** — перезапустить web-chat (эндпоинт `/llm` перекодирует WebP → JPEG, сбрасывает битый `llm_data`).
+4. Референс во вложении WebP — после фикса отдаётся как JPEG на `/llm`.
+
+---
+
 ## SD WebUI недоступен
 
 **Симптомы:** tools `generate_image` / `img2img` падают, health — SD unavailable.
@@ -38,6 +56,15 @@
 3. Галерея: «Очистить сироты», при необходимости purge в UI.
 4. Бэкапы: `data/backups/` — вынести архивы на другой диск ([DATABASE-BACKUP.md](../deploy/DATABASE-BACKUP.md)).
 5. PostgreSQL: `VACUUM` / размер БД, если `MediaAsset` разросся (BLOB).
+
+### Галерея генераций: картинки не появляются
+
+**Симптомы:** SD отработал, в чате картинки есть, `/gallery` пустая или без новых.
+
+1. Ingest после SD должен писать `gallery_kind=generation` (не `chat`).
+2. Проверить БД: `SELECT id, gallery_kind, original_name FROM media_assets ORDER BY created_at DESC LIMIT 5;`
+3. Старые записи `gallery_kind=chat` с SD metadata — миграция при старте (`migrate.py`) переводит в `generation`.
+4. WS `gallery_update` с `kind=generation` — обновление сетки без F5.
 
 ### Галерея загрузок и размер БД
 

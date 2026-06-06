@@ -316,6 +316,51 @@ def rewrite_image_url_for_llm(url: str) -> str:
     return out
 
 
+_LLAMA_VISION_MIMES = frozenset({"image/jpeg", "image/png"})
+
+
+def _pil_image_ok(data: bytes) -> bool:
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.verify()
+        return True
+    except Exception:
+        return False
+
+
+def prepare_image_for_llm_vision(
+    data: bytes,
+    mime_type: str = "image/png",
+) -> tuple[bytes, str]:
+    """
+    Подготовить тело для GET /media/asset/{id}/llm.
+
+    llama-server (mtmd) принимает JPEG/PNG; WebP и битые байты → JPEG.
+    """
+    limit = settings.llm_vision_max_bytes
+    sniffed = sniff_image_mime(data)
+    effective = sniffed if sniffed.startswith("image/") else (mime_type or "image/png")
+
+    if (
+        effective in _LLAMA_VISION_MIMES
+        and _pil_image_ok(data)
+        and len(data) <= limit
+    ):
+        return data, effective
+
+    if effective not in _LLAMA_VISION_MIMES or not _pil_image_ok(data):
+        jpeg = _encode_jpeg_for_llm(
+            data,
+            max_side=settings.llm_vision_max_side_px,
+            quality=settings.llm_vision_jpeg_quality,
+        )
+        if len(jpeg) <= limit:
+            return jpeg, "image/jpeg"
+        return compress_image_for_llm(jpeg, "image/jpeg", max_bytes=limit)
+
+    return compress_image_for_llm(data, effective, max_bytes=limit)
+
+
 def compress_image_for_llm(
     data: bytes,
     mime_type: str = "image/png",
@@ -330,8 +375,9 @@ def compress_image_for_llm(
     Если уже ≤ max_bytes — вернуть как есть. Иначе JPEG с понижением quality и стороны.
     """
     limit = max_bytes if max_bytes is not None else settings.llm_vision_max_bytes
-    if len(data) <= limit:
-        return data, mime_type
+    sniffed = sniff_image_mime(data)
+    if len(data) <= limit and sniffed in _LLAMA_VISION_MIMES and _pil_image_ok(data):
+        return data, sniffed if sniffed.startswith("image/") else mime_type
 
     quality = jpeg_quality if jpeg_quality is not None else settings.llm_vision_jpeg_quality
     max_side = max_side_px if max_side_px is not None else settings.llm_vision_max_side_px

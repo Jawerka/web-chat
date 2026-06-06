@@ -226,6 +226,90 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
     inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
 }
 
+/*
+ * Live preview SD: перебить .streaming.is-busy { width: fit-content } —
+ * у того же селектора с :not(), иначе пузырь остаётся узким под pill, а картинка вылезает.
+ */
+.chat-message.assistant.streaming.is-busy:not(.has-content):not(.has-images).has-live-preview,
+.chat-message.assistant.streaming.is-busy:not(.has-content):not(.has-images):has(.message-status.has-preview),
+.chat-message.assistant.has-live-preview {
+  width: var(--assistant-bubble-width, 90%);
+  max-width: var(--assistant-bubble-width, 90%);
+  align-self: stretch;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space-4) calc(var(--space-4) + var(--space-1) / 2);
+}
+
+.message-row.assistant:has(.chat-message.assistant.has-live-preview) .message-actions {
+  width: var(--assistant-bubble-width, 90%);
+  max-width: var(--assistant-bubble-width, 90%);
+}
+
+.message-status-preview-wrap {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: calc(var(--space-2) + var(--space-1) / 2);
+  text-align: center;
+  line-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  border-radius: var(--radius-md, 8px);
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+}
+
+.message-status-preview-wrap.hidden {
+  display: none;
+}
+
+.message-status-preview {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  max-height: min(62vh, 560px);
+  margin: 0 auto;
+  border-radius: var(--radius-md, 8px);
+  object-fit: contain;
+  object-position: center center;
+  vertical-align: top;
+  opacity: 0.92;
+  box-shadow: 0 2px 12px color-mix(in srgb, #000 28%, transparent);
+}
+
+.chat-message.assistant .message-status.has-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(var(--space-2) + var(--space-1) / 2);
+  width: 100%;
+  min-width: 0;
+  max-height: none;
+  overflow: visible;
+  /* иначе transition max-height 0.28s режет кадр при появлении превью */
+  transition:
+    opacity 0.22s var(--ease),
+    margin 0.28s var(--ease),
+    padding 0.28s var(--ease);
+}
+
+.chat-message.assistant .message-status.has-preview .message-status-pill {
+  width: 100%;
+  max-width: 100%;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+/* detail + preview: не применять max-height: 220px от статуса SD */
+.chat-message.assistant .message-status.has-preview:not(.hidden):has(.message-status-detail:not(.hidden)) {
+  max-height: none;
+  overflow: visible;
+}
+
 .chat-message.assistant .message-status {
   display: block;
   overflow: hidden;
@@ -259,8 +343,17 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   max-height: 120px;
 }
 
+.chat-message.assistant.has-content .message-status:not(.hidden).has-preview {
+  max-height: none;
+  overflow: visible;
+}
+
 .chat-message.assistant.has-content .message-status:not(.hidden):has(.message-status-detail:not(.hidden)) {
   max-height: min(32vh, 220px);
+}
+
+.chat-message.assistant.has-content .message-status:not(.hidden).has-preview:has(.message-status-detail:not(.hidden)) {
+  max-height: none;
 }
 
 /* Только картинки (без текста): полная ширина пузыря, превью в ряд */
@@ -403,6 +496,7 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   }
 
   .chat-message.assistant.streaming.is-busy:not(.has-content):not(.has-images),
+  .chat-message.assistant.streaming.is-busy.has-live-preview,
   .chat-message.assistant.has-content,
   .chat-message.assistant.has-images {
     transition: none;

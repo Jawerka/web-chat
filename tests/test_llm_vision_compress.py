@@ -13,6 +13,7 @@ from app.config import settings
 from app.integrations.media_utils import (
     asset_llm_media_url,
     compress_image_for_llm,
+    prepare_image_for_llm_vision,
     rewrite_image_url_for_llm,
 )
 
@@ -43,6 +44,22 @@ def test_compress_keeps_small_image() -> None:
     out, mime = compress_image_for_llm(png, "image/png")
     assert out == png
     assert mime == "image/png"
+
+
+def test_prepare_converts_webp_to_jpeg() -> None:
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color=(10, 20, 30)).save(buf, format="WEBP", quality=80)
+    webp = buf.getvalue()
+    out, mime = prepare_image_for_llm_vision(webp, "image/webp")
+    assert mime == "image/jpeg"
+    assert out[:2] == b"\xff\xd8"
+    assert _pil_image_ok(out)
+
+
+def _pil_image_ok(data: bytes) -> bool:
+    from app.integrations.media_utils import _pil_image_ok as ok
+
+    return ok(data)
 
 
 def test_rewrite_asset_url_to_llm_variant() -> None:
@@ -91,3 +108,32 @@ async def test_serve_asset_llm_endpoint(client) -> None:
     assert resp2.status_code == 200
     assert resp2.content == resp.content
     assert resp.headers["content-type"].startswith("image/")
+
+
+@pytest.mark.asyncio
+async def test_serve_asset_llm_webp_becomes_jpeg(client) -> None:
+    """WebP во вложении → /llm отдаёт JPEG для llama-server."""
+    from app.db import session as db_session
+    from app.services.media_service import MediaService
+    from app.config import settings as app_settings
+
+    buf = io.BytesIO()
+    Image.new("RGB", (128, 128), color=(40, 80, 120)).save(buf, format="WEBP", quality=85)
+    webp = buf.getvalue()
+
+    async with db_session.async_session_factory() as session:
+        service = MediaService(session)
+        asset = await service.create_from_bytes(webp, "image/webp", original_name="ref.webp")
+        await session.commit()
+        asset_id = asset.id
+
+    app_settings.auth_enabled = True
+    app_settings.trusted_internal_allow_loopback = True
+    from app.security.trusted_internal import refresh_trusted_internal_from_settings
+
+    refresh_trusted_internal_from_settings()
+
+    resp = await client.get(f"/media/asset/{asset_id}/llm")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert resp.content[:2] == b"\xff\xd8"

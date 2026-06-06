@@ -13,6 +13,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +47,7 @@ from app.services.user_progress import (
 )
 
 ProgressEmit = Callable[[dict[str, Any]], Awaitable[None]]
+ImageEmit = Callable[[list[str], list[str] | None], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,8 @@ class ToolResult:
     image_urls: list[str]
     image_asset_ids: list[str] | None = None
     url_rewrites: dict[str, str] | None = None
+    # Картинки уже отправлены в UI по одной (img2img + emit_image).
+    images_streamed: bool = False
 
 
 class ToolExecutor:
@@ -77,6 +81,7 @@ class ToolExecutor:
         source_user_message_id: uuid.UUID | None = None,
         cancel_event: asyncio.Event | None = None,
         emit_progress: ProgressEmit | None = None,
+        emit_image: ImageEmit | None = None,
     ) -> None:
         """Опциональная async-сессия БД (для оркестратора с открытой транзакцией)."""
         self._session = session
@@ -85,6 +90,7 @@ class ToolExecutor:
         self._source_user_message_id = source_user_message_id
         self._cancel_event = cancel_event
         self._emit_progress = emit_progress
+        self._emit_image = emit_image
         # Закреплённый init из user-сообщения на весь ход (несколько img2img подряд).
         self._pinned_user_init: tuple[bytes, str] | None = None
 
@@ -412,12 +418,212 @@ class ToolExecutor:
         args["init_image_bytes"] = init_bytes
         args["init_source_name"] = init_name
         try:
+            if self._emit_image is not None and self._conversation_id is not None:
+                return await self._run_img2img_streaming(args)
             return await self._run_sd_image_tool(img2img, args, "img2img")
         except ValueError as exc:
             logger.warning("img2img: %s", exc)
             return ToolResult(content=f"Ошибка img2img: {exc}", image_urls=[])
         except RuntimeError as exc:
             return ToolResult(content=str(exc), image_urls=[])
+
+    async def _ingest_img2img_variant_item(
+        self,
+        item: dict[str, str | int | float],
+    ) -> tuple[str | None, str | None, dict[str, str]]:
+        """Перенести один файл generated/ в БД и вернуть canonical URL."""
+        url = str(item.get("url") or "").strip()
+        if not url:
+            return None, None, {}
+        snippet = f"Изображение:\n  URL: {url}\n"
+        async with self._borrow_session() as session:
+            media = MediaService(session)
+            ingested, url_map, raw_ids = await media.ingest_sd_output_files(
+                snippet,
+                conversation_id=self._conversation_id,
+            )
+            if self._session is None:
+                await session.commit()
+        if not ingested:
+            logger.warning("img2img variant ingest пустой для %s", url)
+            return None, None, {}
+        from app.services.message_builder import canonical_stored_image_urls
+
+        aids = [str(i) for i in raw_ids]
+        canonical = canonical_stored_image_urls(ingested, aids)
+        out_url = canonical[0] if canonical else ingested[0]
+        return out_url, aids[0] if aids else None, url_map
+
+    async def _emit_ingested_img2img_variant(
+        self,
+        item: dict[str, str | int | float],
+    ) -> tuple[str | None, str | None, dict[str, str]]:
+        url, aid, url_map = await self._ingest_img2img_variant_item(item)
+        if url and self._emit_image is not None:
+            await self._emit_image([url], [aid] if aid else None)
+        return url, aid, url_map
+
+    @staticmethod
+    async def _await_img2img_variant_futures(
+        futures: list[Future[tuple[str | None, str | None, dict[str, str]]]],
+    ) -> tuple[list[str], list[str], dict[str, str]]:
+        urls: list[str] = []
+        aids: list[str] = []
+        url_map: dict[str, str] = {}
+        for fut in futures:
+            try:
+                url, aid, part_map = await asyncio.wrap_future(fut)
+            except Exception as exc:
+                logger.warning("img2img variant callback: %s", exc)
+                continue
+            if url and url not in urls:
+                urls.append(url)
+            if aid and aid not in aids:
+                aids.append(aid)
+            url_map.update(part_map)
+        return urls, aids, url_map
+
+    async def _run_img2img_streaming(self, arguments: dict[str, Any]) -> ToolResult:
+        """img2img с callback: каждый denoise → ingest → WS image до конца инструмента."""
+        loop = asyncio.get_running_loop()
+        variant_futures: list[Future[tuple[str | None, str | None, dict[str, str]]]] = []
+
+        def on_variant(item: dict[str, str | int | float]) -> None:
+            variant_futures.append(
+                asyncio.run_coroutine_threadsafe(
+                    self._emit_ingested_img2img_variant(item),
+                    loop,
+                ),
+            )
+
+        sig = inspect.signature(img2img)
+        filtered = {
+            k: v for k, v in arguments.items() if k in sig.parameters and v is not None
+        }
+        if self._sd_webui_url is not None:
+            filtered["sd_webui_url"] = self._sd_webui_url
+        filtered["on_variant_saved"] = on_variant
+
+        t0 = time.monotonic()
+        poll_stop = asyncio.Event()
+        poll_task: asyncio.Task[None] | None = None
+        if self._emit_progress is not None:
+            poll_task = asyncio.create_task(
+                self._poll_sd_progress("img2img", poll_stop),
+            )
+        try:
+            text = await self._with_tool_timeout(
+                "img2img",
+                heavy_job_queue.run_sync(
+                    lambda: img2img(**filtered),
+                    cancel_event=self._cancel_event,
+                    operation="img2img",
+                ),
+            )
+        except TimeoutError:
+            return self._tool_timeout_result("img2img")
+        except JobCancelled:
+            return ToolResult(content="Генерация отменена", image_urls=[])
+        except ShutdownInProgress:
+            return ToolResult(
+                content="Сервер завершает работу — генерация прервана. Обновите страницу позже.",
+                image_urls=[],
+            )
+        except SdUnavailableError as exc:
+            return ToolResult(content=str(exc), image_urls=[])
+        except RuntimeError as exc:
+            return ToolResult(content=str(exc), image_urls=[])
+        finally:
+            poll_stop.set()
+            if poll_task is not None:
+                poll_task.cancel()
+                try:
+                    await poll_task
+                except asyncio.CancelledError:
+                    pass
+
+        streamed_urls, streamed_aids, url_map = await self._await_img2img_variant_futures(
+            variant_futures,
+        )
+        logger.info(
+            "img2img streaming: SD %.1fs, вариантов в чате %d",
+            time.monotonic() - t0,
+            len(streamed_urls),
+        )
+
+        if not streamed_urls:
+            return await self._finalize_sd_tool_text(text, "img2img", t0)
+
+        if url_map:
+            from app.services.message_builder import rewrite_media_urls_in_text
+
+            text = rewrite_media_urls_in_text(text, url_map)
+        from app.services.message_builder import canonical_stored_image_urls
+
+        urls = canonical_stored_image_urls(streamed_urls, streamed_aids)
+        return ToolResult(
+            content=text,
+            image_urls=urls,
+            image_asset_ids=streamed_aids or None,
+            url_rewrites=url_map or None,
+            images_streamed=True,
+        )
+
+    async def _finalize_sd_tool_text(
+        self,
+        text: str,
+        tool_name: str,
+        t0: float,
+    ) -> ToolResult:
+        """Ingest всех URL из отчёта SD (batch после синхронного инструмента)."""
+        if self._emit_progress is not None and self._session is not None:
+            await self._emit_progress(
+                build_progress(STAGE_SAVE_MEDIA, tool=tool_name),
+            )
+        urls = self._parse_urls(text)
+        url_map: dict[str, str] = {}
+        asset_ids: list[str] = []
+        async with self._borrow_session() as session:
+            media = MediaService(session)
+            ingested, url_map, raw_ids = await media.ingest_sd_output_files(
+                text,
+                conversation_id=self._conversation_id,
+            )
+            if ingested:
+                urls = ingested
+                asset_ids = [str(i) for i in raw_ids]
+            elif urls:
+                urls = await media.normalize_image_urls(
+                    urls,
+                    conversation_id=self._conversation_id,
+                )
+                for u in urls:
+                    aid = parse_asset_id_from_url(u)
+                    if aid:
+                        asset_ids.append(str(aid))
+            if self._session is None:
+                await session.commit()
+        if url_map:
+            from app.services.message_builder import rewrite_media_urls_in_text
+
+            text = rewrite_media_urls_in_text(text, url_map)
+        if asset_ids:
+            from app.services.message_builder import canonical_stored_image_urls
+
+            urls = canonical_stored_image_urls(urls, asset_ids)
+        logger.info(
+            "%s итог за %.1fs: urls=%d assets=%d",
+            tool_name,
+            time.monotonic() - t0,
+            len(urls),
+            len(asset_ids),
+        )
+        return ToolResult(
+            content=text,
+            image_urls=urls,
+            image_asset_ids=asset_ids or None,
+            url_rewrites=url_map or None,
+        )
 
     async def _run_sd_image_tool(
         self,
@@ -470,82 +676,12 @@ class ToolExecutor:
                     await poll_task
                 except asyncio.CancelledError:
                     pass
-        sd_elapsed = time.monotonic() - t0
-        if self._emit_progress is not None and self._session is not None:
-            await self._emit_progress(
-                build_progress(STAGE_SAVE_MEDIA, tool=tool_name),
-            )
-        urls = self._parse_urls(text)
         logger.info(
-            "%s SD завершён за %.1fs, найдено URL: %d",
-            tool_name,
-            sd_elapsed,
-            len(urls),
-        )
-        url_map: dict[str, str] = {}
-        asset_ids: list[str] = []
-        t1 = time.monotonic()
-        async with self._borrow_session() as session:
-            media = MediaService(session)
-            ingested, url_map, raw_ids = await media.ingest_sd_output_files(
-                text,
-                conversation_id=self._conversation_id,
-            )
-            if ingested:
-                urls = ingested
-                asset_ids = [str(i) for i in raw_ids]
-            elif urls:
-                logger.warning(
-                    "%s ingest пустой (parsed urls=%d), пробуем normalize",
-                    tool_name,
-                    len(urls),
-                )
-                urls = await media.normalize_image_urls(
-                    urls,
-                    conversation_id=self._conversation_id,
-                )
-                for u in urls:
-                    aid = parse_asset_id_from_url(u)
-                    if aid:
-                        asset_ids.append(str(aid))
-            if self._session is None:
-                await session.commit()
-        ingest_elapsed = time.monotonic() - t1
-        if asset_ids:
-            logger.info(
-                "%s ingest OK за %.1fs: %d asset(s)",
-                tool_name,
-                ingest_elapsed,
-                len(asset_ids),
-            )
-        elif urls:
-            logger.warning(
-                "%s без asset в БД за %.1fs (urls=%d)",
-                tool_name,
-                ingest_elapsed,
-                len(urls),
-            )
-        logger.info(
-            "%s итог за %.1fs: urls=%d assets=%d",
+            "%s SD завершён за %.1fs",
             tool_name,
             time.monotonic() - t0,
-            len(urls),
-            len(asset_ids),
         )
-        if url_map:
-            from app.services.message_builder import rewrite_media_urls_in_text
-
-            text = rewrite_media_urls_in_text(text, url_map)
-        if asset_ids:
-            from app.services.message_builder import canonical_stored_image_urls
-
-            urls = canonical_stored_image_urls(urls, asset_ids)
-        return ToolResult(
-            content=text,
-            image_urls=urls,
-            image_asset_ids=asset_ids,
-            url_rewrites=url_map,
-        )
+        return await self._finalize_sd_tool_text(text, tool_name, t0)
 
     async def _poll_sd_progress(
         self,
@@ -558,6 +694,9 @@ class ToolExecutor:
         if emit is None:
             return
         await emit(build_progress(stage_for_tool(tool_name), tool=tool_name, percent=0))
+        last_preview_at = 0.0
+        last_preview_step = -1
+        preview_interval = settings.sd_preview_min_interval_sec
         while not stop.is_set():
             if self._cancel_event is not None and self._cancel_event.is_set():
                 break
@@ -569,7 +708,20 @@ class ToolExecutor:
             except Exception:
                 snapshot = None
             if snapshot and snapshot.get("active") and emit is not None:
-                await emit(progress_from_sd_snapshot(tool_name, snapshot))
+                payload = progress_from_sd_snapshot(tool_name, snapshot)
+                preview = payload.get("preview")
+                if preview:
+                    step = int(snapshot.get("sampling_step") or -1)
+                    now = time.monotonic()
+                    if (
+                        step != last_preview_step
+                        or now - last_preview_at >= preview_interval
+                    ):
+                        last_preview_step = step
+                        last_preview_at = now
+                    else:
+                        del payload["preview"]
+                await emit(payload)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=0.35)
                 break

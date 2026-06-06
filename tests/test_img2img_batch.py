@@ -28,6 +28,7 @@ def test_img2img_multiple_denoise_same_init(monkeypatch: pytest.MonkeyPatch) -> 
 
     denoise_seen: list[float] = []
     init_b64_seen: list[str] = []
+    variants_saved: list[dict] = []
 
     def fake_post(*args, **kwargs) -> object:
         url = args[-1] if args else ""
@@ -61,12 +62,17 @@ def test_img2img_multiple_denoise_same_init(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     raw = _make_png(512, 512)
+    def on_saved(item: dict) -> None:
+        variants_saved.append(item)
+
     result = mod.img2img(
         "edit cat",
         init_image_bytes=raw,
         init_source_name="ref.png",
         denoising_strengths=[0.5, 0.62, 0.82],
+        on_variant_saved=on_saved,
     )
+    assert len(variants_saved) == 3
     assert denoise_seen == [0.5, 0.62, 0.82]
     assert len(init_b64_seen) == 3
     assert init_b64_seen[0] == init_b64_seen[1] == init_b64_seen[2]

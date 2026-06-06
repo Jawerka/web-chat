@@ -275,6 +275,14 @@ async def _migrate_gallery_plan_new(conn) -> None:
             ),
             {"uid": aid},
         )
+        # SD из чата ошибочно попадали в gallery_kind=chat — вернуть в галерею генераций.
+        await conn.execute(
+            text(
+                "UPDATE media_assets SET gallery_kind = 'generation' "
+                "WHERE gallery_kind = 'chat' "
+                "AND (sd_prompt IS NOT NULL OR sd_params IS NOT NULL)",
+            ),
+        )
         await conn.execute(
             text("UPDATE media_favorites SET user_id = :uid WHERE user_id IS NULL"),
             {"uid": aid},

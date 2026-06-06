@@ -95,6 +95,9 @@ class MediaRegistry:
     async def register_batch(
         self,
         items: list[tuple[bytes, str, uuid.UUID | None, str | None]],
+        *,
+        gallery_kind: str | None = None,
+        owner_user_id: uuid.UUID | None = None,
     ) -> list[RegisteredAsset]:
         """Пакетная регистрация (меньше lock-конфликтов SQLite при SD ingest)."""
         out: list[RegisteredAsset] = []
@@ -105,6 +108,8 @@ class MediaRegistry:
                     mime_type,
                     conversation_id=conversation_id,
                     original_name=original_name,
+                    gallery_kind=gallery_kind,
+                    owner_user_id=owner_user_id,
                 )
             )
         return out

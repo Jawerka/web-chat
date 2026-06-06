@@ -109,6 +109,8 @@ class AgentOrchestrator:
         source_user_message_id: uuid.UUID | None = None,
         cancel_event: asyncio.Event | None = None,
         emit_progress_cb: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        emit_image_cb: Callable[[list[str], list[str] | None], Awaitable[None]]
+        | None = None,
     ) -> ToolExecutor:
         if self._tools is not None:
             return self._tools
@@ -119,6 +121,7 @@ class AgentOrchestrator:
             source_user_message_id=source_user_message_id,
             cancel_event=cancel_event,
             emit_progress=emit_progress_cb,
+            emit_image=emit_image_cb,
         )
 
     @staticmethod
@@ -377,11 +380,12 @@ class AgentOrchestrator:
             result.image_urls,
             result.image_asset_ids,
         )
-        for url in canonical_stored_image_urls(
-            result.image_urls,
-            result.image_asset_ids,
-        ):
-            await ctx.emit("image", {"urls": [url]})
+        if not result.images_streamed:
+            for url in canonical_stored_image_urls(
+                result.image_urls,
+                result.image_asset_ids,
+            ):
+                await ctx.emit("image", {"urls": [url]})
         await ctx.emit(
             "tool_done",
             {"name": name, "summary": result_content[:200]},
@@ -692,6 +696,17 @@ class AgentOrchestrator:
         )
         stream_draft = turn_ctx.stream_draft
         assert stream_draft is not None
+
+        async def push_tool_images(
+            urls: list[str],
+            asset_ids: list[str] | None = None,
+        ) -> None:
+            if not urls:
+                return
+            await stream_draft.add_images(urls, asset_ids)
+            for url in canonical_stored_image_urls(urls, asset_ids):
+                await emit("image", {"urls": [url]})
+
         completion: LLMCompletion | None = None
 
         for round_idx in range(settings.max_tool_rounds):
@@ -753,6 +768,7 @@ class AgentOrchestrator:
                     source_user_message_id=user_message_id,
                     cancel_event=cancel_event,
                     emit_progress_cb=push_progress,
+                    emit_image_cb=push_tool_images,
                 )
                 anti_loop_done = await self._run_completion_tool_calls(
                     ctx=turn_ctx,
@@ -1035,6 +1051,17 @@ class AgentOrchestrator:
         )
         stream_draft = turn_ctx.stream_draft
         assert stream_draft is not None
+
+        async def push_tool_images(
+            urls: list[str],
+            asset_ids: list[str] | None = None,
+        ) -> None:
+            if not urls:
+                return
+            await stream_draft.add_images(urls, asset_ids)
+            for url in canonical_stored_image_urls(urls, asset_ids):
+                await emit("image", {"urls": [url]})
+
         completion: LLMCompletion | None = None
 
         for round_idx in range(settings.max_tool_rounds):
@@ -1096,6 +1123,7 @@ class AgentOrchestrator:
                     source_user_message_id=user_message_id,
                     cancel_event=cancel_event,
                     emit_progress_cb=push_progress,
+                    emit_image_cb=push_tool_images,
                 )
                 anti_loop_done = await self._run_completion_tool_calls(
                     ctx=turn_ctx,

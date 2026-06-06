@@ -80,17 +80,27 @@ async def assert_gallery_media_access(
     session: AsyncSession,
     asset: MediaAsset,
     request_user: RequestUser | None,
+    *,
+    trusted_internal: bool = False,
 ) -> None:
     """
     Запрет чтения BLOB чужого пользователя (403).
 
     Legacy без owner_user_id и однопользовательский режим — без проверки.
+    Доверенный IP (LLM vision): chat/generation, не upload.
     """
     if asset.owner_user_id is None:
         return
     if not settings.auth_enabled and not settings.effective_multi_user:
         return
-    if request_user is None and asset.gallery_kind == GalleryKind.CHAT.value:
+    if trusted_internal and request_user is None:
+        if asset.gallery_kind == GalleryKind.UPLOAD.value:
+            raise PermissionError("forbidden")
+        return
+    if request_user is None and asset.gallery_kind in (
+        GalleryKind.CHAT.value,
+        GalleryKind.GENERATION.value,
+    ):
         return
     owner_id = await resolve_gallery_owner_id(session, request_user)
     if owner_id is None or asset.owner_user_id != owner_id:

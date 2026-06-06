@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.media_access import media_request_user
+from app.security.trusted_internal import is_trusted_internal_request
 from app.db.repositories import AttachmentRepository, MediaAssetRepository
 from app.db.session import get_db
 from app.integrations.media_utils import resolve_generated_file, resolve_upload_file
@@ -28,11 +29,17 @@ async def _serve_asset_bytes(
     service: MediaService,
     asset_id: uuid.UUID,
     *,
+    request: Request,
     request_user: RequestUser | None,
     fetch,
 ) -> Response:
+    trusted = is_trusted_internal_request(request)
     try:
-        result = await fetch(asset_id, request_user=request_user)
+        result = await fetch(
+            asset_id,
+            request_user=request_user,
+            trusted_internal=trusted,
+        )
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -51,6 +58,7 @@ async def _serve_asset_bytes(
 @router.get("/asset/{asset_id}")
 async def serve_asset(
     asset_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     request_user: RequestUser | None = Depends(media_request_user),
 ) -> Response:
@@ -59,6 +67,7 @@ async def serve_asset(
     return await _serve_asset_bytes(
         service,
         asset_id,
+        request=request,
         request_user=request_user,
         fetch=service.get_bytes,
     )
@@ -67,6 +76,7 @@ async def serve_asset(
 @router.get("/asset/{asset_id}/llm")
 async def serve_asset_llm(
     asset_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     request_user: RequestUser | None = Depends(media_request_user),
 ) -> Response:
@@ -75,6 +85,7 @@ async def serve_asset_llm(
     return await _serve_asset_bytes(
         service,
         asset_id,
+        request=request,
         request_user=request_user,
         fetch=service.get_llm_bytes,
     )
@@ -83,6 +94,7 @@ async def serve_asset_llm(
 @router.get("/asset/{asset_id}/thumb")
 async def serve_asset_thumb(
     asset_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     request_user: RequestUser | None = Depends(media_request_user),
 ) -> Response:
@@ -91,6 +103,7 @@ async def serve_asset_thumb(
     return await _serve_asset_bytes(
         service,
         asset_id,
+        request=request,
         request_user=request_user,
         fetch=service.get_thumb_bytes,
     )
@@ -99,6 +112,7 @@ async def serve_asset_thumb(
 @router.get("/asset/{asset_id}/preview")
 async def serve_asset_preview(
     asset_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     request_user: RequestUser | None = Depends(media_request_user),
 ) -> Response:
@@ -107,6 +121,7 @@ async def serve_asset_preview(
     return await _serve_asset_bytes(
         service,
         asset_id,
+        request=request,
         request_user=request_user,
         fetch=service.get_preview_bytes,
     )
@@ -116,6 +131,7 @@ async def serve_asset_preview(
 async def serve_upload(
     attachment_id: uuid.UUID,
     filename: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     request_user: RequestUser | None = Depends(media_request_user),
 ):
@@ -128,7 +144,11 @@ async def serve_upload(
         if asset is not None:
             service = MediaService(db)
             try:
-                result = await service.get_bytes(asset.id, request_user=request_user)
+                result = await service.get_bytes(
+                    asset.id,
+                    request_user=request_user,
+                    trusted_internal=is_trusted_internal_request(request),
+                )
             except PermissionError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

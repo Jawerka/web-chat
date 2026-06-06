@@ -10,6 +10,7 @@ from typing import Any
 import requests
 
 from app.integrations.runtime_config import resolve_sd_webui_url
+from app.integrations.sd_preview import preview_data_url_from_b64
 from app.integrations.sd_tools import get_sd_session
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,9 @@ def fetch_sd_progress(sd_webui_url: str | None = None) -> dict[str, Any] | None:
     if isinstance(eta, (int, float)) and eta > 0:
         detail_parts.append(f"осталось ~{int(eta)} с")
 
-    return {
+    preview = preview_data_url_from_b64(data.get("current_image"))
+
+    out: dict[str, Any] = {
         "active": True,
         "percent": percent,
         "detail": " · ".join(detail_parts),
@@ -67,3 +70,6 @@ def fetch_sd_progress(sd_webui_url: str | None = None) -> dict[str, Any] | None:
         "sampling_step": sampling_step,
         "sampling_steps": sampling_steps,
     }
+    if preview:
+        out["preview"] = preview
+    return out

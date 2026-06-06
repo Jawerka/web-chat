@@ -464,6 +464,15 @@ class MediaAssetRepository:
         )
         await self._session.flush()
 
+    async def clear_llm_data(self, asset_id: uuid.UUID) -> None:
+        """Сбросить битый кэш vision (пересборка из data)."""
+        await self._session.execute(
+            update(MediaAsset)
+            .where(MediaAsset.id == asset_id)
+            .values(llm_data=None),
+        )
+        await self._session.flush()
+
     async def delete(self, asset: MediaAsset) -> None:
         """Удалить MediaAsset."""
         await self._session.delete(asset)

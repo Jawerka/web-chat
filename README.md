@@ -262,7 +262,7 @@ sudo systemctl status web-chat
 | Путь | Назначение |
 |------|------------|
 | `/media/asset/{uuid}` | Картинка из БД (чат, галерея) |
-| `/media/asset/{uuid}/llm` | Версия для vision (сжатие JPEG, лимит байт) |
+| `/media/asset/{uuid}/llm` | Vision для llama-server: **JPEG/PNG** (WebP и прочие → JPEG), лимит `LLM_VISION_MAX_BYTES` |
 | `/media/uploads/{att_id}/{filename}` | Документы на диске |
 | `/media/generated/{filename}` | Локальные PNG до ingest (после ingest — обычно asset) |
 
@@ -299,8 +299,9 @@ sudo systemctl status web-chat
 ### txt2img (`generate_image`)
 
 - Пресет **`image_gen`**.
-- Параметры: prompt, negative_prompt, width/height, steps, cfg, sampler, **count 1–10** за один вызов.
-- Результат попадает в чат автоматически (WS `image` + `content_json.images`).
+- Параметры: prompt, negative_prompt, width/height, steps, cfg, sampler, **count** → `n_iter` при `batch_size=1` (лимит `SD_TXT2IMG_MAX_N_ITER`, по умолчанию 50).
+- Во время SD-генерации в пузыре ассистента показывается **live preview** из `SD_PREVIEW_*` (кадры `/sdapi/v1/progress` → `current_image`).
+- Результат попадает в чат автоматически (WS `image` + `content_json.images`), затем в **галерею генераций** (`gallery_kind=generation`).
 
 ### img2img (`img2img`)
 
@@ -309,11 +310,12 @@ sudo systemctl status web-chat
 - **denoising_strength** (0.2–0.92): чем выше, тем сильнее отход от оригинала; по умолчанию **0.54**.
 - **`denoising_strengths`** — массив до **12** значений за **один** вызов с тем же init (удобно для сравнения 0.5, 0.6, 0.7…).
 - **width/height = 0** — размер как у исходника (после нормализации 512–2048, кратно 8).
+- При нескольких denoise картинки появляются в чате **по одной** (callback `on_variant_saved` → ingest → WS `image`), не дожидаясь конца всего batch.
 
 #### Нюансы img2img (важно)
 
 1. Сервер **закрепляет init** из user-сообщения на весь ход (несколько вызовов подряд используют один и тот же файл).
-2. Модель **не «видит»** результат img2img глазами в том же turn — в tool-ответ приходит текст с URL; картинка появляется у пользователя сразу.
+2. Модель **не «видит»** результат img2img глазами в том же turn — в tool-ответ приходит текст с URL; каждая готовая картинка стримится в UI сразу.
 3. При **denoise > ~0.75** результат визуально похож на новую генерацию, но в метаданных PNG остаётся img2img.
 4. Не делайте 10 отдельных вызовов img2img для сравнения denoise — лучше один вызов с `denoising_strengths: [0.5, 0.55, …]`.
 5. Лимит **10 раундов** инструментов за сообщение (`MAX_TOOL_ROUNDS`); при исчерпании сохраняется частичный результат с пояснением в тексте.
@@ -336,8 +338,9 @@ sudo systemctl status web-chat
 
 ### Галерея генераций (`/gallery`)
 
-До **1000** последних изображений (записи в БД + файлы в `data/generated/` без дубликатов).
+До **1000** последних изображений (записи в БД с `gallery_kind=generation` + файлы в `data/generated/` без дубликатов).
 
+- После SD ingest в БД всегда **`gallery_kind=generation`** (даже если есть `conversation_id` в чате).
 - Сетка превью, клик — lightbox.
 - **Скачать**, **избранное**, **В галерею загрузок** (копия без перехода со страницы).
 - **В чат** — новая беседа с вложением (`sessionStorage` `webchat_pending_attachments`).
@@ -516,6 +519,10 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | `MAX_HISTORY_MESSAGES` | 60 | Сообщений в контексте |
 | `MAX_EXTRACT_CHARS` | 50000 | Обрезка extract_text |
 | `LLM_VISION_MAX_BYTES` | 6 MiB | Сжатие для `/llm` URL |
+| `SD_TXT2IMG_MAX_N_ITER` | 50 | Макс. `count` / `n_iter` за один `generate_image` (`batch_size=1`) |
+| `SD_PREVIEW_ENABLED` | true | Live preview в пузыре чата во время SD |
+| `SD_PREVIEW_MIN_INTERVAL_SEC` | 0.6 | Мин. интервал кадров preview (WS `progress`) |
+| `SD_PREVIEW_MAX_B64_CHARS` | 600000 | Пропуск слишком больших `current_image` из SD |
 | `UPLOAD_RETENTION_DAYS` | 7 | Очистка uploads |
 | `GENERATED_RETENTION_DAYS` | 30 | Очистка generated |
 | `TRASH_RETENTION_DAYS` | 3 | Хранение бесед в корзине |
@@ -602,7 +609,8 @@ tests/
 | Симптом | Что проверить |
 |---------|----------------|
 | Картинки не открываются | `PUBLIC_BASE_URL` = URL в адресной строке; LLM достучится до хоста |
-| Vision не видит фото | URL `/media/asset/{id}/llm` доступен с хоста LLM; размер после сжатия < `LLM_VISION_MAX_BYTES` |
+| Vision не видит фото | URL `/media/asset/{id}/llm` с хоста LLM (trusted IP); ответ — JPEG/PNG; в логе llama `failed to decode` → перезапуск web-chat (пересборка `llm_data`) |
+| Нет картинок в `/gallery` | Ingest после SD → `gallery_kind=generation`; миграция чинит старые `chat`+SD metadata |
 | img2img «как с нуля» | denoise слишком высокий; проверьте метаданные PNG (`Denoising strength`); используйте один init |
 | Дубли сообщений assistant | Обновите до актуальной версии (фикс финализации черновика при лимите tools) |
 | После F5 пропал статус | `/api/conversations/{id}/generation-status`; WS `connected.in_progress` |
