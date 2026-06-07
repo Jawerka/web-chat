@@ -41,6 +41,7 @@ from app.integrations.media_utils import (
 from app.integrations.sd_filename import extract_seed_from_parameters, save_sd_generated_image
 from app.integrations.sd_batch import SD_BATCH_SIZE, clamp_txt2img_n_iter
 from app.integrations.sd_http import SdUnavailableError, sd_post_json
+from app.services.job_queue import JobCancelled
 from app.integrations.runtime_config import resolve_sd_webui_url
 
 if TYPE_CHECKING:
@@ -405,6 +406,7 @@ def img2img(
     description: str = "",
     sd_webui_url: str | None = None,
     on_variant_saved: Img2ImgVariantCallback | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> str:
     """
     img2img: доработка существующего изображения через SD WebUI.
@@ -450,24 +452,31 @@ def img2img(
     all_results: list[dict[str, str | int | float]] = []
     last_meta = ""
     for ds in strengths:
-        items, last_meta = _post_img2img_once(
-            prepared=prepared,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            steps=steps,
-            out_w=out_w,
-            out_h=out_h,
-            cfg_scale=cfg_scale,
-            sampler_name=sampler_name,
-            scheduler=scheduler,
-            seed=seed,
-            denoising_strength=ds,
-            restore_faces=restore_faces,
-            tiling=tiling,
-            resize_mode=resize_mode,
-            description=description,
-            sd_webui_url=sd_webui_url,
-        )
+        if cancel_check is not None and cancel_check():
+            raise JobCancelled()
+        try:
+            items, last_meta = _post_img2img_once(
+                prepared=prepared,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                steps=steps,
+                out_w=out_w,
+                out_h=out_h,
+                cfg_scale=cfg_scale,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                seed=seed,
+                denoising_strength=ds,
+                restore_faces=restore_faces,
+                tiling=tiling,
+                resize_mode=resize_mode,
+                description=description,
+                sd_webui_url=sd_webui_url,
+            )
+        except (RuntimeError, requests.RequestException) as exc:
+            if cancel_check is not None and cancel_check():
+                raise JobCancelled() from exc
+            raise
         all_results.extend(items)
         if on_variant_saved:
             for item in items:

@@ -8,6 +8,7 @@ import io
 import pytest
 
 from app.integrations.img2img_service import normalize_denoising_strengths
+from app.services.job_queue import JobCancelled
 
 MINIMAL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -81,6 +82,65 @@ def test_img2img_multiple_denoise_same_init(monkeypatch: pytest.MonkeyPatch) -> 
     assert init_b64_seen[0] == init_b64_seen[1] == init_b64_seen[2]
     assert "img2img завершён (3 изображений)" in result
     assert "denoise 0.5" in result or "denoising_strength: 0.5" in result
+
+
+def test_img2img_cancel_check_stops_between_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cancel_check=True после 1-го варианта — не запускать остальные POST."""
+    from app.integrations import sd_tools as mod
+
+    post_count = 0
+
+    def fake_post(*args, **kwargs) -> object:
+        nonlocal post_count
+        url = args[-1] if args else ""
+        payload = kwargs.get("json") or {}
+
+        class Resp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                nonlocal post_count
+                if "/png-info" in url:
+                    return {"info": "prompt test"}
+                post_count += 1
+                return {
+                    "images": [base64.b64encode(MINIMAL_PNG).decode()],
+                    "parameters": {},
+                    "info": "{}",
+                }
+
+        return Resp()
+
+    monkeypatch.setattr(mod, "get_sd_session", lambda: type("S", (), {"post": fake_post})())
+    monkeypatch.setattr(mod, "resolve_sd_webui_url", lambda u=None: "http://test")
+    monkeypatch.setattr(
+        mod,
+        "save_sd_generated_image",
+        lambda *a, **k: (f"out_{post_count}.png", None),
+    )
+    monkeypatch.setattr(
+        mod,
+        "generated_media_url",
+        lambda f, absolute=False, for_llm=False: f"/media/generated/{f}",
+    )
+
+    raw = _make_png(512, 512)
+
+    def cancel_check() -> bool:
+        return post_count >= 1
+
+    with pytest.raises(JobCancelled):
+        mod.img2img(
+            "edit cat",
+            init_image_bytes=raw,
+            init_source_name="ref.png",
+            denoising_strengths=[0.5, 0.62, 0.82],
+            cancel_check=cancel_check,
+        )
+    assert post_count == 1
 
 
 def _make_png(w: int, h: int) -> bytes:

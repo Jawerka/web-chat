@@ -129,3 +129,21 @@ def sd_post_json(
     _circuit.record_failure()
     logger.error("SD %s недоступен после %d попыток: %s", operation, attempts, last_exc)
     raise SdUnavailableError() from last_exc
+
+
+def sd_interrupt(session: requests.Session, sd_base: str) -> bool:
+    """
+    Прервать текущую генерацию на SD WebUI (POST /sdapi/v1/interrupt).
+
+    Returns:
+        True если запрос отправлен успешно.
+    """
+    url = f"{sd_base.rstrip('/')}/sdapi/v1/interrupt"
+    try:
+        resp = session.post(url, timeout=10)
+        resp.raise_for_status()
+        logger.info("SD interrupt отправлен")
+        return True
+    except requests.RequestException as exc:
+        logger.warning("SD interrupt не удался: %s", exc)
+        return False

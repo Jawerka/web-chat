@@ -36,7 +36,8 @@ from app.integrations.tool_definitions import tool_timeout_seconds
 from app.integrations.sd_tools import generate_image, get_gallery, img2img, upscale_images
 from app.services.attachment_service import AttachmentService
 from app.services.job_queue import JobCancelled, ShutdownInProgress, heavy_job_queue
-from app.integrations.sd_http import SdUnavailableError
+from app.integrations.runtime_config import resolve_sd_webui_url
+from app.integrations.sd_http import SdUnavailableError, sd_interrupt
 from app.services.media_service import MediaService
 from app.services.user_progress import (
     STAGE_SAVE_MEDIA,
@@ -464,6 +465,14 @@ class ToolExecutor:
         return url, aid, url_map
 
     @staticmethod
+    def _cancel_img2img_variant_futures(
+        futures: list[Future[tuple[str | None, str | None, dict[str, str]]]],
+    ) -> None:
+        for fut in futures:
+            if not fut.done():
+                fut.cancel()
+
+    @staticmethod
     async def _await_img2img_variant_futures(
         futures: list[Future[tuple[str | None, str | None, dict[str, str]]]],
     ) -> tuple[list[str], list[str], dict[str, str]]:
@@ -503,6 +512,9 @@ class ToolExecutor:
         if self._sd_webui_url is not None:
             filtered["sd_webui_url"] = self._sd_webui_url
         filtered["on_variant_saved"] = on_variant
+        filtered["cancel_check"] = (
+            lambda: self._cancel_event is not None and self._cancel_event.is_set()
+        )
 
         t0 = time.monotonic()
         poll_stop = asyncio.Event()
@@ -521,17 +533,22 @@ class ToolExecutor:
                 ),
             )
         except TimeoutError:
+            self._cancel_img2img_variant_futures(variant_futures)
             return self._tool_timeout_result("img2img")
         except JobCancelled:
+            self._cancel_img2img_variant_futures(variant_futures)
             return ToolResult(content="Генерация отменена", image_urls=[])
         except ShutdownInProgress:
+            self._cancel_img2img_variant_futures(variant_futures)
             return ToolResult(
                 content="Сервер завершает работу — генерация прервана. Обновите страницу позже.",
                 image_urls=[],
             )
         except SdUnavailableError as exc:
+            self._cancel_img2img_variant_futures(variant_futures)
             return ToolResult(content=str(exc), image_urls=[])
         except RuntimeError as exc:
+            self._cancel_img2img_variant_futures(variant_futures)
             return ToolResult(content=str(exc), image_urls=[])
         finally:
             poll_stop.set()
@@ -683,6 +700,16 @@ class ToolExecutor:
         )
         return await self._finalize_sd_tool_text(text, tool_name, t0)
 
+    async def _request_sd_interrupt(self, sd_webui_url: str | None) -> None:
+        """Прервать текущую генерацию на SD WebUI (cooperative cancel)."""
+        sd_base = resolve_sd_webui_url(sd_webui_url)
+        try:
+            from app.integrations.sd_tools import get_sd_session
+
+            await asyncio.to_thread(sd_interrupt, get_sd_session(), sd_base)
+        except Exception as exc:
+            logger.warning("SD interrupt: %s", exc)
+
     async def _poll_sd_progress(
         self,
         tool_name: str,
@@ -699,6 +726,7 @@ class ToolExecutor:
         preview_interval = settings.sd_preview_min_interval_sec
         while not stop.is_set():
             if self._cancel_event is not None and self._cancel_event.is_set():
+                await self._request_sd_interrupt(sd_url)
                 break
             try:
                 snapshot = await heavy_job_queue.run_sync(
