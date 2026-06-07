@@ -9,7 +9,25 @@
   const IMG2IMG_PRESET_SLUG = 'img2img';
 
   /**
-   * @param {{ url: string, filename?: string }} item
+   * Текст для composer из SD-метаданных (как «Скопировать всё» в uploads-ref-lightbox).
+   * @param {{ sd_prompt?: string, sd_negative?: string, sd_params?: string }} item
+   * @returns {string}
+   */
+  function formatUploadMetadataForComposer(item) {
+    if (!item) return '';
+    const skip = (s) => !s || s === '—';
+    const p = (item.sd_prompt || '').trim();
+    const n = (item.sd_negative || '').trim();
+    const par = (item.sd_params || '').trim();
+    let text = '';
+    if (!skip(p)) text = p;
+    if (!skip(n)) text += `${text ? '\n' : ''}Negative prompt: ${n}`;
+    if (!skip(par)) text += `${text ? '\n' : ''}${par}`;
+    return text.trim();
+  }
+
+  /**
+   * @param {{ url: string, filename?: string, sd_prompt?: string, sd_negative?: string, sd_params?: string }} item
    * @param {{ btn?: HTMLButtonElement, onStatus?: (text: string, isError?: boolean) => void }} [options]
    */
   async function attachImageToNewChat(item, options = {}) {
@@ -55,13 +73,14 @@
       }
       const uploadData = await upRes.json();
 
-      sessionStorage.setItem(
-        PENDING_ATTACHMENTS_KEY,
-        JSON.stringify({
-          conversation_id: conv.id,
-          attachments: uploadData.attachments || [],
-        }),
-      );
+      const composerText = formatUploadMetadataForComposer(item);
+      const pending = {
+        conversation_id: conv.id,
+        attachments: uploadData.attachments || [],
+      };
+      if (composerText) pending.composer_text = composerText;
+
+      sessionStorage.setItem(PENDING_ATTACHMENTS_KEY, JSON.stringify(pending));
       localStorage.setItem('webchat_conv_id', conv.id);
       window.location.href = '/';
     } catch (err) {
@@ -74,6 +93,7 @@
     PENDING_ATTACHMENTS_KEY,
     DEFAULT_CONV_TITLE,
     IMG2IMG_PRESET_SLUG,
+    formatUploadMetadataForComposer,
     attachImageToNewChat,
   };
 })();

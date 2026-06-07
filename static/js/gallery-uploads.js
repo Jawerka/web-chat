@@ -284,8 +284,18 @@ class GalleryUploadsApp {
   async refresh(initial) {
     if (initial) this._showSkeleton();
     try {
-      const res = await fetch(`/api/gallery/uploads?limit=${UPLOADS_LIMIT}`);
-      if (!res.ok) throw new Error(res.statusText);
+      const res = await fetch(`/api/gallery/uploads?limit=${UPLOADS_LIMIT}`, {
+        credentials: 'same-origin',
+      });
+      if (res.status === 401) {
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.replace(`/login?next=${next}`);
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText || 'Ошибка загрузки');
+      }
       const data = await res.json();
       this.items = data.images || [];
       this.itemById = new Map(this.items.map((i) => [i.id, i]));
@@ -294,6 +304,8 @@ class GalleryUploadsApp {
       if (this.els.count) this.els.count.textContent = String(this.items.length);
       if (!initial) this.flashStatus('Обновлено');
     } catch (err) {
+      this.els.grid?.removeAttribute('aria-busy');
+      this.updateLayout();
       this.flashStatus(err.message || 'Ошибка', true);
     }
   }
@@ -413,7 +425,17 @@ class GalleryUploadsApp {
       this.flashStatus('Не загружен gallery-common.js', true);
       return;
     }
-    await window.GalleryCommon.attachImageToNewChat(item, {
+    let enriched = item;
+    const hasMeta = item.sd_prompt || item.sd_negative || item.sd_params || item.has_metadata;
+    if (!hasMeta && item.id) {
+      try {
+        const res = await fetch(`/api/gallery/uploads/${item.id}?extract=1`);
+        if (res.ok) enriched = { ...item, ...(await res.json()) };
+      } catch {
+        /* attach без промпта */
+      }
+    }
+    await window.GalleryCommon.attachImageToNewChat(enriched, {
       btn,
       onStatus: (text, isError) => this.flashStatus(text, Boolean(isError)),
     });

@@ -482,8 +482,15 @@
       app.pendingAttachments.push(att);
       renderAttachmentChip(app, att);
     }
+    if (typeof payload.composer_text === 'string' && payload.composer_text.trim() && app.$.userInput) {
+      app.$.userInput.value = payload.composer_text;
+      autoResizeInput(app);
+    }
+
     if (app.pendingAttachments.length) {
       app.$.attachmentStrip.classList.remove('hidden');
+    }
+    if (app.pendingAttachments.length || (app.$.userInput?.value || '').trim()) {
       app.$.userInput?.focus();
     }
     saveDraft(app, app.currentConvId);

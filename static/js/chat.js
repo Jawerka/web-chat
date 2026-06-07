@@ -1860,7 +1860,10 @@ class ChatApp {
     const added = this._appendImagesToGrid(this.streamImagesEl, urls);
     if (added > 0) {
       this._generationHadImages = true;
-      this.hideProgress();
+      // Пока ход ещё идёт, статус оставляем (SD batch / img2img): CSS умеет текст+картинки+progress.
+      if (!this._generationResumeActive && !this.streaming) {
+        this.hideProgress();
+      }
       this._syncAssistantLayoutClasses(this.streamEl);
     }
     this._scheduleScrollToBottom();
@@ -2066,6 +2069,21 @@ class ChatApp {
       this.showProgress(null, { stage: 'llm_typing' });
       return;
     }
+    if ((hasText || hasImages) && status.in_progress) {
+      const stage = status.active_tool === 'upscale_images' ? 'sd_upscale' : (
+        status.active_tool === 'generate_image' || status.active_tool === 'img2img'
+          ? 'sd_render'
+          : (hasText ? 'llm_typing' : 'llm_thinking')
+      );
+      this._setUiActivityStage(stage);
+      this.showProgress(null, {
+        stage,
+        tool: status.active_tool,
+        percent: status.progress_percent,
+        detail: status.progress_detail,
+      });
+      return;
+    }
     if (hasText || hasImages) {
       this.hideProgress();
       return;
@@ -2146,8 +2164,8 @@ class ChatApp {
       }
     }
 
+    await this._refreshStreamingBubbleFromServer(status);
     this._syncResumeProgress(status);
-    await this._refreshStreamingBubbleFromServer();
     if (streamId) {
       WebChatMessages.dedupeMessageRows(this, { preferMessageId: streamId });
     }
@@ -2208,7 +2226,9 @@ class ChatApp {
       && (newText.length > localText.length || (!live && newText !== localText))
     ) {
       this._renderStreamTextToBubble(newText);
-      this.hideProgress();
+      if (!live) {
+        this.hideProgress();
+      }
     }
 
     const urls = WebChatMessages.imageUrlsFromMessage(target);

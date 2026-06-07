@@ -9,7 +9,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.db import session as db_session
-from app.db.models import MessageRole
+from app.db.models import GalleryKind, MessageRole
 from app.db.repositories import ConversationRepository, MessageRepository, PresetRepository
 from app.services.gallery_service import cleanup_orphan_media_assets
 from app.services.media_reference_index import collect_referenced_asset_ids
@@ -117,3 +117,35 @@ async def test_dedup_removes_older_duplicate(client: AsyncClient) -> None:
         reg = MediaRegistry(session)
         assert await reg.get_by_id(old_id) is None
         assert await reg.get_by_id(new_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_upload_gallery_never_auto_deleted(client: AsyncClient) -> None:
+    """gallery_kind=upload не удаляется orphan cleanup (долгосрочное хранилище)."""
+    async with db_session.async_session_factory() as session:
+        registry = MediaRegistry(session)
+        reg = await registry.register_image(
+            _TINY_PNG,
+            "image/png",
+            original_name="upload-keep.png",
+            gallery_kind=GalleryKind.UPLOAD.value,
+        )
+        asset_id = reg.id
+        asset = await registry.get_by_id(asset_id)
+        assert asset is not None
+        asset.created_at = datetime.now(UTC) - timedelta(hours=48)
+        await session.flush()
+        await session.commit()
+
+    async with db_session.async_session_factory() as session:
+        stats = await cleanup_orphan_media_assets(
+            session,
+            dry_run=False,
+            min_age_hours=1,
+        )
+        await session.commit()
+
+    assert stats["deleted"] == 0
+
+    async with db_session.async_session_factory() as session:
+        assert await MediaRegistry(session).get_by_id(asset_id) is not None

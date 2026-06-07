@@ -9,6 +9,7 @@ id_rsa
 id_rsa.*
 
 audit.md
+docs/debug-snapshots/
 
 # Python
 __pycache__/

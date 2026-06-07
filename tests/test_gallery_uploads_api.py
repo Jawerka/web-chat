@@ -84,3 +84,10 @@ async def test_uploads_reorder_persists(client: AsyncClient) -> None:
     assert r_list.status_code == 200
     listed = [i["id"] for i in r_list.json()["images"] if i["id"] in ids]
     assert listed == reversed_ids
+
+    # После reorder новая загрузка не должна падать (max_upload_sort_order).
+    r_after = await client.post(
+        "/api/gallery/uploads",
+        files={"files": ("after-reorder.png", MINIMAL_PNG, "image/png")},
+    )
+    assert r_after.status_code == 200

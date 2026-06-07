@@ -565,7 +565,8 @@ class MediaAssetRepository:
             MediaAsset.gallery_kind == GalleryKind.UPLOAD.value,
         )
         result = await self._session.execute(stmt)
-        return int(result.scalar() if result.scalar() is not None else -1)
+        value = result.scalar()
+        return int(value if value is not None else -1)
 
     async def set_upload_gallery_order(
         self,

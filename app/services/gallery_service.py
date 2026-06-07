@@ -299,6 +299,17 @@ async def delete_gallery_asset(session: AsyncSession, asset_id: uuid.UUID) -> No
     await registry.delete_asset(asset_id)
 
 
+def _eligible_for_orphan_media_cleanup(meta: GalleryAssetMeta) -> bool:
+    """
+    Можно ли рассматривать asset для автоматической orphan-очистки.
+
+    gallery_kind=upload (/gallery/uploads) — намеренное долгосрочное хранилище;
+    записи не ссылаются из messages, но удалять их автоматически нельзя
+    (web-chat-cleanup.timer / run_cleanup).
+    """
+    return meta.gallery_kind != GalleryKind.UPLOAD.value
+
+
 async def cleanup_gallery_orphans(
     session: AsyncSession,
     *,
@@ -307,7 +318,7 @@ async def cleanup_gallery_orphans(
     purge_messages: bool = False,
     dedup_db: bool = True,
 ) -> dict[str, Any]:
-    """Очистка orphan на диске и в MediaAsset (неиспользуемые + дедуп)."""
+    """Очистка orphan на диске и в MediaAsset (неиспользуемые + дедуп; upload не трогаем)."""
     disk = await cleanup_orphan_generated_on_disk(
         session,
         dry_run=dry_run,
@@ -336,6 +347,8 @@ async def cleanup_orphan_media_assets(
 
     Дубликаты: при одинаковых ``original_name`` и ``size_bytes`` остаётся самый новый
     или тот, на который есть ссылки.
+
+    ``gallery_kind=upload`` исключается полностью — см. ``_eligible_for_orphan_media_cleanup``.
     """
     age_h = min_age_hours if min_age_hours is not None else settings.orphan_media_min_age_hours
     cutoff_dt = datetime.now(UTC) - timedelta(hours=max(0.0, age_h))
@@ -350,7 +363,9 @@ async def cleanup_orphan_media_assets(
         return ts < cutoff_dt
 
     registry = MediaRegistry(session)
-    metas = await registry.list_gallery_metadata(limit=GALLERY_MAX_LIMIT * 2)
+    all_metas = await registry.list_gallery_metadata(limit=GALLERY_MAX_LIMIT * 2)
+    # upload-галерея: без срока хранения, только ручное DELETE через API.
+    metas = [m for m in all_metas if _eligible_for_orphan_media_cleanup(m)]
     referenced = await collect_referenced_asset_ids(session)
 
     group_sizes: dict[tuple[str, int], int] = {}

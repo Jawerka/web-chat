@@ -265,7 +265,14 @@ class GalleryApp {
 
   async refresh(initial) {
     try {
-      const res = await fetch(`/api/gallery?limit=${GALLERY_LIMIT}`);
+      const res = await fetch(`/api/gallery?limit=${GALLERY_LIMIT}`, {
+        credentials: 'same-origin',
+      });
+      if (res.status === 401) {
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.replace(`/login?next=${next}`);
+        return;
+      }
       if (!res.ok) throw new Error(res.statusText);
       const data = await res.json();
       const incoming = data.images || [];
@@ -289,6 +296,8 @@ class GalleryApp {
       }
       this.syncLightboxAfterRefresh();
     } catch (err) {
+      this.els.grid?.removeAttribute('aria-busy');
+      this.updateCount(this.items.length);
       this.flashStatus(`Ошибка: ${err.message}`, true);
     }
   }
