@@ -203,3 +203,46 @@ async def test_settle_keeps_streaming_only_on_last_assistant(
         streaming = await msg_repo.get_streaming_assistant_message(conv_id)
         assert streaming is not None
         assert streaming.id == second_id
+
+
+@pytest.mark.asyncio
+async def test_settle_clears_last_streaming_when_not_preserved(
+    tmp_path,
+    repo_conv_title: str,
+) -> None:
+    """Без активной генерации снять streaming даже с последнего assistant."""
+    await dispose_database()
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'orphan.sqlite'}"
+    safe_configure_database(db_url)
+    await init_db()
+    assert_not_using_production_database()
+
+    async with db_session.async_session_factory() as session:
+        preset_repo = PresetRepository(session)
+        preset = await preset_repo.get_default()
+        assert preset is not None
+        conv_repo = ConversationRepository(session)
+        conversation = await conv_repo.create(title=repo_conv_title, preset_id=preset.id)
+        msg_repo = MessageRepository(session)
+        draft = await msg_repo.create(
+            conversation_id=conversation.id,
+            role=MessageRole.ASSISTANT,
+            content_text="",
+            content_json={"streaming": True, "phase": "text"},
+        )
+        await session.commit()
+        conv_id = conversation.id
+        draft_id = draft.id
+
+    async with db_session.async_session_factory() as session:
+        msg_repo = MessageRepository(session)
+        settled = await msg_repo.settle_stale_streaming_assistant_messages(
+            conv_id,
+            preserve_last_streaming=False,
+        )
+        await session.commit()
+        assert settled == 1
+        refreshed = await msg_repo.get_by_id(draft_id)
+        assert refreshed is not None
+        assert refreshed.content_json.get("streaming") is False
+        assert await msg_repo.get_streaming_assistant_message(conv_id) is None

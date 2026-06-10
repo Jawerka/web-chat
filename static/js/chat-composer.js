@@ -35,7 +35,7 @@
   }
 
   function isBusy(app) {
-    return Boolean(app.streaming || app._generationResumeActive);
+    return Boolean(app.streaming || app._generationResumeActive || app._preloadingModels);
   }
 
   function syncSendState(app) {
@@ -59,6 +59,7 @@
   function sendBlockedReason(app, text) {
     if (!app.currentConvId) return 'Сначала выберите или создайте беседу';
     if (app.$.userInput?.disabled) return 'Поле ввода недоступно';
+    if (app._preloadingModels) return 'Загрузка моделей…';
     if (isBusy(app)) return 'Дождитесь окончания генерации';
     if (!hasPayload(app, text)) return null;
     if (!app.socket) return 'Подключение к серверу…';

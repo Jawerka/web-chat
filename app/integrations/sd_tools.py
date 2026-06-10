@@ -41,6 +41,7 @@ from app.integrations.media_utils import (
 from app.integrations.sd_filename import extract_seed_from_parameters, save_sd_generated_image
 from app.integrations.sd_batch import SD_BATCH_SIZE, clamp_txt2img_n_iter
 from app.integrations.sd_http import SdUnavailableError, sd_post_json
+from app.integrations.sd_warmup import invalidate_sd_ready_cache
 from app.services.job_queue import JobCancelled
 from app.integrations.runtime_config import resolve_sd_webui_url
 
@@ -150,13 +151,17 @@ def generate_image(
         raise
     except requests.RequestException as exc:
         elapsed = time.monotonic() - t0
+        invalidate_sd_ready_cache(sd_base)
         logger.error(
             "SD txt2img ошибка за %.1fs: %s (url=%s)",
             elapsed,
             exc,
             url,
         )
-        raise
+        raise RuntimeError(
+            f"SD txt2img: {sd_error_message(exc)}. "
+            "Попробуйте «Загрузить модели» или перезапустите SD WebUI.",
+        ) from exc
     data = resp.json()
 
     images_b64 = data.get("images", [])

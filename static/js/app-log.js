@@ -6,6 +6,8 @@ class AppLog {
     this.entries = [];
     this.maxEntries = maxEntries;
     this.listeners = new Set();
+    this._shipQueue = [];
+    this._shipTimer = null;
   }
 
   _timestamp() {
@@ -28,33 +30,60 @@ class AppLog {
     }
   }
 
-  log(level, category, message, detail = null) {
+  _scheduleShip(line) {
+    this._shipQueue.push(line);
+    if (this._shipTimer) return;
+    this._shipTimer = setTimeout(() => {
+      const batch = this._shipQueue.splice(0, 80);
+      this._shipTimer = null;
+      if (!batch.length) return;
+      fetch('/api/logs/client', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ lines: batch }),
+      }).catch(() => {});
+    }, 2000);
+  }
+
+  _shouldShip(level, category, ship) {
+    if (ship === false) return false;
+    if (ship === true) return true;
+    if (level === 'debug') return false;
+    if (category === 'health' && level !== 'error' && level !== 'warn') return false;
+    return true;
+  }
+
+  log(level, category, message, detail = null, options = {}) {
     const line = `[${this._timestamp()}] [${level.toUpperCase()}] [${category}] ${message}${this._formatDetail(detail)}`;
     this.entries.push({ level, line, category, message });
     if (this.entries.length > this.maxEntries) {
       this.entries.splice(0, this.entries.length - this.maxEntries);
     }
     this._notify();
+    if (this._shouldShip(level, category, options.ship)) {
+      this._scheduleShip(line);
+    }
     if (level === 'error') console.error(line);
     else if (level === 'warn') console.warn(line);
     else if (level === 'debug') console.debug(line);
     else console.info(line);
   }
 
-  debug(category, message, detail) {
-    this.log('debug', category, message, detail);
+  debug(category, message, detail, options) {
+    this.log('debug', category, message, detail, options);
   }
 
-  info(category, message, detail) {
-    this.log('info', category, message, detail);
+  info(category, message, detail, options) {
+    this.log('info', category, message, detail, options);
   }
 
-  warn(category, message, detail) {
-    this.log('warn', category, message, detail);
+  warn(category, message, detail, options) {
+    this.log('warn', category, message, detail, options);
   }
 
-  error(category, message, detail) {
-    this.log('error', category, message, detail);
+  error(category, message, detail, options) {
+    this.log('error', category, message, detail, options);
   }
 
   getText() {

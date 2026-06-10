@@ -9,10 +9,13 @@ const STATUS_LABELS = {
   unavailable: 'Недоступен',
 };
 
+const HISTORY_WINDOW_SEC = 3600;
+const HISTORY_INTERVAL_SEC = 30;
+
 /** Опрос журнала (независимо от WS). */
 const LOGS_POLL_MS = 5000;
-/** Метрики сервисов. */
-const HEALTH_POLL_MS = 5000;
+/** Метрики сервисов (график обновляется на сервере каждые 30 с). */
+const HEALTH_POLL_MS = 30000;
 
 function formatUptime(sec) {
   const h = Math.floor(sec / 3600);
@@ -33,29 +36,47 @@ function formatTime(ts) {
   });
 }
 
-function meterClass(status, loadPercent) {
-  if (status === 'unavailable') return 'bad';
-  if (status === 'loading') return 'load pulse';
-  if (loadPercent != null && loadPercent > 85) return 'warn';
-  if (status === 'ok') return 'ok';
-  return 'load';
+function formatClock(ts) {
+  return new Date(ts * 1000).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+/** Цветовая индикация: зелёный / жёлтый / красный. */
+function statusDotClass(status) {
+  if (status === 'ok') return 'green';
+  if (status === 'loading' || status === 'degraded') return 'yellow';
+  return 'red';
+}
+
+function normalizeHistory(history) {
+  if (!Array.isArray(history) || !history.length) return [];
+  const now = Date.now() / 1000;
+  const windowStart = now - HISTORY_WINDOW_SEC;
+  return history
+    .filter((pt) => (pt.ts ?? 0) >= windowStart - HISTORY_INTERVAL_SEC)
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
 }
 
 function drawChart(canvas, history) {
-  if (!canvas || !history?.length) return;
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const pad = { l: 4, r: 4, t: 8, b: 18 };
+  const pad = { l: 36, r: 8, t: 8, b: 22 };
   const plotW = w - pad.l - pad.r;
   const plotH = h - pad.t - pad.b;
-  const n = history.length;
+  const now = Date.now() / 1000;
+  const windowStart = now - HISTORY_WINDOW_SEC;
+
   const series = [
     { key: 'overall', color: '#c8d4e8' },
     { key: 'llm', color: '#5b9fd4' },
@@ -73,15 +94,49 @@ function drawChart(canvas, history) {
     ctx.stroke();
   }
 
+  const ticks = [];
+  for (let t = 0; t <= HISTORY_WINDOW_SEC; t += HISTORY_INTERVAL_SEC) {
+    ticks.push(windowStart + t);
+  }
+
+  ctx.fillStyle = '#6b849e';
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ticks.forEach((ts, i) => {
+    const x = pad.l + (plotW * (ts - windowStart)) / HISTORY_WINDOW_SEC;
+    if (i % 4 === 0) {
+      ctx.strokeStyle = '#1a2433';
+      ctx.beginPath();
+      ctx.moveTo(x, pad.t);
+      ctx.lineTo(x, pad.t + plotH);
+      ctx.stroke();
+      ctx.fillText(formatClock(ts), x, h - 4);
+    }
+  });
+
+  const points = normalizeHistory(history);
+  if (!points.length) {
+    ctx.fillStyle = '#6b849e';
+    ctx.textAlign = 'center';
+    ctx.fillText('Сбор данных… (шаг 30 с)', pad.l + plotW / 2, pad.t + plotH / 2);
+    return;
+  }
+
   series.forEach(({ key, color }) => {
     ctx.strokeStyle = color;
     ctx.lineWidth = key === 'overall' ? 2.2 : 1.5;
     ctx.beginPath();
-    history.forEach((pt, i) => {
-      const x = pad.l + (plotW * i) / Math.max(1, n - 1);
+    let started = false;
+    points.forEach((pt) => {
+      const ts = pt.ts || now;
+      const x = pad.l + (plotW * Math.min(1, Math.max(0, (ts - windowStart) / HISTORY_WINDOW_SEC)));
       const y = pad.t + plotH * (1 - (pt[key] ?? 0) / 100);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
     });
     ctx.stroke();
   });
@@ -92,23 +147,24 @@ function renderServices(grid, services) {
   for (const s of services) {
     const card = document.createElement('article');
     card.className = `service-card status-${s.status}`;
-    const load = s.load_percent ?? (s.status === 'ok' ? 25 : 0);
+    const dotClass = statusDotClass(s.status);
     const latLabel =
       s.latency_ms != null && s.latency_ms > 0
         ? `${s.latency_ms} ms`
         : s.status === 'ok'
           ? 'онлайн'
           : '—';
-    const mClass = meterClass(s.status, load);
     card.innerHTML = `
       <div class="service-head">
-        <h3>${escapeHtml(s.name)}</h3>
+        <div class="service-title-row">
+          <span class="status-dot ${dotClass}" title="${STATUS_LABELS[s.status] || s.status}" aria-hidden="true"></span>
+          <h3>${escapeHtml(s.name)}</h3>
+        </div>
         <span class="service-status ${s.status}">${STATUS_LABELS[s.status] || s.status}</span>
       </div>
       <p class="service-detail">${escapeHtml(s.detail || '')}</p>
-      <div class="meter-row">
-        <div class="meter-label"><span>Нагрузка / отклик</span><span>${escapeHtml(latLabel)}</span></div>
-        <div class="meter-track"><div class="meter-fill ${mClass}" style="width:${Math.min(100, Math.max(4, load))}%"></div></div>
+      <div class="service-meta">
+        <span class="service-latency">${escapeHtml(latLabel)}</span>
       </div>
       ${s.url ? `<div class="service-url">${escapeHtml(s.url)}</div>` : ''}
     `;
@@ -134,6 +190,8 @@ class HealthDashboard {
       btnRefresh: document.getElementById('health-refresh'),
       btnLogsSave: document.getElementById('logs-save'),
       btnLogsRefresh: document.getElementById('logs-refresh'),
+      btnLogsCopyAll: document.getElementById('logs-copy-all'),
+      btnLogsCopy12h: document.getElementById('logs-copy-12h'),
     };
     this._logText = '';
     this._logLineCount = 0;
@@ -147,6 +205,8 @@ class HealthDashboard {
     this.$.btnRefresh?.addEventListener('click', () => this.refreshHealth());
     this.$.btnLogsRefresh?.addEventListener('click', () => this.fetchLogs({ force: true }));
     this.$.btnLogsSave?.addEventListener('click', () => this.saveLogs());
+    this.$.btnLogsCopyAll?.addEventListener('click', () => this.copyLogs());
+    this.$.btnLogsCopy12h?.addEventListener('click', () => this.copyLogs({ sinceHours: 12 }));
     this.$.autoRefresh?.addEventListener('change', () => this._schedulePolls());
     this.$.logsView?.addEventListener('scroll', () => this._onLogsScroll());
 
@@ -259,14 +319,16 @@ class HealthDashboard {
     drawChart(this.$.chart, this._lastHistory);
   }
 
-  async fetchLogs({ force = false } = {}) {
-    if (this._logsFetchInFlight) return;
-    this._logsFetchInFlight = true;
+  async fetchLogs({ force = false, sinceHours = null, updateView = true } = {}) {
+    if (updateView && this._logsFetchInFlight) return this._logText;
+    if (updateView) this._logsFetchInFlight = true;
     try {
-      const res = await fetch(
-        `/api/health/logs?limit=800&_=${Date.now()}`,
-        { credentials: 'same-origin', cache: 'no-store' },
-      );
+      const qs = new URLSearchParams({ limit: '8000', _: String(Date.now()) });
+      if (sinceHours != null) qs.set('since_hours', String(sinceHours));
+      const res = await fetch(`/api/health/logs?${qs}`, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
       if (!res.ok) {
         let detail = res.statusText;
         try {
@@ -280,20 +342,47 @@ class HealthDashboard {
       const lines = data.lines || [];
       const count = data.line_count ?? lines.length;
       const newText = lines.join('\n');
-      const changed = force || count !== this._logLineCount || newText !== this._logText;
-      if (changed) {
-        this._logText = newText;
-        this._logLineCount = count;
-        this._renderLogView();
+      if (updateView) {
+        const changed = force || count !== this._logLineCount || newText !== this._logText;
+        if (changed) {
+          this._logText = newText;
+          this._logLineCount = count;
+          this._renderLogView();
+        }
       }
-      window.appLog?.debug?.('health', 'Журнал загружен', { line_count: count });
+      return newText;
     } catch (err) {
       const msg = err?.message || String(err);
       this.$.logsView.textContent = `Ошибка загрузки лога: ${msg}`;
       this.$.logsCount.textContent = 'ошибка';
       window.appLog?.error?.('health', 'fetchLogs failed', msg);
+      return '';
     } finally {
-      this._logsFetchInFlight = false;
+      if (updateView) this._logsFetchInFlight = false;
+    }
+  }
+
+  async copyLogs({ sinceHours = null } = {}) {
+    let text = this._logText;
+    if (sinceHours != null) {
+      text = await this.fetchLogs({ sinceHours, updateView: false });
+    }
+    if (!text?.trim()) {
+      window.appLog?.warn?.('health', 'Нечего копировать');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      window.appLog?.info?.('health', sinceHours ? 'Журнал за 12 ч скопирован' : 'Журнал скопирован');
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
     }
   }
 

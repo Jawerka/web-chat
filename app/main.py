@@ -31,6 +31,7 @@ from app.middleware.access_control import AccessControlMiddleware
 from app.middleware.session_auth import SessionAuthMiddleware
 from app.middleware.public_base_url import PublicBaseUrlMiddleware
 from app.public_url import public_base_url_lan, public_base_url_vpn
+from app.services.health_service import health_history_background
 from app.services.job_queue import heavy_job_queue
 from app.services.retention_task import start_retention_background
 from app.security.trusted_internal import refresh_trusted_internal_from_settings
@@ -58,6 +59,10 @@ async def lifespan(app: FastAPI):
     await heavy_job_queue.start()
     start_mcp_background()
     retention_task, retention_stop = start_retention_background()
+    health_history_stop = asyncio.Event()
+    health_history_task = asyncio.create_task(
+        health_history_background(health_history_stop),
+    )
     vpn = public_base_url_vpn()
     logger.info(
         "web-chat запущен (PUBLIC_BASE_URL=%s%s, MCP :%d)",
@@ -66,6 +71,12 @@ async def lifespan(app: FastAPI):
         settings.effective_mcp_port,
     )
     yield
+    health_history_stop.set()
+    health_history_task.cancel()
+    try:
+        await health_history_task
+    except asyncio.CancelledError:
+        pass
     await graceful_shutdown()
     retention_stop.set()
     if isinstance(retention_task, asyncio.Task):

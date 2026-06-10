@@ -21,7 +21,7 @@
       <div class="health-header-actions">
         <label class="health-auto">
           <input type="checkbox" id="health-auto-refresh" checked>
-          Обновлять каждые 5 с
+          Обновлять каждые 30 с
         </label>
         <button type="button" class="btn" id="health-refresh">Обновить</button>
       </div>
@@ -38,7 +38,7 @@
 
     <section class="health-charts">
       <article class="chart-card">
-        <h2>Доступность (90 замеров)</h2>
+        <h2>Доступность — 60 минут (шаг 30 с)</h2>
         <canvas id="chart-overall" width="640" height="120" aria-label="График общей доступности"></canvas>
         <div class="chart-legend">
           <span class="leg leg-overall">Общее</span>
@@ -55,6 +55,8 @@
       <div class="logs-toolbar">
         <h2>Журнал</h2>
         <span class="logs-count" id="logs-count">0 строк</span>
+        <button type="button" class="btn" id="logs-copy-all" title="Скопировать весь журнал">Копировать всё</button>
+        <button type="button" class="btn" id="logs-copy-12h" title="Скопировать записи за последние 12 часов">Копировать 12 ч</button>
         <button type="button" class="btn btn-primary" id="logs-save">Сохранить лог</button>
         <button type="button" class="btn" id="logs-refresh">Обновить лог</button>
       </div>

@@ -4,10 +4,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import shutil
 import socket
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from collections import deque
 from typing import Any, Literal
@@ -76,7 +79,11 @@ class HealthReport(BaseModel):
     generated_count: int = 0
 
 
-_HISTORY: deque[HealthHistoryPoint] = deque(maxlen=90)
+HISTORY_INTERVAL_SEC = 30
+HISTORY_WINDOW_SEC = 3600
+HISTORY_MAX_POINTS = HISTORY_WINDOW_SEC // HISTORY_INTERVAL_SEC
+
+_HISTORY: deque[HealthHistoryPoint] = deque(maxlen=HISTORY_MAX_POINTS)
 _APP_STARTED = time.monotonic()
 
 
@@ -210,7 +217,8 @@ async def _probe_sd() -> ServiceProbe:
             if prog.is_success:
                 pdata = prog.json()
                 pct = float(pdata.get("progress") or 0) * 100
-                if pdata.get("state", {}).get("job_count", 0) or pct > 0.5:
+                job_count = int(pdata.get("state", {}).get("job_count") or 0)
+                if job_count > 0 and pct >= 5:
                     progress_load = min(99, int(pct))
                     progress_detail = f"Генерация: {pct:.0f}%"
         except httpx.HTTPError:
@@ -424,8 +432,53 @@ def _probe_app() -> ServiceProbe:
     )
 
 
+def _overall_from_probes(
+    llm_probe: ServiceProbe,
+    sd_probe: ServiceProbe,
+    db_probe: ServiceProbe,
+) -> Literal["ok", "degraded"]:
+    critical = [llm_probe, sd_probe, db_probe]
+    if any(s.status == "unavailable" for s in critical):
+        return "degraded"
+    if any(s.status in ("loading", "degraded") for s in critical):
+        return "degraded"
+    return "ok"
+
+
+async def record_health_history_tick() -> None:
+    """Один замер для графика доступности (каждые HISTORY_INTERVAL_SEC)."""
+    llm_probe = await _probe_llm()
+    sd_probe = await _probe_sd()
+    db_probe = await _probe_database()
+    overall = _overall_from_probes(llm_probe, sd_probe, db_probe)
+    _HISTORY.append(
+        HealthHistoryPoint(
+            ts=time.time(),
+            overall=_score("ok" if overall == "ok" else "degraded"),
+            llm=_score(llm_probe.status),
+            sd=_score(sd_probe.status),
+            database=_score(db_probe.status),
+        ),
+    )
+
+
+async def health_history_background(stop: asyncio.Event) -> None:
+    """Фоновый сбор метрик для графика (60 мин × шаг 30 с)."""
+    await record_health_history_tick()
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=HISTORY_INTERVAL_SEC)
+            break
+        except asyncio.TimeoutError:
+            pass
+        try:
+            await record_health_history_tick()
+        except Exception:
+            logger.exception("health history tick failed")
+
+
 async def build_health_report() -> HealthReport:
-    """Собрать полный отчёт и обновить историю для графиков."""
+    """Собрать полный отчёт (история — из фонового сборщика)."""
     from app.public_url import public_base_url_lan, public_base_url_vpn, resolve_public_base_url
 
     services = [
@@ -444,21 +497,7 @@ async def build_health_report() -> HealthReport:
         llm_legacy = "unavailable"
     sd_legacy = "ok" if sd_probe.status == "ok" else "unavailable"
 
-    critical = [llm_probe, sd_probe, db_probe]
-    overall: Literal["ok", "degraded"] = "ok"
-    if any(s.status == "unavailable" for s in critical):
-        overall = "degraded"
-    elif any(s.status in ("loading", "degraded") for s in critical):
-        overall = "degraded"
-
-    point = HealthHistoryPoint(
-        ts=time.time(),
-        overall=_score("ok" if overall == "ok" else "degraded"),
-        llm=_score(llm_probe.status),
-        sd=_score(sd_probe.status),
-        database=_score(db_probe.status),
-    )
-    _HISTORY.append(point)
+    overall = _overall_from_probes(llm_probe, sd_probe, db_probe)
 
     disk = _data_disk_extra()
     return HealthReport(
@@ -482,41 +521,131 @@ async def build_health_report() -> HealthReport:
     )
 
 
-def collect_aggregate_logs(*, buffer_limit: int = 400, file_tail: int = 400) -> dict[str, Any]:
-    """Объединённый журнал: буфер в памяти + хвост файла."""
+_SERVER_TS_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:[,.](\d+))?",
+)
+_CLIENT_TS_RE = re.compile(r"^\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?\]")
+
+
+def _parse_log_line_ts(line: str, *, now: datetime | None = None) -> float | None:
+    """Извлечь unix timestamp из строки серверного или клиентского журнала."""
+    ref = now or datetime.now(UTC)
+    m = _SERVER_TS_RE.match(line)
+    if m:
+        frac = m.group(2) or "0"
+        text = f"{m.group(1)}.{frac[:6]}"
+        try:
+            dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
+            return dt.timestamp()
+        except ValueError:
+            return None
+    m = _CLIENT_TS_RE.match(line)
+    if m:
+        h, mi, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        ms = int((m.group(4) or "0")[:3])
+        dt = ref.replace(hour=h, minute=mi, second=s, microsecond=ms * 1000)
+        return dt.timestamp()
+    return None
+
+
+def _server_dedup_key(line: str) -> str:
+    """Ключ дедупликации: секунда + тело строки (буфер и файл пишут одно и то же)."""
+    m = _SERVER_TS_RE.match(line)
+    if m:
+        return f"{m.group(1)}|{line[m.end():].strip()}"
+    return line.strip()
+
+
+def _merge_backend_lines(mem: list[str], file_lines: list[str]) -> list[str]:
+    """Объединить буфер и хвост файла без дублей, по времени."""
+    seen: set[str] = set()
+    merged: list[str] = []
+    for ln in file_lines + mem:
+        key = _server_dedup_key(ln)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(ln)
+    merged.sort(key=lambda ln: _parse_log_line_ts(ln) or 0.0)
+    return merged
+
+
+_CLIENT_NOISE_FRAGMENTS = (
+    "[DEBUG] [health] Журнал загружен",
+    "[DEBUG] [health] fetchLogs",
+)
+
+
+def _filter_client_lines(lines: list[str]) -> list[str]:
+    return [
+        ln
+        for ln in lines
+        if not any(frag in ln for frag in _CLIENT_NOISE_FRAGMENTS)
+    ]
+
+
+def _filter_lines_by_age(
+    lines: list[str],
+    *,
+    since_hours: float | None,
+) -> list[str]:
+    if since_hours is None or since_hours <= 0:
+        return lines
+    cutoff = time.time() - since_hours * 3600.0
+    now = datetime.now(UTC)
+    kept: list[str] = []
+    for ln in lines:
+        ts = _parse_log_line_ts(ln, now=now)
+        if ts is None or ts >= cutoff:
+            kept.append(ln)
+    return kept
+
+
+def collect_aggregate_logs(
+    *,
+    buffer_limit: int = 4000,
+    file_tail: int = 4000,
+    client_limit: int = 2000,
+    since_hours: float | None = None,
+) -> dict[str, Any]:
+    """Объединённый журнал: сервер (память + файл) + клиент (браузер)."""
+    from app.logging_buffer import get_client_log_lines
+
     sections: list[dict[str, Any]] = []
     lines: list[str] = []
-    _skip_fragments = ("http://llm.test/", "cached-model", "greenlet_spawn has not been called")
+    _skip_fragments = ("http://llm.test/",)
 
-    mem = get_log_lines(limit=buffer_limit)
-    if mem:
-        filtered = [ln for ln in mem if not any(s in ln for s in _skip_fragments)]
-        if filtered:
-            sections.append({"source": "web-chat (память)", "count": len(filtered)})
-            lines.append("════ web-chat · буфер приложения ════")
-            lines.extend(filtered)
-
+    mem = [
+        ln for ln in get_log_lines(limit=buffer_limit)
+        if not any(s in ln for s in _skip_fragments)
+    ]
+    file_lines: list[str] = []
     log_path = settings.log_file.strip()
     if log_path:
-        path = __import__("pathlib").Path(log_path)
+        path = Path(log_path)
         if path.is_file():
             try:
                 raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
                 tail = raw[-file_tail:] if len(raw) > file_tail else raw
-                filtered = [
-                    ln
-                    for ln in tail
-                    if not any(s in ln for s in _skip_fragments)
-                    and "Exception closing connection" not in ln
-                    and "MissingGreenlet" not in ln
-                ]
-                if filtered:
-                    sections.append({"source": "web-chat (файл)", "count": len(filtered)})
-                    lines.append("")
-                    lines.append(f"════ web-chat · {path.name} ════")
-                    lines.extend(filtered)
+                file_lines = [ln for ln in tail if not any(s in ln for s in _skip_fragments)]
             except OSError as exc:
                 lines.append(f"[не удалось прочитать {path}: {exc}]")
+
+    backend = _merge_backend_lines(mem, file_lines)
+    backend = _filter_lines_by_age(backend, since_hours=since_hours)
+    if backend:
+        sections.append({"source": "backend", "count": len(backend)})
+        lines.append("════ backend ════")
+        lines.extend(backend)
+
+    client = _filter_client_lines(get_client_log_lines(limit=client_limit))
+    if client:
+        filtered = _filter_lines_by_age(client, since_hours=since_hours)
+        if filtered:
+            sections.append({"source": "frontend (браузер)", "count": len(filtered)})
+            lines.append("")
+            lines.append("════ frontend · браузер ════")
+            lines.extend(filtered)
 
     return {
         "lines": lines,

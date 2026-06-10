@@ -27,6 +27,7 @@ async def get_generation_state(
     await msg_repo.settle_stale_streaming_assistant_messages(
         conversation_id,
         keep_message_id=keep_id,
+        preserve_last_streaming=in_progress,
     )
 
     if streaming_id is not None:

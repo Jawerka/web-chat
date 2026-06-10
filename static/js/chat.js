@@ -148,6 +148,7 @@ class ChatApp {
       documentRagBtn: document.getElementById('document-rag-btn'),
       composerMoreBtn: document.getElementById('composer-more-btn'),
       composerToolsMenu: document.getElementById('composer-tools-menu'),
+      preloadModelsBtn: document.getElementById('preload-models-btn'),
       documentRagPreview: document.getElementById('document-rag-preview'),
       macroInsertMenuBtn: document.getElementById('macro-insert-menu-btn'),
       settingsChatTitle: document.getElementById('settings-chat-title'),
@@ -365,6 +366,9 @@ class ChatApp {
     document.getElementById('error-banner-close').addEventListener('click', () => this.hideError());
     this.$.errorBannerRetry?.addEventListener('click', () => this._retrySocketConnection());
     this.$.cancelBtn?.addEventListener('click', () => this.cancelGeneration());
+    this.$.preloadModelsBtn?.addEventListener('click', () => {
+      void WebChatPreloadModels.run(this);
+    });
     WebChatPresets.bindPresetEvents(this);
     window.addEventListener('beforeunload', (e) => {
       if (this._hasUnsyncedPresetDrafts()) {
@@ -1189,6 +1193,7 @@ class ChatApp {
     if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = true;
     if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = true;
     if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = true;
+    if (this.$.preloadModelsBtn) this.$.preloadModelsBtn.disabled = true;
     WebChatComposer.closeToolsMenu(this);
     this._hideRagPreview();
     if (this.streaming) this.endStreaming();
@@ -1288,6 +1293,7 @@ class ChatApp {
       if (this.$.macroContextFullBtn) this.$.macroContextFullBtn.disabled = false;
       if (this.$.documentRagBtn) this.$.documentRagBtn.disabled = false;
       if (this.$.composerMoreBtn) this.$.composerMoreBtn.disabled = false;
+      if (this.$.preloadModelsBtn) this.$.preloadModelsBtn.disabled = false;
 
       WebChatComposer.resetUi(this);
       this._updateDocumentRagToggleUi();
@@ -1579,6 +1585,10 @@ class ChatApp {
     const blocked = WebChatComposer.sendBlockedReason(this, rawText);
     if (blocked) {
       if (blocked !== null) this.showError(blocked, 3500);
+      return;
+    }
+
+    if (!(await WebChatPreloadModels.ensureBeforeSend(this))) {
       return;
     }
 
@@ -2109,10 +2119,12 @@ class ChatApp {
     }
 
     if (!status.in_progress) {
-      if (this.streaming || this._generationResumeActive) {
-        this._generationNotifyPending = true;
+      if (this.streaming || this._generationResumeActive || status.streaming_message_id) {
+        this._generationNotifyPending = Boolean(this.streaming || this._generationResumeActive);
         await this._completeGenerationUi({ preserveScroll: !this._scrollStuckToBottom });
-        this._notifyGenerationComplete({ conversationTitle: this.currentConv?.title });
+        if (this._generationNotifyPending) {
+          this._notifyGenerationComplete({ conversationTitle: this.currentConv?.title });
+        }
       } else {
         this._generationResumeActive = false;
       }

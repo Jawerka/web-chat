@@ -55,7 +55,7 @@
   }
 
   function toggleTrashPanel(app) {
-    setSidebarTab(app._trashOpen ? 'conversations' : 'trash');
+    setSidebarTab(app, app._trashOpen ? 'conversations' : 'trash');
   }
 
   function cancelPendingEmptyTrash(app) {
@@ -138,13 +138,13 @@
     app.$.convTrashList.querySelectorAll('.conv-trash-restore').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        void restoreTrashConversation(btn.dataset.id);
+        void restoreTrashConversation(app, btn.dataset.id);
       });
     });
     app.$.convTrashList.querySelectorAll('.conv-trash-delete').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        onTrashDeleteClick(btn.dataset.id, btn);
+        onTrashDeleteClick(app, btn.dataset.id, btn);
       });
     });
   }
@@ -164,7 +164,7 @@
 
   function onTrashDeleteClick(app, id, btn) {
     if (app._pendingTrashDeleteId === id) {
-      void executePermanentTrashDelete(id);
+      void executePermanentTrashDelete(app, id);
       return;
     }
     cancelPendingEmptyTrash(app);
@@ -436,7 +436,7 @@
       return;
     }
     app._searchDebounceTimer = setTimeout(() => {
-      void runConvSearch(q);
+      void runConvSearch(app, q);
     }, 300);
   }
 
@@ -445,7 +445,7 @@
   }
 
   function openConvSearchPanel(app) {
-    setSidebarTab('conversations');
+    setSidebarTab(app, 'conversations');
     const stack = app.$.convSearchStack;
     if (!stack) return;
     stack.hidden = false;
@@ -504,7 +504,7 @@
     showConvSearchSkeleton(app);
     try {
       const hits = await app.api(`/api/search?q=${encodeURIComponent(q)}`);
-      renderSearchResults(hits, q);
+      renderSearchResults(app, hits, q);
     } catch (err) {
       app.showError(err.message);
       clearConvSearch(app);
@@ -540,6 +540,7 @@
     el.querySelectorAll('.conv-search-hit').forEach((item) => {
       const open = () => {
         void openSearchHit(
+          app,
           item.dataset.convId,
           item.dataset.messageId || null,
         );

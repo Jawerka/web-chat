@@ -3151,6 +3151,11 @@ body.dark-theme .loading-overlay {
   box-shadow: var(--focus-ring);
 }
 
+.composer-tools-menu-item[aria-busy="true"] {
+  opacity: 0.85;
+  cursor: wait;
+}
+
 .composer-tools-menu-item.active {
   background: color-mix(in srgb, var(--primary) 12%, var(--surface));
   color: var(--primary);

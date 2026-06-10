@@ -31,7 +31,20 @@
       this._reconnectTimer = null;
       this._reconnectAttempt = 0;
       this._shouldReconnect = true;
+      this._holdReconnect = false;
       this.connected = false;
+    }
+
+    /** Во время долгого прогрева моделей — не сдаваться после N попыток. */
+    setHoldReconnect(hold) {
+      this._holdReconnect = Boolean(hold);
+      if (hold) {
+        this._reconnectAttempt = 0;
+      }
+      const interval = hold ? 10000 : this.pingIntervalMs;
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this._startPing(interval);
+      }
     }
 
     connect() {
@@ -82,13 +95,14 @@
       this.ws.send(JSON.stringify(payload));
     }
 
-    _startPing() {
+    _startPing(intervalMs) {
       this._stopPing();
+      const ms = intervalMs ?? this.pingIntervalMs;
       this._pingTimer = setInterval(() => {
         if (this.ws?.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: 'ping' }));
         }
-      }, this.pingIntervalMs);
+      }, ms);
     }
 
     _stopPing() {
@@ -98,7 +112,7 @@
 
     _scheduleReconnect() {
       if (!this._shouldReconnect) return;
-      const max = this._maxReconnectAttempts;
+      const max = this._holdReconnect ? null : this._maxReconnectAttempts;
       if (max !== null && this._reconnectAttempt >= max) {
         this._shouldReconnect = false;
         this.handlers.onReconnectExhausted?.(this._reconnectAttempt, max);

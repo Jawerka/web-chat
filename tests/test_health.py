@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-from app.services.health_service import HealthHistoryPoint, HealthReport, ServiceProbe
+from app.services.health_service import (
+    HealthHistoryPoint,
+    HealthReport,
+    ServiceProbe,
+    _merge_backend_lines,
+)
 
 
 def _sample_report(*, overall: str = "ok", llm: str = "ok", sd: str = "ok") -> HealthReport:
@@ -100,6 +105,16 @@ async def test_health_degraded_when_sd_down(
     response = await client.get("/api/health")
     assert response.json()["status"] == "degraded"
     assert response.json()["sd"] == "unavailable"
+
+
+def test_merge_backend_lines_dedupes_buffer_and_file() -> None:
+  """Буфер и файл с одной строкой → одна запись в журнале."""
+  line = (
+      "2026-06-09 21:47:01,212 INFO [app.security.trusted_internal] "
+      "conv=- turn=- ws=- trusted_internal: 6 IP"
+  )
+  merged = _merge_backend_lines([line], [line])
+  assert merged == [line]
 
 
 @pytest.mark.asyncio

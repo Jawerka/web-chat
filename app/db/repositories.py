@@ -998,6 +998,7 @@ class MessageRepository:
         conversation_id: uuid.UUID,
         *,
         keep_message_id: uuid.UUID | None = None,
+        preserve_last_streaming: bool = True,
     ) -> int:
         """
         Снять streaming:true со всех assistant, кроме разрешённого.
@@ -1007,13 +1008,20 @@ class MessageRepository:
 
         Args:
             keep_message_id: Явно сохранить streaming у этого id (активный черновик).
+            preserve_last_streaming: False — снять streaming даже с последнего assistant
+                (когда активной генерации на сервере нет).
 
         Returns:
             Число обновлённых сообщений.
         """
         last = await self.get_last_message(conversation_id)
         allowed_id: uuid.UUID | None = keep_message_id
-        if allowed_id is None and last is not None and last.role == MessageRole.ASSISTANT:
+        if (
+            preserve_last_streaming
+            and allowed_id is None
+            and last is not None
+            and last.role == MessageRole.ASSISTANT
+        ):
             payload = last.content_json if isinstance(last.content_json, dict) else {}
             if payload.get("streaming"):
                 allowed_id = last.id

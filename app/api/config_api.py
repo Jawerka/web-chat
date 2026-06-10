@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, status
@@ -16,6 +17,11 @@ from app.public_url import (
 )
 from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import parse_optional_url
+from app.integrations.sd_warmup import (
+    invalidate_sd_ready_cache,
+    run_sd_warmup_txt2img,
+    sd_ready_cached,
+)
 from app.security.trusted_internal import (
     register_integration_urls,
     trusted_internal_hosts_summary,
@@ -95,6 +101,22 @@ class SdModelSelectIn(BaseModel):
     title: str
     sd_webui_url: str | None = None
     warmup: bool = True
+
+
+class LlmWarmupIn(BaseModel):
+    llm_base_url: str | None = None
+    model: str | None = None
+
+
+class SdWarmupIn(BaseModel):
+    title: str | None = None
+    sd_webui_url: str | None = None
+
+
+class SdReadyOut(BaseModel):
+    ready: bool
+    selected: str = ""
+    detail: str = ""
 
 
 @router.get("", response_model=PublicConfigOut)
@@ -212,6 +234,31 @@ def _sd_auth() -> tuple[str, str] | None:
     return None
 
 
+async def _fetch_sd_selected_checkpoint(
+    client: httpx.AsyncClient,
+    base: str,
+    auth: tuple[str, str] | None,
+) -> str:
+    options_res = await client.get(f"{base}/sdapi/v1/options", auth=auth)
+    options_res.raise_for_status()
+    options = options_res.json() if isinstance(options_res.json(), dict) else {}
+    return str(options.get("sd_model_checkpoint") or "").strip()
+
+
+async def _apply_sd_checkpoint(
+    client: httpx.AsyncClient,
+    base: str,
+    auth: tuple[str, str] | None,
+    title: str,
+) -> None:
+    apply_res = await client.post(
+        f"{base}/sdapi/v1/options",
+        json={"sd_model_checkpoint": title},
+        auth=auth,
+    )
+    apply_res.raise_for_status()
+
+
 @router.get("/sd-models", response_model=SdModelsOut)
 async def get_sd_models(
     sd_webui_url: str | None = Query(None, max_length=512),
@@ -285,33 +332,159 @@ async def set_sd_model(body: SdModelSelectIn) -> dict:
             ) from exc
 
         if body.warmup:
-            # "Фейковый" прогрев, чтобы WebUI успел подгрузить веса до реальной генерации.
-            payload = {
-                "prompt": "warmup",
-                "negative_prompt": "",
-                "steps": 1,
-                "width": 64,
-                "height": 64,
-                "cfg_scale": 1,
-                "sampler_name": settings.sd_sampler or "Euler a",
-                "seed": -1,
-                "n_iter": 1,
-                "batch_size": 1,
-                "do_not_save_samples": True,
-                "do_not_save_grid": True,
-            }
             try:
-                # Ждём в фоне пула, чтобы не блокировать event loop при долгой загрузке.
-                await asyncio.to_thread(
-                    lambda: httpx.post(
-                        f"{base}/sdapi/v1/txt2img",
-                        json=payload,
-                        auth=auth,
-                        timeout=max(30.0, float(settings.request_timeout)),
-                    )
-                )
-            except Exception:
-                # Прогрев необязателен: модель уже применена через /options.
-                pass
+                await run_sd_warmup_txt2img(client, base, auth, checkpoint=title)
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=str(exc),
+                ) from exc
 
     return {"ok": True, "selected": title, "warmup": bool(body.warmup)}
+
+
+@router.get("/sd-ready", response_model=SdReadyOut)
+async def get_sd_ready(
+    sd_webui_url: str | None = Query(None, max_length=512),
+    probe: bool = Query(False, description="Проверить tiny txt2img, не только кэш"),
+) -> SdReadyOut:
+    """
+    Готов ли SD checkpoint в VRAM.
+
+    /sd-models может отвечать OK при выгруженной модели; probe=true делает реальный прогрев.
+    """
+    base = (parse_optional_url(sd_webui_url) or settings.sd_webui_url).rstrip("/")
+    auth = _sd_auth()
+    timeout = max(20.0, float(settings.request_timeout))
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            selected = await _fetch_sd_selected_checkpoint(client, base, auth)
+        except httpx.HTTPError as exc:
+            return SdReadyOut(
+                ready=False,
+                detail=f"SD API недоступен: {exc}",
+            )
+
+        if not probe and selected and sd_ready_cached(base, selected):
+            return SdReadyOut(ready=True, selected=selected, detail="Кэш: модель прогрета")
+
+        if not probe:
+            return SdReadyOut(
+                ready=False,
+                selected=selected,
+                detail="Требуется прогрев checkpoint",
+            )
+
+        try:
+            await run_sd_warmup_txt2img(client, base, auth, checkpoint=selected)
+        except RuntimeError as exc:
+            return SdReadyOut(ready=False, selected=selected, detail=str(exc))
+
+    return SdReadyOut(ready=True, selected=selected, detail="Прогрев успешен")
+
+
+@router.post("/sd-warmup")
+async def warmup_sd(body: SdWarmupIn) -> dict:
+    """Применить checkpoint и обязательно прогреть SD (tiny txt2img)."""
+    base = (parse_optional_url(body.sd_webui_url) or settings.sd_webui_url).rstrip("/")
+    auth = _sd_auth()
+    timeout = max(30.0, float(settings.request_timeout))
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        title = (body.title or "").strip()
+        if not title:
+            try:
+                title = await _fetch_sd_selected_checkpoint(client, base, auth)
+            except httpx.HTTPError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Не удалось получить SD checkpoint: {exc}",
+                ) from exc
+        if not title:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Не задан SD checkpoint",
+            )
+
+        try:
+            await _apply_sd_checkpoint(client, base, auth, title)
+            await run_sd_warmup_txt2img(client, base, auth, checkpoint=title)
+        except httpx.HTTPError as exc:
+            invalidate_sd_ready_cache(base)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Не удалось применить SD модель: {exc}",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+
+    return {"ok": True, "selected": title}
+
+
+@router.post("/llm-warmup")
+async def warmup_llm(body: LlmWarmupIn) -> dict:
+    """
+    Прогрев LLM: короткий запрос без tools загружает модель в память.
+
+    Повторяет при HTTP 503 (Loading model) до llm_model_load_wait_sec.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    parsed_llm = parse_optional_url(body.llm_base_url)
+    register_integration_urls(parsed_llm, None)
+    client = LLMClient(base_url=parsed_llm)
+
+    try:
+        model = await client.resolve_model(body.model)
+    except LLMError as exc:
+        log.warning("llm-warmup: resolve_model failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Не удалось выбрать модель LLM: {exc}",
+        ) from exc
+
+    log.info("llm-warmup: прогрев модели %s (url=%s)", model, parsed_llm or settings.llm_base_url)
+    deadline = time.monotonic() + max(5.0, float(settings.llm_model_load_wait_sec))
+    last_exc: LLMError | None = None
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            await client.complete_plain_text(
+                [{"role": "user", "content": "."}],
+                model=body.model or model,
+                max_tokens=1,
+                temperature=0,
+                disable_thinking=True,
+                allow_reasoning_fallback=False,
+            )
+            log.info("llm-warmup: модель %s готова (попытка %d)", model, attempt)
+            return {"ok": True, "model": model}
+        except LLMError as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            if "503" in msg or "loading" in msg:
+                log.info(
+                    "llm-warmup: модель загружается, повтор через %.1f с (попытка %d): %s",
+                    settings.llm_model_load_retry_sec,
+                    attempt,
+                    exc,
+                )
+                await asyncio.sleep(settings.llm_model_load_retry_sec)
+                continue
+            log.warning("llm-warmup: ошибка (попытка %d): %s", attempt, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+
+    log.warning("llm-warmup: таймаут для %s после %d попыток: %s", model, attempt, last_exc)
+    raise HTTPException(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        detail=str(last_exc) or "Таймаут прогрева LLM",
+    )

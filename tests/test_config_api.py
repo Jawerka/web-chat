@@ -37,3 +37,26 @@ async def test_llm_model_endpoint(
     data = response.json()
     assert data["resolved"] == "test-model-v1"
     assert data["source"] in ("config", "auto")
+
+
+@pytest.mark.asyncio
+async def test_llm_warmup_endpoint(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/config/llm-warmup — короткий прогрев LLM."""
+
+    async def _resolve(self, override: str | None = None) -> str:
+        return "warm-model"
+
+    async def _plain(self, messages, **kwargs: object) -> str:
+        return ""
+
+    monkeypatch.setattr("app.api.config_api.LLMClient.resolve_model", _resolve)
+    monkeypatch.setattr("app.api.config_api.LLMClient.complete_plain_text", _plain)
+
+    response = await client.post("/api/config/llm-warmup", json={})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["model"] == "warm-model"

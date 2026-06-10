@@ -27,9 +27,19 @@ async def health() -> JSONResponse:
 
 @router.get("/health/logs")
 async def health_logs(
-    limit: int = Query(500, ge=50, le=2000),
+    limit: int = Query(4000, ge=50, le=10000),
+    since_hours: float | None = Query(
+        None,
+        ge=0.1,
+        le=168,
+        description="Только строки за последние N часов",
+    ),
 ) -> dict:
-    """Объединённый журнал web-chat (память + файл)."""
+    """Объединённый журнал backend + frontend."""
     ensure_log_buffer_attached()
-    data = collect_aggregate_logs(buffer_limit=limit, file_tail=limit)
-    return data
+    return collect_aggregate_logs(
+        buffer_limit=limit,
+        file_tail=limit,
+        client_limit=limit,
+        since_hours=since_hours,
+    )

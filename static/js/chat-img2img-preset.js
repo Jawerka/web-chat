@@ -428,7 +428,16 @@
 
   function logDiagnostics(app, phase, extra) {
     if (!app?.log) return;
-    app.log.info('img2img-preset', phase, { ...collectDiagnostics(app), ...extra });
+    const d = collectDiagnostics(app);
+    const summary = [
+      d.convId ? `conv=${d.convId.slice(0, 8)}` : null,
+      d.convPresetSlug || d.selectPresetSlug || null,
+      d.injectionEnabled ? 'inject' : null,
+    ].filter(Boolean).join(' ');
+    if (phase === 'init' || phase === 'presets_loaded' || phase === 'conversation_selected') {
+      app.log.info('img2img-preset', summary ? `${phase}: ${summary}` : phase);
+    }
+    app.log.debug('img2img-preset', phase, { ...d, ...extra });
   }
 
   /** Текст для отправки в LLM (с подсказками из панели img2img, если включено). */

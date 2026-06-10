@@ -12,6 +12,8 @@ import logging
 import re
 import time
 import uuid
+
+import requests
 from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import Future
 from contextlib import asynccontextmanager
@@ -685,6 +687,11 @@ class ToolExecutor:
             return ToolResult(content=str(exc), image_urls=[])
         except RuntimeError as exc:
             return ToolResult(content=str(exc), image_urls=[])
+        except requests.HTTPError as exc:
+            return ToolResult(
+                content=f"Ошибка SD {tool_name}: {exc}. Попробуйте «Загрузить модели».",
+                image_urls=[],
+            )
         finally:
             poll_stop.set()
             if poll_task is not None:

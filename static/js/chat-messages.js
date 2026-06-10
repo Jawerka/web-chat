@@ -871,9 +871,18 @@
   }
 
   async function runRegenerate(app, messageId, { fromAssistant = false } = {}) {
-    if (app.streaming || !app.socket) return;
+    if (app.streaming || !app.socket || app._preloadingModels) return;
     const row = findRow(app, messageId);
     if (!row) return;
+
+    if (!(await WebChatPreloadModels.ensureBeforeSend(app))) {
+      return;
+    }
+
+    if (typeof app._ensureSocketReady === 'function' && !(await app._ensureSocketReady(25000))) {
+      app.showError?.('Не удалось подключиться к серверу после загрузки моделей.', 5000, { showRetry: true });
+      return;
+    }
 
     if (fromAssistant) {
       removeFollowingRows(app, row, true);
