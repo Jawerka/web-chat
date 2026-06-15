@@ -9,6 +9,7 @@ id_rsa
 id_rsa.*
 
 audit.md
+AGENTS.md
 docs/debug-snapshots/
 
 # Python
