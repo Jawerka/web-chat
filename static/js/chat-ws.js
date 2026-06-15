@@ -43,7 +43,7 @@
           h.onToolStart?.(msg.name, msg.arguments);
           break;
         case 'tool_done':
-          h.onToolDone?.(msg.name, msg.summary);
+          h.onToolDone?.(msg.name, msg.summary, msg.skipped === true);
           break;
         case 'progress':
           h.onProgress?.(msg);

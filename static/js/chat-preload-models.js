@@ -7,6 +7,9 @@
   const HEALTH_POLL_MS = 2000;
   const LLM_WAIT_MS = 130000;
   const SOCKET_READY_MS = 25000;
+  /** Не прогревать повторно, если недавно уже гоняли модели (мс). */
+  const WARM_SKIP_MS = 40 * 60 * 1000;
+  const WARMED_AT_KEY = 'webchat_models_warmed_at';
   const SD_PRESET_SLUGS = new Set(['img2img', 'image_gen']);
 
   function parseErrorDetail(payload, fallback) {
@@ -20,6 +23,24 @@
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function recordWarmedAt() {
+    try {
+      localStorage.setItem(WARMED_AT_KEY, String(Date.now()));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function isRecentlyWarmed() {
+    try {
+      const raw = localStorage.getItem(WARMED_AT_KEY);
+      const at = Number(raw);
+      return Number.isFinite(at) && at > 0 && (Date.now() - at) < WARM_SKIP_MS;
+    } catch {
+      return false;
+    }
   }
 
   function setBtnState(btn, { busy = false, label = null, title = null } = {}) {
@@ -79,29 +100,49 @@
   }
 
   /**
+   * Пропуск только LLM-прогрева (40 мин). SD для image_gen/img2img всегда проверяется отдельно.
+   */
+  function canSkipLlmWarmup(health) {
+    return isRecentlyWarmed() && health?.llm === 'ok';
+  }
+
+  /**
    * Нужна ли предзагрузка.
    * LLM в статусе loading — только ожидание (без POST llm-warmup).
+   * SD: probe sd-ready для пресетов с генерацией — даже после недавнего прогрева.
    */
-  async function resolveNeeds(app, health) {
-    const llmSvc = health?.services?.find((s) => s.id === 'llm');
-    const llmWait = llmSvc?.status === 'loading';
-    const needLlmWarmup = health?.llm !== 'ok' && !llmWait;
+  async function resolveNeeds(app, health, { force = false } = {}) {
+    const skipLlm = !force && canSkipLlmWarmup(health);
 
-    let needSd = health?.sd !== 'ok';
-    if (!needSd && conversationUsesSd(app)) {
-      const { sd: sdUrl } = integrationUrls(app);
-      try {
-        const ready = await fetchSdReady(app, sdUrl);
-        if (!ready?.ready) needSd = true;
-      } catch {
-        needSd = true;
+    let llmWarmup = false;
+    let llmWait = false;
+    if (!skipLlm) {
+      const llmSvc = health?.services?.find((s) => s.id === 'llm');
+      llmWait = llmSvc?.status === 'loading';
+      llmWarmup = health?.llm !== 'ok' && !llmWait;
+    }
+
+    let needSd = false;
+    if (conversationUsesSd(app)) {
+      needSd = health?.sd !== 'ok';
+      if (!needSd) {
+        const { sd: sdUrl } = integrationUrls(app);
+        try {
+          const ready = await fetchSdReady(app, sdUrl);
+          if (!ready?.ready) needSd = true;
+        } catch {
+          needSd = true;
+        }
       }
     }
+
+    const skippedRecent = skipLlm && !llmWarmup && !llmWait && !needSd;
     return {
-      llmWarmup: needLlmWarmup,
+      llmWarmup,
       llmWait,
       sd: needSd,
-      any: needLlmWarmup || llmWait || needSd,
+      any: llmWarmup || llmWait || needSd,
+      skippedRecent,
     };
   }
 
@@ -136,7 +177,6 @@
     return ok;
   }
 
-  /** Ожидание, пока LLM сам догрузит модель (без лишнего llm-warmup). */
   async function waitForLlmReady(app, { onProgress, maxWaitMs = LLM_WAIT_MS } = {}) {
     const started = Date.now();
     onProgress?.('LLM: загрузка модели…');
@@ -155,7 +195,6 @@
     throw new Error('Таймаут ожидания загрузки LLM. Повторите отправку позже.');
   }
 
-  /** Только статус LLM (без SD «Генерация: 1%» во время прогрева). */
   function startLlmLoadingPoll(app, onLlmStatus) {
     if (!onLlmStatus) return () => {};
     let stopped = false;
@@ -244,25 +283,30 @@
     const llmModel = WebChatSettings.getActiveLlmModel(app);
     const result = { llm: '', sd: '' };
 
-    if (needs.llmWait) {
-      await waitForLlmReady(app, { onProgress });
-      result.llm = llmModel || 'ready';
-    }
-    if (needs.llmWarmup) {
-      result.llm = await warmupLlm(app, {
-        llmUrl,
-        model: llmModel,
-        onProgress,
-      });
-    }
-    if (needs.sd) {
+    const llmTask = async () => {
+      if (needs.llmWait) {
+        await waitForLlmReady(app, { onProgress });
+        result.llm = llmModel || 'ready';
+      } else if (needs.llmWarmup) {
+        result.llm = await warmupLlm(app, {
+          llmUrl,
+          model: llmModel,
+          onProgress,
+        });
+      }
+    };
+
+    const sdTask = async () => {
+      if (!needs.sd) return;
       const sdTitle = await resolveSdCheckpoint(app, sdUrl);
       result.sd = await warmupSd(app, {
         sdUrl,
         title: sdTitle,
         onProgress,
       });
-    }
+    };
+
+    await Promise.all([llmTask(), sdTask()]);
     return result;
   }
 
@@ -286,7 +330,12 @@
     }
 
     const needs = await resolveNeeds(app, health);
-    if (!needs.any) return true;
+    if (!needs.any) {
+      if (needs.skippedRecent) {
+        app.log?.debug('preload', 'Прогрев пропущен: модели недавно использовались');
+      }
+      return true;
+    }
 
     beginPreloadSession(app);
 
@@ -296,12 +345,13 @@
       });
       const message = formatReadyMessage(result, needs);
       app.log?.info('preload', `Автозагрузка перед отправкой: ${message}`);
-      if (quiet) showStatus(app, message, { success: true });
+      if (!quiet) showStatus(app, message, { success: true });
       const socketOk = await endPreloadSession(app);
       if (!socketOk) {
         showStatus(app, 'Соединение с сервером потеряно во время загрузки моделей. Подождите переподключения и повторите.', { error: true });
         return false;
       }
+      recordWarmedAt();
       return true;
     } catch (err) {
       const message = err?.message || 'Не удалось загрузить модели';
@@ -321,29 +371,41 @@
       title: 'Предзагрузка моделей LLM и SD',
     };
 
+    let needs = { llmWarmup: true, llmWait: false, sd: true, any: true };
+    try {
+      const health = await fetchHealth(app);
+      needs = await resolveNeeds(app, health, { force: true });
+    } catch {
+      /* принудительный прогрев по health ниже */
+    }
+
+    if (!needs.any) {
+      showStatus(app, 'Модели уже готовы', { success: true });
+      return;
+    }
+
     beginPreloadSession(app);
     WebChatComposer.closeToolsMenu(app);
     setBtnState(btn, { busy: true, label: 'Загрузка…', title: 'Предзагрузка моделей…' });
-
-    let needs = { llmWarmup: true, llmWait: false, sd: true };
-    try {
-      const health = await fetchHealth(app);
-      const llmSvc = health?.services?.find((s) => s.id === 'llm');
-      if (llmSvc?.status === 'loading') {
-        needs = { llmWarmup: false, llmWait: true, sd: true };
-      }
-    } catch {
-      /* принудительный прогрев LLM+SD */
-    }
 
     try {
       const result = await executePreload(app, needs, {
         onProgress: (text) => setBtnState(btn, { busy: true, label: text, title: text }),
       });
       const message = formatReadyMessage(result, needs);
-      showStatus(app, message, { success: true });
-      app.log?.info('preload', message);
-      await endPreloadSession(app);
+      const socketOk = await endPreloadSession(app);
+      if (socketOk) {
+        recordWarmedAt();
+        showStatus(app, message, { success: true });
+        app.log?.info('preload', message);
+      } else {
+        showStatus(
+          app,
+          `${message}. Соединение с чатом не восстановлено — дождитесь переподключения перед отправкой.`,
+          { error: true },
+        );
+        app.log?.warn('preload', `${message}; WebSocket не восстановлен после прогрева`);
+      }
     } catch (err) {
       const message = err?.message || 'Не удалось загрузить модели';
       showStatus(app, message, { error: true });
@@ -360,5 +422,8 @@
     ensureBeforeSend,
     resolveNeeds,
     conversationUsesSd,
+    canSkipLlmWarmup,
+    recordWarmedAt,
+    isRecentlyWarmed,
   };
 })();

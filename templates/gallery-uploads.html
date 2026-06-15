@@ -56,6 +56,15 @@
     <div id="uploads-grid" class="gallery-grid hidden"></div>
   </div>
 
+  <nav class="gallery-scroll-nav" aria-label="Прокрутка страницы">
+    <button type="button" class="gallery-scroll-btn gallery-scroll-btn--top" id="gallery-scroll-top" title="В начало" aria-label="В начало" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+    </button>
+    <button type="button" class="gallery-scroll-btn gallery-scroll-btn--bottom" id="gallery-scroll-bottom" title="В конец" aria-label="В конец" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+  </nav>
+
   <div id="uploads-ref-lightbox" class="uploads-ref-lightbox hidden" role="dialog" aria-modal="true" aria-label="Просмотр загрузки">
     <div class="uploads-ref-topbar">
       <span class="uploads-ref-counter" id="uploads-ref-counter"></span>

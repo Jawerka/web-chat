@@ -273,6 +273,45 @@ class AgentOrchestrator:
     _ANTI_LOOP_SKIP_MSG = (
         "Вызов инструмента пропущен: лимит повторов в этом ходе."
     )
+    _ANTI_LOOP_EARLY_DONE_NOTE = (
+        "Генерация завершена: повторные вызовы инструмента остановлены."
+    )
+
+    async def _complete_turn_after_anti_loop(
+        self,
+        *,
+        ctx: TurnContext,
+        reasoning: str | None,
+        overflow_note: str | None = None,
+    ) -> AgentTurnResult | None:
+        """Сохранить частичный ответ после лимита anti-loop."""
+        async with open_turn_session() as session:
+            msg_repo = MessageRepository(session)
+            conv_repo = ConversationRepository(session)
+            conversation = await conv_repo.get_by_id(ctx.conversation_id)
+            user_message = await msg_repo.get_by_id(ctx.user_message_id)
+            if conversation is None or user_message is None:
+                return None
+            partial = await self._complete_after_tool_limit(
+                session,
+                msg_repo=msg_repo,
+                conv_repo=conv_repo,
+                conversation=conversation,
+                user_message=user_message,
+                content_from_llm=None,
+                all_image_urls=ctx.all_image_urls,
+                all_image_asset_ids=ctx.all_image_asset_ids,
+                media_url_rewrites=ctx.media_url_rewrites,
+                tool_calls_meta=ctx.tool_calls_meta,
+                emit=ctx.emit,
+                llm_model=ctx.llm_model,
+                existing_message_id=ctx.existing_message_id,
+                overflow_note=overflow_note,
+                rag_sources=ctx.rag_sources,
+                reasoning=reasoning,
+            )
+            await session.commit()
+        return partial
 
     async def _complete_after_tool_limit(
         self,
@@ -340,7 +379,13 @@ class AgentOrchestrator:
         assert stream_draft is not None
         await stream_draft.set_active_tool(name)
         await ctx.emit("tool_start", {"name": name, "arguments": args})
-        logger.info("tool_start: %s (round=%d)", name, round_idx + 1)
+        log_event(
+            logger,
+            "tool_start",
+            f"tool_start {name} round={round_idx + 1}",
+            tool=name,
+            round=round_idx + 1,
+        )
         try:
 
             async def _run() -> ToolResult:
@@ -425,7 +470,14 @@ class AgentOrchestrator:
                     cancel_event=ctx.cancel_event,
                 )
             except ToolAntiLoopExceeded as exc:
-                logger.warning("anti-loop: %s", exc)
+                log_event(
+                    logger,
+                    "anti_loop",
+                    str(exc),
+                    level=logging.WARNING,
+                    tool=name,
+                    kind=exc.kind,
+                )
                 await stream_draft.set_active_tool(name)
                 await ctx.emit(
                     "tool_done",
@@ -433,6 +485,7 @@ class AgentOrchestrator:
                         "name": name,
                         "summary": self._ANTI_LOOP_SKIP_MSG[:200],
                         "skipped": True,
+                        "kind": exc.kind,
                     },
                 )
                 ctx.llm_messages.append(
@@ -442,33 +495,25 @@ class AgentOrchestrator:
                         "content": self._ANTI_LOOP_SKIP_MSG,
                     }
                 )
-                if exc.kind == "max_same":
-                    async with open_turn_session() as session:
-                        msg_repo = MessageRepository(session)
-                        conv_repo = ConversationRepository(session)
-                        conversation = await conv_repo.get_by_id(ctx.conversation_id)
-                        user_message = await msg_repo.get_by_id(ctx.user_message_id)
-                        if conversation is None or user_message is None:
-                            break
-                        partial = await self._complete_after_tool_limit(
-                            session,
-                            msg_repo=msg_repo,
-                            conv_repo=conv_repo,
-                            conversation=conversation,
-                            user_message=user_message,
-                            content_from_llm=None,
-                            all_image_urls=ctx.all_image_urls,
-                            all_image_asset_ids=ctx.all_image_asset_ids,
-                            media_url_rewrites=ctx.media_url_rewrites,
-                            tool_calls_meta=ctx.tool_calls_meta,
-                            emit=ctx.emit,
-                            llm_model=ctx.llm_model,
-                            existing_message_id=ctx.existing_message_id,
-                            overflow_note=None,
-                            rag_sources=ctx.rag_sources,
-                            reasoning=reasoning,
-                        )
-                        await session.commit()
+                if exc.kind == "duplicate":
+                    ctx.consecutive_tool_skips += 1
+                should_finish = exc.kind == "max_same" or (
+                    exc.kind == "duplicate"
+                    and ctx.consecutive_tool_skips
+                    >= settings.max_consecutive_tool_skips
+                    and bool(ctx.all_image_urls)
+                )
+                if should_finish:
+                    overflow = (
+                        self._ANTI_LOOP_EARLY_DONE_NOTE
+                        if exc.kind == "duplicate"
+                        else None
+                    )
+                    partial = await self._complete_turn_after_anti_loop(
+                        ctx=ctx,
+                        reasoning=reasoning,
+                        overflow_note=overflow,
+                    )
                     if partial is not None:
                         return partial
                     break
@@ -490,6 +535,7 @@ class AgentOrchestrator:
                     for tc, name, args in pending
                 ],
             )
+            ctx.consecutive_tool_skips = 0
             for tc, name, result in executed:
                 await self._apply_tool_result_to_ctx(
                     ctx=ctx,

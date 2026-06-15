@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     max_tool_rounds: int = 10
     # Повтор одного SD-tool (generate_image/img2img/upscale) в одном ходе
     max_same_tool_per_turn: int = 3
+    # Подряд пропущенных anti-loop (duplicate) с уже сохранёнными картинками → ранний done
+    max_consecutive_tool_skips: int = 2
     max_history_messages: int = 60
     max_extract_chars: int = 50000
     # Ф1: снимок каталога @alias в system prompt (macro_context=full)

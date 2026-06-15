@@ -23,6 +23,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.diag_logging import log_event
 from app.db.models import Attachment, MediaAsset
 from app.db.repositories import AttachmentRepository, MessageRepository
 from app.db import session as db_session
@@ -128,11 +129,12 @@ class ToolExecutor:
         Raises:
             ValueError: Неизвестный инструмент.
         """
-        logger.info(
-            "Вызов инструмента %s args=%s conv=%s",
-            name,
-            list(arguments.keys()),
-            self._conversation_id or "-",
+        log_event(
+            logger,
+            "tool_invoke",
+            f"invoke {name}",
+            tool=name,
+            arg_keys=list(arguments.keys()),
         )
         if name == "generate_image":
             return await self._run_sd_image_tool(generate_image, arguments, name)
@@ -630,12 +632,13 @@ class ToolExecutor:
             from app.services.message_builder import canonical_stored_image_urls
 
             urls = canonical_stored_image_urls(urls, asset_ids)
-        logger.info(
-            "%s итог за %.1fs: urls=%d assets=%d",
-            tool_name,
-            time.monotonic() - t0,
-            len(urls),
-            len(asset_ids),
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        log_event(
+            logger,
+            "sd_done",
+            f"{tool_name} done urls={len(urls)} assets={len(asset_ids)}",
+            tool=tool_name,
+            duration_ms=duration_ms,
         )
         return ToolResult(
             content=text,
@@ -656,6 +659,7 @@ class ToolExecutor:
         if self._sd_webui_url is not None:
             filtered["sd_webui_url"] = self._sd_webui_url
         t0 = time.monotonic()
+        log_event(logger, "sd_start", f"{tool_name} start", tool=tool_name)
         poll_stop = asyncio.Event()
         poll_task: asyncio.Task[None] | None = None
         if is_sd_tool(tool_name) and self._emit_progress is not None:

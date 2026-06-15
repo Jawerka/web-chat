@@ -18,8 +18,16 @@ def test_img2img_preset_excludes_generate_image() -> None:
     assert "get_gallery" not in names
 
 
-def test_default_preset_has_all_tools() -> None:
+def test_default_preset_file_tools_without_sd() -> None:
     names = {t["function"]["name"] for t in tools_for_preset_slug("default")}
+    assert "extract_text" in names
+    assert "get_gallery" in names
+    assert "generate_image" not in names
+    assert "img2img" not in names
+    assert "upscale_images" not in names
+
+
+def test_unknown_slug_gets_all_tools() -> None:
+    names = {t["function"]["name"] for t in tools_for_preset_slug(None)}
     assert "generate_image" in names
-    assert "img2img" in names
     assert "extract_text" in names

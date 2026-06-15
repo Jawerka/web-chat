@@ -204,6 +204,7 @@ TOOL_DEFINITIONS: list[dict] = [
 
 # Какие tools отдавать LLM в зависимости от slug пресета беседы.
 PRESET_TOOL_NAMES: dict[str, tuple[str, ...]] = {
+    "default": ("extract_text", "get_gallery"),
     "image_gen": ("generate_image", "upscale_images", "get_gallery"),
     "img2img": ("img2img", "upscale_images"),
     "document_analysis": ("extract_text",),
@@ -246,7 +247,7 @@ def tools_for_preset_slug(slug: str | None) -> list[dict]:
     """
     Подмножество TOOL_DEFINITIONS для пресета.
 
-    None / default — все инструменты. image_gen и img2img — раздельные наборы.
+    None — все инструменты (legacy). default / image_gen / img2img — раздельные наборы.
     """
     if not slug or slug not in PRESET_TOOL_NAMES:
         return list(TOOL_DEFINITIONS)

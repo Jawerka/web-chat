@@ -307,12 +307,20 @@ async def _migrate_upload_gallery_sort_order(conn) -> None:
 
 
 async def _migrate_preset_prompts(conn) -> None:
-    """Обновить промпты image_gen и добавить пресет img2img (если БД уже была заполнена)."""
-    from app.db.seed import IMAGE_GEN_PROMPT, IMG2IMG_PRESET_PROMPT
+    """Обновить промпты default/image_gen и добавить пресет img2img (если БД уже была заполнена)."""
+    from app.db.seed import DEFAULT_PROMPT, IMAGE_GEN_PROMPT, IMG2IMG_PRESET_PROMPT
 
     count_row = await conn.execute(text("SELECT COUNT(*) FROM presets"))
     if (count_row.scalar() or 0) == 0:
         return
+
+    result = await conn.execute(text("SELECT id FROM presets WHERE slug = 'default' LIMIT 1"))
+    if result.fetchone() is not None:
+        await conn.execute(
+            text("UPDATE presets SET system_prompt = :prompt WHERE slug = 'default'"),
+            {"prompt": DEFAULT_PROMPT},
+        )
+        logger.info("Миграция: presets.default")
 
     result = await conn.execute(text("SELECT id FROM presets WHERE slug = 'image_gen' LIMIT 1"))
     if result.fetchone() is not None:

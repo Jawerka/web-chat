@@ -18,8 +18,9 @@ from app.public_url import (
 from app.integrations.llm_client import LLMClient, LLMError
 from app.integrations.runtime_config import parse_optional_url
 from app.integrations.sd_warmup import (
+    fetch_sd_selected_checkpoint,
     invalidate_sd_ready_cache,
-    run_sd_warmup_txt2img,
+    run_sd_warmup_load,
     sd_ready_cached,
 )
 from app.security.trusted_internal import (
@@ -234,17 +235,6 @@ def _sd_auth() -> tuple[str, str] | None:
     return None
 
 
-async def _fetch_sd_selected_checkpoint(
-    client: httpx.AsyncClient,
-    base: str,
-    auth: tuple[str, str] | None,
-) -> str:
-    options_res = await client.get(f"{base}/sdapi/v1/options", auth=auth)
-    options_res.raise_for_status()
-    options = options_res.json() if isinstance(options_res.json(), dict) else {}
-    return str(options.get("sd_model_checkpoint") or "").strip()
-
-
 async def _apply_sd_checkpoint(
     client: httpx.AsyncClient,
     base: str,
@@ -308,8 +298,7 @@ async def set_sd_model(body: SdModelSelectIn) -> dict:
     """
     Применить SD checkpoint на стороне WebUI.
 
-    Дополнительно можно сделать мягкий прогрев (tiny txt2img), чтобы модель точно загрузилась
-    до следующей пользовательской генерации.
+    Дополнительно можно загрузить checkpoint в VRAM (reload-checkpoint).
     """
     title = body.title.strip()
     if not title:
@@ -333,7 +322,9 @@ async def set_sd_model(body: SdModelSelectIn) -> dict:
 
         if body.warmup:
             try:
-                await run_sd_warmup_txt2img(client, base, auth, checkpoint=title)
+                await run_sd_warmup_load(
+                    client, base, auth, checkpoint=title, apply_checkpoint=False,
+                )
             except RuntimeError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
@@ -346,12 +337,12 @@ async def set_sd_model(body: SdModelSelectIn) -> dict:
 @router.get("/sd-ready", response_model=SdReadyOut)
 async def get_sd_ready(
     sd_webui_url: str | None = Query(None, max_length=512),
-    probe: bool = Query(False, description="Проверить tiny txt2img, не только кэш"),
+    probe: bool = Query(False, description="Загрузить checkpoint (reload), не только кэш"),
 ) -> SdReadyOut:
     """
     Готов ли SD checkpoint в VRAM.
 
-    /sd-models может отвечать OK при выгруженной модели; probe=true делает реальный прогрев.
+    /sd-models может отвечать OK при выгруженной модели; probe=true вызывает reload-checkpoint.
     """
     base = (parse_optional_url(sd_webui_url) or settings.sd_webui_url).rstrip("/")
     auth = _sd_auth()
@@ -359,7 +350,7 @@ async def get_sd_ready(
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
-            selected = await _fetch_sd_selected_checkpoint(client, base, auth)
+            selected = await fetch_sd_selected_checkpoint(client, base, auth)
         except httpx.HTTPError as exc:
             return SdReadyOut(
                 ready=False,
@@ -377,7 +368,9 @@ async def get_sd_ready(
             )
 
         try:
-            await run_sd_warmup_txt2img(client, base, auth, checkpoint=selected)
+            await run_sd_warmup_load(
+                client, base, auth, checkpoint=selected, apply_checkpoint=False,
+            )
         except RuntimeError as exc:
             return SdReadyOut(ready=False, selected=selected, detail=str(exc))
 
@@ -386,7 +379,7 @@ async def get_sd_ready(
 
 @router.post("/sd-warmup")
 async def warmup_sd(body: SdWarmupIn) -> dict:
-    """Применить checkpoint и обязательно прогреть SD (tiny txt2img)."""
+    """Применить checkpoint и загрузить его в VRAM (reload-checkpoint)."""
     base = (parse_optional_url(body.sd_webui_url) or settings.sd_webui_url).rstrip("/")
     auth = _sd_auth()
     timeout = max(30.0, float(settings.request_timeout))
@@ -395,7 +388,7 @@ async def warmup_sd(body: SdWarmupIn) -> dict:
         title = (body.title or "").strip()
         if not title:
             try:
-                title = await _fetch_sd_selected_checkpoint(client, base, auth)
+                title = await fetch_sd_selected_checkpoint(client, base, auth)
             except httpx.HTTPError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
@@ -409,7 +402,9 @@ async def warmup_sd(body: SdWarmupIn) -> dict:
 
         try:
             await _apply_sd_checkpoint(client, base, auth, title)
-            await run_sd_warmup_txt2img(client, base, auth, checkpoint=title)
+            await run_sd_warmup_load(
+                client, base, auth, checkpoint=title, apply_checkpoint=False,
+            )
         except httpx.HTTPError as exc:
             invalidate_sd_ready_cache(base)
             raise HTTPException(

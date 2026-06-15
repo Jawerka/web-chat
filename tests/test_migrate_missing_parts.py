@@ -35,3 +35,7 @@ def test_build_user_content_from_attachments_for_migration() -> None:
     parts = build_user_content("перерисуй", [att])
     assert any(p.get("type") == "image_url" for p in parts)
     assert parts[0]["type"] == "text"
+    assert any(
+        p.get("type") == "text" and "[Изображение:" in (p.get("text") or "")
+        for p in parts
+    )

@@ -339,6 +339,12 @@ def build_user_content(
     parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
     for att in attachments:
         if att.mime_type.startswith("image/"):
+            parts.append(
+                {
+                    "type": "text",
+                    "text": f"[Изображение: {att.original_name}]",
+                }
+            )
             part: dict[str, Any] = {
                 "type": "image_url",
                 "image_url": {"url": AttachmentService.public_url(att)},

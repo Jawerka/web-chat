@@ -96,4 +96,70 @@
     formatUploadMetadataForComposer,
     attachImageToNewChat,
   };
+
+  const SCROLL_THRESHOLD_PX = 80;
+
+  function initGalleryScrollNav() {
+    const topBtn = document.getElementById('gallery-scroll-top');
+    const bottomBtn = document.getElementById('gallery-scroll-bottom');
+    if (!topBtn || !bottomBtn) return;
+
+    const scrollRoot = () => document.scrollingElement || document.documentElement;
+
+    function getScrollY() {
+      return window.scrollY || scrollRoot().scrollTop || 0;
+    }
+
+    function getMaxScroll() {
+      const el = scrollRoot();
+      return Math.max(0, el.scrollHeight - window.innerHeight);
+    }
+
+    function isOverlayOpen() {
+      return document.body.classList.contains('gallery-lightbox-open')
+        || document.body.classList.contains('uploads-ref-lightbox-open');
+    }
+
+    function setBtnVisible(btn, visible) {
+      btn.classList.toggle('is-visible', visible);
+      btn.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      btn.tabIndex = visible ? 0 : -1;
+    }
+
+    function updateButtons() {
+      if (isOverlayOpen()) {
+        setBtnVisible(topBtn, false);
+        setBtnVisible(bottomBtn, false);
+        return;
+      }
+      const y = getScrollY();
+      const maxY = getMaxScroll();
+      setBtnVisible(topBtn, y > SCROLL_THRESHOLD_PX);
+      setBtnVisible(bottomBtn, maxY > SCROLL_THRESHOLD_PX && maxY - y > SCROLL_THRESHOLD_PX);
+    }
+
+    topBtn.addEventListener('click', () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    bottomBtn.addEventListener('click', () => {
+      window.scrollTo({ top: getMaxScroll(), behavior: 'smooth' });
+    });
+
+    window.addEventListener('scroll', updateButtons, { passive: true });
+    window.addEventListener('resize', updateButtons, { passive: true });
+
+    const observer = new MutationObserver(updateButtons);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(updateButtons);
+      ro.observe(document.body);
+      const page = document.querySelector('.gallery-page');
+      if (page) ro.observe(page);
+    }
+
+    updateButtons();
+  }
+
+  document.addEventListener('DOMContentLoaded', initGalleryScrollNav);
 })();

@@ -35,6 +35,7 @@ class TurnContext:
     media_url_rewrites: dict[str, str] = field(default_factory=dict)
     tool_calls_meta: list[dict[str, Any]] = field(default_factory=list)
     tool_state: ConversationToolState = field(default_factory=ConversationToolState)
+    consecutive_tool_skips: int = 0
     stream_draft: AssistantStreamDraft | None = None
 
     def __post_init__(self) -> None:

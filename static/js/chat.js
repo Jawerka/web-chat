@@ -1536,7 +1536,7 @@ class ChatApp {
       onReasoningDelta: (chunk) => this.onReasoningDelta(chunk),
       onImages: (urls) => this.onImages(urls),
       onToolStart: (name) => this.onToolStart(name),
-      onToolDone: () => this.onToolDone(),
+      onToolDone: (name, summary, skipped) => this.onToolDone(name, summary, skipped),
       onProgress: (msg) => this.onProgress(msg),
       onGenerationUpdate: (msg) => this.onGenerationUpdate(msg),
       onAck: (msg) => this.onAck(msg),
@@ -1560,7 +1560,14 @@ class ChatApp {
 
   async _ensureSocketReady(timeoutMs = 8000) {
     if (!this.currentConvId) return false;
-    if (!this.socket) this.connectSocket();
+    if (!this.socket) {
+      this.connectSocket();
+    } else {
+      const state = this.socket.ws?.readyState;
+      if (state !== WebSocket.OPEN && (state === WebSocket.CLOSED || state == null)) {
+        this.socket.connect();
+      }
+    }
     if (this.socket?.ws?.readyState === WebSocket.OPEN) return true;
 
     return new Promise((resolve) => {
@@ -1592,7 +1599,7 @@ class ChatApp {
       return;
     }
 
-    if (!(await this._ensureSocketReady())) {
+    if (!(await this._ensureSocketReady(25000))) {
       this.showError('Не удалось подключиться к серверу. Проверьте сеть или нажмите «Повторить».', 5000, { showRetry: true });
       return;
     }
@@ -1836,6 +1843,9 @@ class ChatApp {
     }
     this.streamReasoningText = (this.streamReasoningText || '') + chunk;
     this._renderStreamReasoning(this.streamReasoningText);
+    if (this.streamEl && this.streamReasoningText.trim()) {
+      this.streamEl.classList.remove('waiting');
+    }
     this._scheduleScrollToBottom();
   }
 
@@ -1896,7 +1906,23 @@ class ChatApp {
     this._scheduleScrollToBottom();
   }
 
-  onToolDone() {
+  onToolDone(name, summary, skipped = false) {
+    if (skipped) {
+      this._ensureStreamTarget();
+      const toolLabels = window.TOOL_USER_LABELS || {};
+      const toolLabel = toolLabels[name] || name || 'Инструмент';
+      const detail = (summary || '').trim()
+        || 'Повторный вызов пропущен: лимит в этом ходе.';
+      this.showProgress(toolLabel, {
+        stage: name === 'upscale_images' ? 'sd_upscale' : (
+          name === 'generate_image' || name === 'img2img' ? 'sd_render' : 'llm_tools'
+        ),
+        tool: name,
+        detail,
+      });
+      this._scheduleScrollToBottom();
+      return;
+    }
     if (
       this.streamEl
       && !this.streamText
@@ -2053,6 +2079,9 @@ class ChatApp {
     if (!this.streamEl) return;
     const hasText = Boolean(WebChatMessages.assistantDisplayText(this.streamText || ''));
     const hasImages = Boolean(this.streamImagesEl?.children.length);
+    const hasReasoning = Boolean(
+      this.streamEl?.querySelector('.message-reasoning-body')?.textContent?.trim(),
+    );
 
     if (status.progress_label || status.progress_stage) {
       this._setUiActivityStage(status.progress_stage);
@@ -2094,8 +2123,13 @@ class ChatApp {
       });
       return;
     }
-    if (hasText || hasImages) {
+    if ((hasText || hasImages || hasReasoning) && !status.in_progress) {
       this.hideProgress();
+      return;
+    }
+    if (hasReasoning && !hasText && !hasImages && status.in_progress) {
+      this._setUiActivityStage('llm_thinking');
+      this.showProgress(null, { stage: 'llm_thinking' });
       return;
     }
     this._setUiActivityStage('llm_thinking');
@@ -2312,6 +2346,7 @@ class ChatApp {
   onTurnDone(msg) {
     const assistantMessageId = msg?.assistant_message_id;
     const conversationTitle = msg?.conversation_title;
+    WebChatPreloadModels?.recordWarmedAt?.();
     this._clearGenerationSyncTimer();
     this._generationResumeActive = false;
     this.hideProgress();
@@ -2771,7 +2806,8 @@ class ChatApp {
     status?.classList.add('hidden');
     this.streamEl.classList.remove('is-busy');
     const hasBody = this.streamEl.classList.contains('has-content')
-      || this.streamEl.classList.contains('has-images');
+      || this.streamEl.classList.contains('has-images')
+      || this.streamEl.classList.contains('has-reasoning');
     if (hasBody) {
       this.streamEl.classList.remove('waiting');
     }
