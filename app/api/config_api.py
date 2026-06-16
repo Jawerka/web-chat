@@ -48,6 +48,7 @@ class PublicConfigOut(BaseModel):
     sd_webui_url: str
     auth_enabled: bool
     rag_enabled: bool
+    wd_tagger_enabled: bool = False
     trash_retention_days: int = 3
     trusted_internal_env_hosts: list[str] = []
     trusted_internal_ui_hosts: list[str] = []
@@ -137,6 +138,7 @@ async def get_public_config() -> PublicConfigOut:
         sd_webui_url=settings.sd_webui_url.rstrip("/"),
         auth_enabled=settings.auth_enabled,
         rag_enabled=settings.rag_enabled,
+        wd_tagger_enabled=settings.wd_tagger_enabled,
         trash_retention_days=max(1, settings.trash_retention_days),
         trusted_internal_env_hosts=ti["env_hosts"],
         trusted_internal_ui_hosts=ti["ui_hosts"],

@@ -16,6 +16,7 @@ async def test_public_config_includes_llm_model(client: AsyncClient) -> None:
     assert "llm_base_url" in data
     assert "sd_webui_url" in data
     assert "max_upload_mb" in data
+    assert "wd_tagger_enabled" in data
 
 
 @pytest.mark.asyncio

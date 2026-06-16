@@ -207,6 +207,10 @@ class TurnCreate(BaseModel):
         None,
         description="Подмешать top-K фрагментов документов беседы в system prompt",
     )
+    wd_tagger: bool | None = Field(
+        None,
+        description="Распознать WD14-теги для прикреплённых изображений",
+    )
     llm_base_url: str | None = Field(None, max_length=512)
     sd_webui_url: str | None = Field(None, max_length=512)
     model: str | None = Field(None, max_length=200)

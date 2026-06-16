@@ -343,6 +343,37 @@ async def _probe_database() -> ServiceProbe:
         )
 
 
+async def _probe_wd_tagger() -> ServiceProbe:
+    from app.integrations.wd_tagger_service import wd_tagger_service
+
+    if not settings.wd_tagger_enabled:
+        return ServiceProbe(
+            id="wd_tagger",
+            name="WD14 Tagger",
+            status="unavailable",
+            detail="Отключено (WD_TAGGER_ENABLED=false)",
+            url="local",
+            load_percent=0,
+        )
+    t0 = time.perf_counter()
+    ok = await wd_tagger_service.ping()
+    latency = (time.perf_counter() - t0) * 1000
+    return ServiceProbe(
+        id="wd_tagger",
+        name="WD14 Tagger",
+        status="ok" if ok else "unavailable",
+        latency_ms=round(latency, 1),
+        detail=(
+            f"Модель {settings.wd_tagger_model}, threshold {settings.wd_tagger_threshold}"
+            if ok
+            else "Worker не отвечает"
+        ),
+        url="local",
+        load_percent=_latency_load(latency, good=500, warn=3000) if ok else 0,
+        extra={"model": settings.wd_tagger_model},
+    )
+
+
 def _probe_mcp() -> ServiceProbe:
     port = settings.effective_mcp_port
     host = settings.web_host if settings.web_host not in ("0.0.0.0", "::") else "127.0.0.1"
@@ -487,6 +518,7 @@ async def build_health_report() -> HealthReport:
         await _probe_sd(),
         await _probe_database(),
         _probe_mcp(),
+        await _probe_wd_tagger(),
     ]
     llm_probe = next(s for s in services if s.id == "llm")
     sd_probe = next(s for s in services if s.id == "sd")

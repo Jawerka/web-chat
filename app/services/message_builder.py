@@ -8,6 +8,7 @@ import logging
 import re
 import uuid
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 from app.db.models import Attachment, Message, MessageRole
@@ -27,6 +28,62 @@ from app.services.media_service import MediaService
 from app.services.prompt_macro_service import expand_macro_text, expand_parts_for_llm
 
 logger = logging.getLogger(__name__)
+
+_WD14_BLOCK_HEADER = "[WD14 теги]"
+
+
+@dataclass(frozen=True)
+class Wd14TagEntry:
+    """Теги WD14 для одного user-вложения."""
+
+    attachment_id: str
+    filename: str
+    tags: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "attachment_id": self.attachment_id,
+            "filename": self.filename,
+            "tags": self.tags,
+        }
+
+
+def format_wd14_tag_block(entries: list[Wd14TagEntry] | list[dict[str, str]]) -> str:
+    """Текстовый блок тегов для LLM."""
+    lines = [_WD14_BLOCK_HEADER]
+    for entry in entries:
+        if isinstance(entry, Wd14TagEntry):
+            filename = entry.filename
+            tags = entry.tags
+        else:
+            filename = str(entry.get("filename") or "image")
+            tags = str(entry.get("tags") or "")
+        if tags.strip():
+            lines.append(f"• {filename}: {tags.strip()}")
+    if len(lines) <= 1:
+        return ""
+    return "\n".join(lines)
+
+
+def inject_wd14_for_llm_dict(
+    parts: list[dict[str, Any]],
+    content_json: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Подставить сохранённые WD14-теги при replay истории (без вызова WD14)."""
+    wd14 = content_json.get("wd14")
+    if not wd14 or not isinstance(wd14, list):
+        return parts
+    block = format_wd14_tag_block(wd14)
+    if not block:
+        return parts
+    out = deepcopy(parts)
+    for part in out:
+        if part.get("type") == "text":
+            text = str(part.get("text") or "")
+            part["text"] = f"{block}\n\n{text}" if text.strip() else block
+            return out
+    out.insert(0, {"type": "text", "text": block})
+    return out
 
 # Служебные пометки в истории LLM (модель иногда копирует в ответ — убираем при показе/сохранении).
 _LLM_IMAGE_CONTEXT_NOTE_RE = re.compile(
@@ -422,7 +479,9 @@ def message_to_llm_dict(
     macros = alias_to_body or {}
     if message.role == MessageRole.USER:
         if message.content_json and "parts" in message.content_json:
-            parts = deepcopy(message.content_json["parts"])
+            cj = message.content_json if isinstance(message.content_json, dict) else {}
+            parts = deepcopy(cj["parts"])
+            parts = inject_wd14_for_llm_dict(parts, cj)
             if macros:
                 parts = expand_parts_for_llm(parts, macros)
             for part in parts:

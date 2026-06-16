@@ -9,6 +9,7 @@ import logging
 from app.api.ws_manager import manager
 from app.config import settings
 from app.services.job_queue import heavy_job_queue
+from app.integrations.wd_tagger_service import wd_tagger_service
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ async def graceful_shutdown() -> None:
 
     heavy_job_queue.begin_shutdown()
     await heavy_job_queue.stop(drain_timeout=settings.shutdown_drain_sec)
+    await wd_tagger_service.stop()
 
     logging.shutdown()
     logger.info("Graceful shutdown: завершено")

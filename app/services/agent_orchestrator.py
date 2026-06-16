@@ -43,6 +43,7 @@ from app.services.message_builder import (
     filter_available_image_attachments,
     filter_unreachable_image_parts,
     finalize_assistant_text,
+    format_wd14_tag_block,
     history_to_llm_messages,
     refresh_user_parts_for_regenerate,
     sanitize_llm_messages_for_vision,
@@ -56,9 +57,11 @@ from app.services.turn_realtime import emit_turn_progress, turn_realtime
 from app.services.user_progress import (
     STAGE_LLM_THINKING,
     STAGE_LLM_TOOLS,
+    STAGE_WD_TAGGER,
     build_progress,
     is_sd_tool,
 )
+from app.services.wd14_tag_service import tag_user_attachments
 from app.services.streaming_draft import AssistantStreamDraft
 from app.services.turn_context import TurnContext
 from app.services.turn_db import open_turn_session
@@ -579,6 +582,7 @@ class AgentOrchestrator:
         llm_model: str | None = None,
         macro_context: str = "selected",
         document_rag: bool = False,
+        wd_tagger: bool = True,
     ) -> AgentTurnResult:
         """
         Полный ход в беседе: сохранение user/assistant, стриминг WS-событий.
@@ -619,6 +623,11 @@ class AgentOrchestrator:
                 await att_service.prepare_for_llm(attachment_ids),
             )
 
+            wd14_entries = []
+            if wd_tagger and settings.wd_tagger_enabled and attachments:
+                await push_progress(build_progress(STAGE_WD_TAGGER))
+                wd14_entries = await tag_user_attachments(session, attachments)
+
             stored_text = (
                 display_text
                 if display_text is not None
@@ -640,19 +649,27 @@ class AgentOrchestrator:
                 user_text_preview=user_text[:120] if user_text else "",
                 stored_text_preview=stored_text[:120] if stored_text else "",
             )
+            llm_text_for_build = user_text
+            if wd14_entries:
+                tag_block = format_wd14_tag_block(wd14_entries)
+                if tag_block:
+                    llm_text_for_build = f"{tag_block}\n\n{user_text}" if user_text else tag_block
             stored_parts = build_user_content(stored_text, attachments)
-            llm_parts = build_user_content(user_text, attachments)
+            llm_parts = build_user_content(llm_text_for_build, attachments)
             if preset and preset.slug == "img2img":
                 llm_parts = append_img2img_init_hints(
                     llm_parts,
                     attachments,
                     image_parts=llm_parts,
                 )
+            content_json: dict[str, Any] = {"parts": stored_parts}
+            if wd14_entries:
+                content_json["wd14"] = [e.to_dict() for e in wd14_entries]
             user_message = await msg_repo.create(
                 conversation_id=conversation_id,
                 role=MessageRole.USER,
                 content_text=stored_text,
-                content_json={"parts": stored_parts},
+                content_json=content_json,
             )
             user_message_id = user_message.id
             if attachment_ids:

@@ -25,6 +25,7 @@ from app.api.websocket import router as ws_router
 from app.config import settings
 from app.db.session import init_db
 from app.integrations.mcp_server import start_mcp_background
+from app.integrations.wd_tagger_service import wd_tagger_service
 from app.logging_buffer import ensure_log_buffer_attached, set_main_event_loop
 from app.logging_setup import setup_logging
 from app.middleware.access_control import AccessControlMiddleware
@@ -57,6 +58,7 @@ async def lifespan(app: FastAPI):
 
     configure_turn_realtime(manager, progress_emit=emit_progress)
     await heavy_job_queue.start()
+    await wd_tagger_service.start()
     start_mcp_background()
     retention_task, retention_stop = start_retention_background()
     health_history_stop = asyncio.Event()

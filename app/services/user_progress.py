@@ -16,6 +16,7 @@ STAGE_LLM_TOOLS = "llm_tools"
 STAGE_SD_RENDER = "sd_render"
 STAGE_SD_UPSCALE = "sd_upscale"
 STAGE_DOC_READ = "doc_read"
+STAGE_WD_TAGGER = "wd_tagger"
 STAGE_GALLERY = "gallery"
 STAGE_SAVE_MEDIA = "save_media"
 
@@ -37,6 +38,7 @@ _STAGE_LABEL: dict[str, str] = {
     STAGE_SD_RENDER: "Рисую изображение",
     STAGE_SD_UPSCALE: "Увеличиваю",
     STAGE_DOC_READ: "Читаю документ",
+    STAGE_WD_TAGGER: "Распознавание тегов изображения",
     STAGE_GALLERY: "Галерея",
     STAGE_SAVE_MEDIA: "Сохраняю",
 }

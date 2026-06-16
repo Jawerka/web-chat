@@ -78,7 +78,7 @@ def test_websocket_user_message_mocked(
     fake_assistant = type("M", (), {"id": uuid.uuid4()})()
 
     async def fake_turn(*args, **kwargs):
-        emit = kwargs.get("emit") or args[4]
+        emit = kwargs.get("emit") or args[3]
         await emit("ack", {"user_message_id": str(fake_user.id)})
         await emit("text_delta", {"content": "Ответ"})
         await emit("done", {"assistant_message_id": str(fake_assistant.id)})

@@ -5,6 +5,8 @@
 (function () {
   'use strict';
 
+  const WD_TAGGER_KEY = 'webchat_wd_tagger_enabled';
+
   function setSettingsChatTitle(app, title) {
     const el = app.$.settingsChatTitle;
     const genBtn = app.$.generateConversationTitleBtn;
@@ -126,6 +128,7 @@
           app.$.useServerModel.checked ? 'true' : 'false',
         );
       }
+      saveWdTaggerSetting(app);
 
       btn.classList.remove('is-saving');
       btn.classList.add('is-success');
@@ -415,6 +418,35 @@
     const v = (app.$.llmModelInput?.value || '').trim();
     return v || undefined;
   }
+
+  function loadWdTaggerSettings(app) {
+    const row = document.getElementById('settings-wd-tagger-row');
+    const input = document.getElementById('settings-wd-tagger');
+    if (!row || !input) return;
+    if (!app.config?.wd_tagger_enabled) {
+      row.classList.add('hidden');
+      return;
+    }
+    row.classList.remove('hidden');
+    const stored = localStorage.getItem(WD_TAGGER_KEY);
+    input.checked = stored === null || stored !== 'false';
+    input.addEventListener('change', () => {
+      localStorage.setItem(WD_TAGGER_KEY, input.checked ? 'true' : 'false');
+    });
+  }
+
+  function saveWdTaggerSetting(app) {
+    const input = document.getElementById('settings-wd-tagger');
+    if (!input || !app.config?.wd_tagger_enabled) return;
+    localStorage.setItem(WD_TAGGER_KEY, input.checked ? 'true' : 'false');
+  }
+
+  function isWdTaggerEnabled(app) {
+    if (!app.config?.wd_tagger_enabled) return false;
+    const stored = localStorage.getItem(WD_TAGGER_KEY);
+    return stored === null || stored !== 'false';
+  }
+
   window.WebChatSettings = {
     setSettingsChatTitle,
     settingsChatTitleDraft,
@@ -435,5 +467,7 @@
     syncModelInputState,
     saveModelOverride,
     getActiveLlmModel,
+    loadWdTaggerSettings,
+    isWdTaggerEnabled,
   };
 })();

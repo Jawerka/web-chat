@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     rag_search_top_k: int = 5
     rag_context_max_chars: int = 8000
 
+    # WD14 image tagger (ONNX, long-running worker)
+    wd_tagger_enabled: bool = True
+    wd_tagger_python: str = "/opt/wd-tagger/venv/bin/python"
+    wd_tagger_run_py: str = "/opt/wd14-tagger-standalone/run.py"
+    wd_tagger_model: str = "wd14-vit.v2"
+    wd_tagger_threshold: float = 0.35
+    wd_tagger_hf_home: str = "/opt/wd-tagger/hf_cache"
+    wd_tagger_timeout_sec: int = 30
+    wd_tagger_warmup_on_start: bool = True
+
     # Vision: llama-server скачивает image_url по HTTP (лимит ~10 MB на стороне LLM)
     llm_vision_max_bytes: int = 6 * 1024 * 1024
     llm_vision_jpeg_quality: int = 88

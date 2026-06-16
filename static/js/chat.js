@@ -270,6 +270,7 @@ class ChatApp {
       this.$.documentRagBtn?.classList.remove('hidden');
       this._initDocumentRagToggle();
     }
+    WebChatSettings.loadWdTaggerSettings(this);
     if (this.config.auth_enabled) {
       try {
         this.currentUser = await this.api('/api/auth/me');
@@ -3076,6 +3077,9 @@ class ChatApp {
     const macroMode = this.getMacroContextMode();
     if (macroMode !== 'selected') payload.macro_context = macroMode;
     if (this.getDocumentRagEnabled()) payload.document_rag = true;
+    if (this.config?.wd_tagger_enabled) {
+      payload.wd_tagger = WebChatSettings.isWdTaggerEnabled(this);
+    }
     return payload;
   }
 

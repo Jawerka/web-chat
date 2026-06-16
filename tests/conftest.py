@@ -113,6 +113,26 @@ def _track_created_conversations(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _disable_wd_tagger_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Не поднимать WD14 worker в unit-тестах."""
+    from unittest.mock import AsyncMock
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "wd_tagger_enabled", False)
+    monkeypatch.setattr(
+        "app.integrations.wd_tagger_service.wd_tagger_service.start",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "app.integrations.wd_tagger_service.wd_tagger_service.stop",
+        AsyncMock(),
+    )
+    monkeypatch.setattr("app.main.wd_tagger_service.start", AsyncMock())
+    monkeypatch.setattr("app.main.wd_tagger_service.stop", AsyncMock())
+
+
+@pytest.fixture(autouse=True)
 def _disable_mcp_background(monkeypatch: pytest.MonkeyPatch) -> None:
     """Не поднимать MCP-порт и retention loop в unit-тестах."""
     noop = MagicMock()

@@ -249,6 +249,7 @@ async def start_conversation_turn(
         sd_webui_url=sd_webui_url,
         macro_context=parse_macro_context_mode(body.macro_context),
         document_rag=bool(body.document_rag),
+        wd_tagger=body.wd_tagger if body.wd_tagger is not None else True,
     )
     _start_background_turn(
         conversation_id,

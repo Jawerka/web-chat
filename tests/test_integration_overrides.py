@@ -14,3 +14,17 @@ def test_parse_document_rag_flag() -> None:
 
     on_str = parse_integration_overrides({"document_rag": "true"})
     assert on_str.document_rag is True
+
+
+def test_parse_wd_tagger_flag() -> None:
+    default = parse_integration_overrides({})
+    assert default.wd_tagger is True
+
+    off = parse_integration_overrides({"wd_tagger": False})
+    assert off.wd_tagger is False
+
+    on = parse_integration_overrides({"wd_tagger": True})
+    assert on.wd_tagger is True
+
+    on_str = parse_integration_overrides({"wd_tagger": "true"})
+    assert on_str.wd_tagger is True

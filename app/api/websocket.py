@@ -251,6 +251,7 @@ async def _run_turn_task(
     )
     macro_ctx = integration.macro_context if integration else "selected"
     doc_rag = integration.document_rag if integration else False
+    wd_tag = integration.wd_tagger if integration else True
 
     async def turn_fn() -> None:
         await orchestrator.run_conversation_turn(
@@ -263,6 +264,7 @@ async def _run_turn_task(
             llm_model=integration.llm_model if integration else None,
             macro_context=macro_ctx,
             document_rag=doc_rag,
+            wd_tagger=wd_tag,
         )
 
     await _execute_and_handle_turn(

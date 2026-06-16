@@ -171,7 +171,9 @@ def test_websocket_cancel_mid_turn(
     conv_id = sync_api_create_conversation(sync_client, test_conv_title)["id"]
     started = asyncio.Event()
 
-    async def slow_turn(session, conversation_id, user_text, attachment_ids, emit, cancel_event, **kwargs):
+    async def slow_turn(*args, **kwargs):
+        emit = kwargs.get("emit") or args[3]
+        cancel_event = kwargs.get("cancel_event") or args[4]
         started.set()
         await emit("ack", {"user_message_id": "00000000-0000-0000-0000-000000000001"})
         while not cancel_event.is_set():
