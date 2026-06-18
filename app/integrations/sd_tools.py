@@ -10,7 +10,6 @@ import base64
 import io
 import json
 import logging
-import random
 import time
 from pathlib import Path
 from collections.abc import Callable
@@ -76,7 +75,7 @@ def generate_image(
     cfg_scale: float = 5.0,
     sampler_name: str = "Euler a",
     scheduler: str = "",
-    seed: int = -1,
+    seed: int | None = None,
     restore_faces: bool = False,
     tiling: bool = False,
     description: str = "",
@@ -115,7 +114,7 @@ def generate_image(
     if not (1 <= cfg_scale <= 30):
         raise ValueError("cfg_scale должен быть от 1 до 30")
 
-    current_seed = seed if seed != -1 else random.randint(0, 2**32 - 1)
+    current_seed = pick_seed(seed)
     n_iter = clamp_txt2img_n_iter(count)
 
     payload = {
@@ -402,7 +401,7 @@ def img2img(
     cfg_scale: float = 5.0,
     sampler_name: str = "Euler a",
     scheduler: str = "",
-    seed: int = -1,
+    seed: int | None = None,
     denoising_strength: float = 0.54,
     denoising_strengths: list[float] | None = None,
     restore_faces: bool = False,
@@ -673,7 +672,7 @@ def register_sd_tools(mcp: FastMCP) -> None:
         cfg_scale: float = 5.0,
         sampler_name: str = "Euler a",
         scheduler: str = "",
-        seed: int = -1,
+        seed: int | None = None,
         restore_faces: bool = False,
         tiling: bool = False,
         description: str = "",
@@ -711,7 +710,7 @@ def register_sd_tools(mcp: FastMCP) -> None:
         cfg_scale: float = 5.0,
         sampler_name: str = "Euler a",
         scheduler: str = "",
-        seed: int = -1,
+        seed: int | None = None,
         denoising_strength: float = 0.54,
         restore_faces: bool = False,
         tiling: bool = False,

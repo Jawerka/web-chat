@@ -47,8 +47,9 @@ class Settings(BaseSettings):
     sd_negative_prompt: str = ""
     sd_steps: int = 22
     sd_sampler: str = "Euler a"
-    sd_schedule_type: str = "Karras"
+    sd_schedule_type: str = "Simple"
     sd_cfg_scale: float = 5.0
+    sd_seed: int = 3191087996
     sd_width: int = 1024
     sd_height: int = 1024
     # txt2img: n_iter = count при batch_size=1; верхняя граница за один вызов generate_image.

@@ -63,7 +63,7 @@ class Img2ImgRequest:
     cfg_scale: float = 5.0
     sampler_name: str = ""
     scheduler: str = ""
-    seed: int = -1
+    seed: int | None = None
     denoising_strength: float = DEFAULT_DENOISING
     restore_faces: bool = False
     tiling: bool = False
@@ -227,9 +227,13 @@ def normalize_denoising_strengths(
     return values
 
 
-def pick_seed(seed: int) -> int:
-    """Случайный seed, если передан -1."""
-    return seed if seed != -1 else random.randint(0, 2**32 - 1)
+def pick_seed(seed: int | None) -> int:
+    """None — seed из настроек; -1 — случайный; иначе как передано."""
+    if seed is None:
+        return settings.sd_seed
+    if seed == -1:
+        return random.randint(0, 2**32 - 1)
+    return seed
 
 
 def encode_init_image_b64(png_bytes: bytes) -> str:

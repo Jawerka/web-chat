@@ -47,7 +47,7 @@ Multiple variants — single call with `count` (up to 10).
 
 ## Defaults
 
-steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Karras", seed: -1.
+steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Simple", seed: 3191087996.
 
 Use the prompt from the other neural network as a reference. Do not copy blindly. Rework it, taking into account the nuances of the actual prompt in Russian.
 
@@ -103,7 +103,7 @@ redraw, redo, alter, refine, touch up, fix, replace background, different style,
 
 ## Default Parameters
 
-steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Karras", seed: -1, denoising_strength: 0.52, resize_mode: 0.
+steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Simple", seed: 3191087996, denoising_strength: 0.52, resize_mode: 0.
 
 ---
 

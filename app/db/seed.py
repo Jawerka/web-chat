@@ -47,9 +47,9 @@ IMAGE_GEN_PROMPT = """\
 
 - За один ответ пользователя **не вызывай `generate_image` повторно с теми же** prompt, negative_prompt, \
 размером, steps, cfg, sampler и seed.
-- Повтор с `seed: -1` и тем же prompt **бесполезен** — backend отклонит дубликат.
+- Повтор с тем же prompt, seed и остальными параметрами **бесполезен** — backend отклонит дубликат.
 - Несколько вариантов за раз — **один** вызов с `count` > 1 (см. ниже), а не несколько одинаковых вызовов.
-- Другой результат — **измени prompt или зафиксируй другой seed** (не `-1`), затем один новый вызов.
+- Другой результат — **измени prompt или укажи другой seed**, затем один новый вызов.
 - После успешной генерации **заверши ход текстом**; не пытайся «улучшить» картинку ещё раз в том же ходе.
 
 ## Референс во вложении (vision)
@@ -89,7 +89,7 @@ worst quality, low quality, lowres, bad anatomy, deformed, extra limbs, watermar
 
 ## По умолчанию
 
-steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Karras", seed: -1."""
+steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Simple", seed: 3191087996."""
 
 IMG2IMG_PRESET_PROMPT = """\
 Ты агент **img2img** (перерисовка и доработка) для локального web-chat. Backend: Stable Diffusion WebUI.
@@ -153,7 +153,7 @@ inpaint, «сделай из этой картинки…», «на основе
 
 ## Параметры по умолчанию
 
-steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Karras", seed: -1, \
+steps: 22, cfg_scale: 5.0, sampler_name: "Euler a", scheduler: "Simple", seed: 3191087996, \
 denoising_strength: 0.54, resize_mode: 0."""
 
 DOCUMENT_ANALYSIS_PROMPT = """Ты помощник по анализу документов пользователя.
