@@ -1,5 +1,5 @@
 """
-Регрессия из BACKLOG.md § «Регрессия после каждой фазы».
+Регрессионный чеклист (HANDBOOK §14, §20).
 """
 
 from __future__ import annotations

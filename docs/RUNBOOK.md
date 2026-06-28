@@ -1,6 +1,6 @@
 # Runbook — web-chat (домашний стенд)
 
-> Контекст: [HANDBOOK.md §0.5](../HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки) — один оператор, LAN.  
+> Контекст: [HANDBOOK.md §0.5](HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки) — один оператор, LAN.  
 > Дашборд: `http://<хост>:8090/health` · API: `GET /api/health`
 
 ---
@@ -44,6 +44,32 @@ mtmd_helper_bitmap_init_from_buf: failed to decode image bytes
 3. `REQUEST_TIMEOUT` / `MCP_TIMEOUT` (MCP > REQUEST).
 4. GPU/VRAM: логи WebUI на машине .52.
 5. Override `sd_webui_url` в UI — сверить с реальным хостом.
+
+---
+
+## Gallery → SD WebUI (bridge)
+
+**Симптомы:** «Отправить в SD WebUI» в lightbox; toast ошибки; img2img в SD пустой.
+
+1. На SD-хосте: [`extensions/sd-webui-web-chat-bridge/`](../extensions/sd-webui-web-chat-bridge/) в `stable-diffusion-webui/extensions/`.
+2. `curl -sS http://127.0.0.1:7860/web-chat-bridge/ping` — `ok: true`, верный `web_chat_url`.
+3. Кнопка в web-chat требует SD-метаданных (`has_metadata` / PNG parameters).
+4. `journalctl -u web-chat` — событие `sd_bridge_queued` после клика.
+5. SD: вкладка **img2img**, F12 → `[web-chat-bridge]`, аккордеон Web-Chat Bridge.
+6. HTTP 502 — SD не принял `POST /web-chat-bridge/push`.
+
+Основной путь — **push-очередь**, не `?web_chat_import=TOKEN`.
+
+---
+
+## Booru → web-chat (Chrome extension)
+
+**Симптомы:** badge `!`; service worker `[booru-web-chat]`.
+
+1. Extension **1.0.2+**, Reload в `chrome://extensions`.
+2. Login в web-chat в том же браузере.
+3. Options → base URL + host permission.
+4. Документация: [`extensions/booru-web-chat/API.md`](../extensions/booru-web-chat/API.md).
 
 ---
 
@@ -137,10 +163,10 @@ cd /root/web-chat && source .venv/bin/activate && pytest -q
 
 ## nginx + HTTPS (если хост не только в LAN)
 
-> Не обязательно для одного пользователя в домашней сети — см. [HANDBOOK §0.5](../HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
+> Не обязательно для одного пользователя в домашней сети — см. [HANDBOOK §0.5](HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
 
 1. Шаблон: [deploy/nginx-web-chat.conf.template](../deploy/nginx-web-chat.conf.template) — upstream на `127.0.0.1:8090`, WebSocket upgrade.
 2. TLS: Let's Encrypt или свой сертификат; в `.env`: `AUTH_COOKIE_SECURE=true`, `WEB_CHAT_ENV=production`.
 3. `TRUSTED_PROXY_IPS=127.0.0.1`, `TRUSTED_WS_ORIGINS=https://<ваш-хост>`.
-4. Опционально: Basic Auth в nginx **или** `API_ACCESS_KEY` в приложении — [SECURITY.md](../SECURITY.md).
+4. Опционально: Basic Auth в nginx **или** `API_ACCESS_KEY` в приложении — [SECURITY.md](SECURITY.md).
 5. `nginx -t && systemctl reload nginx` → проверка чата и `/health` по HTTPS.

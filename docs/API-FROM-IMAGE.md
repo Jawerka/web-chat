@@ -19,6 +19,7 @@
 Типичные сценарии:
 
 - кнопка **«В чат»** в галерее web-chat;
+- Chrome-расширение **booru-web-chat** (e621, rule34, derpibooru, reddit) — см. [§ Chrome extension](#chrome-extension-booru--web-chat);
 - скрипт на другой машине в LAN, который шлёт файл + prompt;
 - интеграция с внешней галереей по HTTP.
 
@@ -44,6 +45,7 @@
 
 - Запросы из **браузера** (галерея, тот же origin) — cookie сессии `webchat_session` передаётся автоматически.
 - Запросы из **curl/скрипта** — передайте cookie после `POST /api/auth/login` или используйте сессию из браузера (`-b cookies.txt`).
+- **Chrome extension** [`extensions/booru-web-chat/`](../extensions/booru-web-chat/) — cookie `webchat_session` читается через `chrome.cookies` и передаётся заголовком `Cookie` (не `credentials: 'include'`: SameSite=Lax блокирует POST из `chrome-extension://`). Подробно: [`extensions/booru-web-chat/API.md`](../extensions/booru-web-chat/API.md).
 
 Без сессии: **401** `{"detail":"Требуется вход","code":"auth_required"}`.
 
@@ -297,6 +299,21 @@ Content-Type: application/json
 
 ---
 
+## Chrome extension (booru → web-chat)
+
+Расширение [`extensions/booru-web-chat/`](../extensions/booru-web-chat/) **не использует JSON `image.url`**: CDN booru отдаёт 403 без Referer страницы поста.
+
+| Шаг | Действие |
+|-----|----------|
+| 1 | На вкладке post (e621, rule34, derpibooru, reddit) — клик по иконке расширения |
+| 2 | Теги → clipboard + tab-context `fetch(imageUrl)` |
+| 3 | `POST /api/conversations/from-image` **multipart** (`text`, `image` file, `preset_slug`) |
+| 4 | `chrome.tabs.create` → `chat_url` |
+
+Полный контракт и чеклист доработки: [`extensions/booru-web-chat/API.md`](../extensions/booru-web-chat/API.md).
+
+---
+
 ## Хорошие практики
 
 ### Выбор источника изображения
@@ -304,7 +321,7 @@ Content-Type: application/json
 1. **Картинка уже в web-chat** → `image.asset_id` (галерея, чат, uploads).
 2. **Файл на диске сервера** (`data/generated/`) → `disk_filename`.
 3. **Файл с клиентской машины** → multipart `image=@file`.
-4. **`url`** — только если нет `asset_id`; для внешних URL убедитесь, что сервер может их скачать по LAN.
+4. **`url` в JSON** — только если CDN не требует Referer; booru/reddit → multipart из tab context (см. booru-web-chat).
 
 ### Текст (`text`)
 

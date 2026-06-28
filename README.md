@@ -4,7 +4,7 @@
 
 **Локальный веб-чат с AI-агентом**, генерацией изображений через Stable Diffusion WebUI и встроенным MCP. Один процесс FastAPI обслуживает интерфейс в браузере, REST/WebSocket API, оркестрацию LLM, вызов инструментов и раздачу медиа. Рассчитан на **домашнюю или офисную LAN** (часто — **один оператор**); при необходимости — WireGuard.
 
-> **Для кого:** не публичный сервис. Нет смысла усложнять вход и «enterprise-безопасность» — приоритет у гладкого UX и стабильности генераций. Подробно: [HANDBOOK.md §0.5](HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
+> **Для кого:** не публичный сервис. Нет смысла усложнять вход и «enterprise-безопасность» — приоритет у гладкого UX и стабильности генераций. Подробно: [HANDBOOK.md §0.5](docs/HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки).
 
 <p align="center">
   <a href="docs/images/ui-overview.png" title="Открыть в полном размере">
@@ -53,7 +53,8 @@
 | **Пресеты** | default, txt2img, img2img, document_analysis |
 | **Вложения** | Vision, PDF, DOCX, TXT; drag-and-drop; до 10 файлов |
 | **SD** | `generate_image`, `img2img`, `upscale_images` |
-| **Галерея** | До 1000 картинок, очистка сирот, purge all |
+| **Галерея** | До 1000 картинок, очистка сирот, purge all; **→ SD WebUI** (img2img), **→ новый чат** |
+| **Расширения** | Chrome **booru → web-chat**; SD **gallery → img2img** ([`extensions/`](extensions/)) |
 | **@alias** | Быстрые промпты; режимы selected / full / semantic |
 | **RAG** | Поиск по документам беседы (при `RAG_ENABLED`), UI-переключатель |
 | **Пользователи** | Login/password, изоляция бесед, admin API (опционально `AUTH_ENABLED`) |
@@ -116,7 +117,7 @@ sudo systemctl status web-chat
 │  web-chat (FastAPI + Uvicorn)           │
 │  ├── AgentOrchestrator → LLM (stream)   │
 │  ├── ToolExecutor → SD / extract_text   │
-│  ├── AssistantStreamDraft → SQLite      │
+│  ├── AssistantStreamDraft → PostgreSQL  │
 │  └── MCP :8091 (streamable-http)        │
 └─────────────────────────────────────────┘
     │                    │
@@ -225,7 +226,7 @@ sudo systemctl status web-chat
 | `img2img` | Перерисовка (img2img) | `img2img`, `upscale_images` | Доработка **существующего** изображения |
 | `document_analysis` | Анализ документов | `extract_text` | Работа с PDF/DOCX/TXT |
 
-Тексты промптов — эталон в [Sys-prompt.md](Sys-prompt.md), в БД — через `app/db/seed.py`. Редактирование промпта пресета в UI (настройки) с черновиками в `localStorage` до сохранения на сервер.
+Тексты промптов — эталон в [Sys-prompt.md](docs/Sys-prompt.md), в БД — через `app/db/seed.py`. Редактирование промпта пресета в UI (настройки) с черновиками в `localStorage` до сохранения на сервер.
 
 ### Когда какой пресет
 
@@ -344,6 +345,7 @@ sudo systemctl status web-chat
 - Сетка превью, клик — lightbox.
 - **Скачать**, **избранное**, **В галерею загрузок** (копия без перехода со страницы).
 - **В чат** — новая беседа с вложением через `POST /api/conversations/from-image` (см. [docs/API-FROM-IMAGE.md](docs/API-FROM-IMAGE.md)).
+- **Отправить в SD WebUI** — `POST /api/sd-bridge/import` → очередь на SD ([`extensions/sd-webui-web-chat-bridge/`](extensions/sd-webui-web-chat-bridge/)); UI: [`gallery-sd-bridge.js`](static/js/gallery-sd-bridge.js).
 
 ### Галерея загрузок (`/gallery/uploads`)
 
@@ -354,6 +356,7 @@ sudo systemctl status web-chat
 - Drag-and-drop и кнопка «Загрузить»; хранение без срока.
 - Имена файлов с SD Seed: `MM-DD HH-MM [md5×5] - Seed.ext` (как в `refs/main.py`), в `original_name` и при скачивании.
 - **В чат** — новая беседа с вложением (см. [docs/API-FROM-IMAGE.md](docs/API-FROM-IMAGE.md)).
+- **Отправить в SD WebUI** — при наличии SD-метаданных (как в галерее генераций).
 - Deep link: `#upload-{uuid}`.
 
 API: `GET/POST /api/gallery/uploads`, `POST /api/gallery/{id}/promote-to-uploads`.
@@ -361,6 +364,19 @@ API: `GET/POST /api/gallery/uploads`, `POST /api/gallery/{id}/promote-to-uploads
 Из чата: кнопки «Галерея генераций» и «Галерея загрузок» в toolbar.
 
 Обновление списков: WebSocket `gallery_update` (поле `kind`: `generation` | `upload`) и polling.
+
+---
+
+## Browser extensions
+
+Внешние клиенты в [`extensions/`](extensions/):
+
+| Расширение | Назначение | Документация |
+|------------|------------|--------------|
+| **booru-web-chat** | Post booru/reddit → новый чат (теги + картинка) | [`extensions/booru-web-chat/API.md`](extensions/booru-web-chat/API.md) |
+| **sd-webui-web-chat-bridge** | Галерея web-chat → SD img2img | [`extensions/sd-webui-web-chat-bridge/README.md`](extensions/sd-webui-web-chat-bridge/README.md) |
+
+Обзор: [`extensions/README.md`](extensions/README.md).
 
 ---
 
@@ -459,6 +475,8 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | GET | `/auth/me` | Текущий пользователь |
 | GET/POST | `/users` | Список / создание (admin) |
 | POST | `/conversations/from-image` | Новая беседа + изображение + текст composer ([документация](docs/API-FROM-IMAGE.md)) |
+| POST | `/sd-bridge/import` | Галерея → SD WebUI img2img (push-очередь на SD) |
+| GET | `/sd-bridge/import/{token}` | Legacy one-time fetch для SD extension (без cookie) |
 | GET/POST | `/conversations` | Список / создание (POST: `text`, `chat_url`, handoff) |
 | GET | `/conversations/trash` | Беседы в корзине |
 | DELETE | `/conversations/trash` | Очистить корзину |
@@ -487,7 +505,8 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | Путь | Страница |
 |------|----------|
 | `/` | Чат |
-| `/gallery` | Галерея |
+| `/gallery` | Галерея генераций |
+| `/gallery/uploads` | Галерея загрузок |
 | `/macros` | Редактор макросов |
 | `/health` | Дашборд LLM/SD/диск/WS (HTML) |
 
@@ -576,7 +595,7 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 ```bash
 source .venv/bin/activate
 ruff check app tests
-pytest -q          # см. BACKLOG.md §0 или HANDBOOK §21
+pytest -q          # см. HANDBOOK §14
 ```
 
 ### Структура репозитория
@@ -592,7 +611,8 @@ static/
   css/              tokens.css, chat-layout.css, chat-messages.css, gallery.css, …
 templates/          chat.html, gallery.html, macros.html
 deploy/             install.sh, systemd templates, DEPLOY.md
-docs/images/        скриншоты для README
+extensions/         Chrome booru-web-chat; SD WebUI gallery bridge
+docs/               RUNBOOK, API-FROM-IMAGE, images/
 tests/
 ```
 
@@ -617,7 +637,7 @@ tests/
 | Дубли сообщений assistant | Обновите до актуальной версии (фикс финализации черновика при лимите tools) |
 | После F5 пропал статус | `/api/conversations/{id}/generation-status`; WS `connected.in_progress` |
 | Прикрепление не работает | Выбрана беседа; смотрите баннер ошибки; лимит 10 файлов |
-| SD timeout | Увеличить `REQUEST_TIMEOUT` / `MCP_TIMEOUT`; проверить GPU |
+| SD timeout / gallery → SD не работает | `REQUEST_TIMEOUT`; SD extension на `.52`; [`extensions/sd-webui-web-chat-bridge/`](extensions/sd-webui-web-chat-bridge/) |
 | «Лимит шагов с инструментами» | `MAX_TOOL_ROUNDS`; упростите запрос или используйте batch-параметры |
 
 ---
@@ -626,24 +646,27 @@ tests/
 
 | Файл | Содержание |
 |------|------------|
-| [HANDBOOK.md](HANDBOOK.md) | Архитектура, этапы 1–11, журнал, §21–22 |
-| [BACKLOG.md](BACKLOG.md) | План доработок и аудита |
-| [SECURITY.md](SECURITY.md) | Auth, rate limit, proxy |
+| [docs/HANDBOOK.md](docs/HANDBOOK.md) | Архитектура, этапы 1–11, журнал, §21–22 |
+| [docs/SECURITY.md](docs/SECURITY.md) | Auth, rate limit, proxy |
 | [deploy/AUTH.md](deploy/AUTH.md) | Login, сессии, multi-user |
 | [deploy/POSTGRES.md](deploy/POSTGRES.md) | PostgreSQL, ETL |
 | [deploy/RAG.md](deploy/RAG.md) | RAG по документам |
 | [deploy/DATABASE-BACKUP.md](deploy/DATABASE-BACKUP.md) | Backup/restore БД |
-| [Sys-prompt.md](Sys-prompt.md) | Эталонные системные промпты |
+| [docs/Sys-prompt.md](docs/Sys-prompt.md) | Эталонные системные промпты |
 | [deploy/DEPLOY.md](deploy/DEPLOY.md) | Production, systemd |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | LLM/SD down, диск, зависшая генерация |
+| [docs/API-FROM-IMAGE.md](docs/API-FROM-IMAGE.md) | Импорт картинки + текста в новый чат |
+| [extensions/README.md](extensions/README.md) | Обзор Chrome + SD extensions |
+| [extensions/booru-web-chat/API.md](extensions/booru-web-chat/API.md) | Booru/reddit → web-chat (Chrome) |
+| [extensions/sd-webui-web-chat-bridge/README.md](extensions/sd-webui-web-chat-bridge/README.md) | Gallery → SD img2img |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | LLM/SD down, диск, gallery→SD, booru extension |
 | [docs/images/](docs/images/) | Скриншоты UI |
 
-При изменении системных промптов: сначала **Sys-prompt.md**, затем `app/db/seed.py` и миграция БД (см. HANDBOOK.md §6).
+При изменении системных промптов: сначала **docs/Sys-prompt.md**, затем `app/db/seed.py` и миграция БД (см. docs/HANDBOOK.md §6).
 
 ---
 
 ## Статус
 
 - Этапы **1–11** и стабилизация **P0–P2 (пилот)** реализованы; корзина бесед и trusted internal — в проде.
-- Автотесты: `pytest -q` → **283 passed** (2026-05-24).
-- Для домашнего LAN auth опционален; для общего доступа в сети — `AUTH_ENABLED`, `AUTH_SECRET`, reverse proxy; см. [SECURITY.md](SECURITY.md).
+- Автотесты: `pytest -q` (см. `tests/`; без live cleanup на production).
+- Для домашнего LAN auth опционален; для общего доступа в сети — `AUTH_ENABLED`, `AUTH_SECRET`, reverse proxy; см. [docs/SECURITY.md](docs/SECURITY.md).

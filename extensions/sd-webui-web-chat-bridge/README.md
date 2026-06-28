@@ -1,32 +1,26 @@
 # sd-webui-web-chat-bridge
 
-Расширение для **Stable Diffusion WebUI** (A1111 / Forge / ReForge): one-click импорт изображения и параметров генерации из **web-chat** во вкладку **img2img**.
+Расширение для **Stable Diffusion WebUI** (A1111 / Forge / ReForge): импорт PNG + A1111 infotext из **галереи web-chat** во вкладку **img2img**.
 
-Галерея web-chat открывает SD с query-параметром `?web_chat_import=TOKEN`. Расширение на хосте SD server-side запрашивает PNG + infotext у web-chat и вызывает нативный paste pipeline A1111 (`Send to img2img`).
+Расположение в репозитории: **`extensions/sd-webui-web-chat-bridge/`** (ранее `deploy/sd-webui-web-chat-bridge/`).
 
 ## Требования
 
-- SD WebUI с API (обычный Forge/ReForge на `:7860`)
-- web-chat с endpoint `GET /api/sd-bridge/import/{token}` (см. основной проект)
-- Сеть LAN: SD-хост (например `192.168.88.52`) должен достучаться до web-chat (`192.168.88.44:8090`)
+- SD WebUI с API (Forge/ReForge на `:7860`)
+- web-chat с `POST /api/sd-bridge/import` и push на SD
+- LAN: SD-хост (например `192.168.88.52`) достучится до web-chat (`192.168.88.44:8090`)
 
 ## Установка
-
-### Вариант A — копия из репозитория web-chat
 
 ```bash
 # на хосте SD (.52)
 cd /path/to/stable-diffusion-webui/extensions
-cp -r /path/to/web-chat/deploy/sd-webui-web-chat-bridge .
+cp -r /path/to/web-chat/extensions/sd-webui-web-chat-bridge .
 # или symlink:
-ln -s /path/to/web-chat/deploy/sd-webui-web-chat-bridge sd-webui-web-chat-bridge
+ln -s /path/to/web-chat/extensions/sd-webui-web-chat-bridge sd-webui-web-chat-bridge
 ```
 
-### Вариант B — Install from URL
-
-В SD WebUI → **Extensions** → **Install from URL** — URL git-репозитория (подпапка `deploy/sd-webui-web-chat-bridge` нужно клонировать вручную или опубликовать отдельным repo).
-
-После установки: **Apply and restart UI**.
+После копирования: **Apply and restart UI** в SD WebUI.
 
 ## Настройка
 
@@ -37,87 +31,101 @@ ln -s /path/to/web-chat/deploy/sd-webui-web-chat-bridge sd-webui-web-chat-bridge
 
 Приоритет: **Settings UI** → **CLI** → default `http://192.168.88.44:8090`.
 
-## Как это работает
+## Как это работает (основной путь)
 
-1. Пользователь в галереи web-chat нажимает «Отправить в SD WebUI».
-2. web-chat server-side POST `{image_base64, infotext, filename}` на SD  
+1. В lightbox галереи / чата web-chat — **«Отправить в SD WebUI»** ([`gallery-sd-bridge.js`](../../static/js/gallery-sd-bridge.js)).
+2. Браузер → `POST /api/sd-bridge/import` (сессия web-chat) с `asset_id` + `source`.
+3. **web-chat server-side** загружает PNG + infotext и шлёт на SD:  
    `POST http://192.168.88.52:7860/web-chat-bridge/push`
-3. Расширение кладёт импорт в очередь (TTL ~1 ч).
-4. Когда вы открываете SD и вкладку **img2img**, long-poll `/web-chat-bridge/wait-pending` сразу будит apply (без опроса каждые 3 с).
-5. PIL хранится server-side (`gr.State`) — PNG не гоняется через браузер дважды.
+4. Расширение SD кладёт импорт в очередь (TTL ~1 ч).
+5. На вкладке **img2img** long-poll `GET /web-chat-bridge/wait-pending` → apply → paste в img2img.
 
-Новая вкладка браузера **не открывается**.
+**Новая вкладка браузера не открывается.**
 
-## API web-chat (контракт)
+### Legacy (опционально)
 
-Расширение ожидает:
+Query `?web_chat_import=TOKEN` и `GET /api/sd-bridge/import/{token}` — одноразовый token (~60 с), fetch с SD-хоста. Основной UX галереи использует **push-очередь**, не token URL.
+
+## API web-chat
+
+### Создание импорта (из UI галереи)
 
 ```http
-GET /api/sd-bridge/import/{token}
-Accept: application/json
+POST /api/sd-bridge/import
+Content-Type: application/json
+Cookie: webchat_session=...
+
+{
+  "asset_id": "uuid-or-filename",
+  "source": "db",
+  "sd_webui_url": "http://192.168.88.52:7860"
+}
 ```
 
 Ответ `200`:
 
 ```json
 {
-  "image_base64": "<PNG bytes, base64>",
-  "infotext": "prompt\nNegative prompt: ...\nSteps: 22, Sampler: ...",
+  "queued": true,
   "filename": "generation.png",
-  "mime": "image/png"
+  "sd_webui_url": "http://192.168.88.52:7860"
 }
 ```
 
-Token одноразовый, TTL ~60 с. Запрос идёт **с SD-хоста**, не из браузера (обход CORS).
+Код: [`app/api/sd_bridge.py`](../../app/api/sd_bridge.py), [`app/services/sd_bridge_service.py`](../../app/services/sd_bridge_service.py).
 
-Создание token — `POST /api/sd-bridge/import` из web-chat (сессия пользователя); см. план в репозитории web-chat.
+### Legacy fetch (SD extension, token)
 
-## Где искать UI в SD WebUI
+```http
+GET /api/sd-bridge/import/{token}
+```
 
-Аккордеон **«Web-Chat Bridge (gallery import)»** — на вкладке **img2img**, в блоке настроек генерации (always-on script, **не** в выпадающем списке Script).
+Без cookie — token HMAC; IP SD должен быть доверенным для media. Ответ: `image_base64`, `infotext`, `filename`, `mime`.
 
-После импорта prompt, параметры и init image заполняются на этой же вкладке.
+## API на SD WebUI (это расширение)
+
+| Метод | Путь | Назначение |
+|-------|------|------------|
+| GET | `/web-chat-bridge/ping` | health + URL web-chat |
+| POST | `/web-chat-bridge/push` | приём очереди (только LAN) |
+| GET | `/web-chat-bridge/pending` | есть ли импорт в очереди |
+| GET | `/web-chat-bridge/wait-pending` | long-poll до импорта |
+
+## UI в SD WebUI
+
+Аккордеон **«Web-Chat Bridge (gallery import)»** — вкладка **img2img**, always-visible script (не dropdown Script).
 
 ## Диагностика
 
 ```bash
 # с хоста SD
 curl -sS "http://127.0.0.1:7860/web-chat-bridge/ping"
-# → {"ok": true, "web_chat_url": "http://192.168.88.44:8090"}
 
-curl -sS "http://192.168.88.44:8090/api/sd-bridge/import/TEST_TOKEN"
+# очередь пуста после успешного apply
+curl -sS "http://127.0.0.1:7860/web-chat-bridge/pending"
 ```
 
-Ручной тест UI: открыть  
-`http://192.168.88.52:7860/?web_chat_import=VALID_TOKEN`
-
-Accordion **Web-Chat Bridge** на вкладке img2img показывает статус последнего импорта.
+F12 в SD → фильтр `[web-chat-bridge]`.
 
 ## Структура
 
-```
-sd-webui-web-chat-bridge/
-  preload.py              # --web-chat-url CLI default
-  scripts/
-    web_chat_bridge.py    # fetch + paste binding + /web-chat-bridge/ping
-  javascript/
-    web_chat_bridge.js    # ?web_chat_import= auto-start
+```text
+extensions/sd-webui-web-chat-bridge/
+  preload.py
+  scripts/web_chat_bridge.py    # queue, push, paste, FastAPI routes
+  javascript/web_chat_bridge.js # long-poll, apply, legacy ?web_chat_import=
   README.md
 ```
-
-## Совместимость
-
-- **A1111** — `modules.infotext_utils.register_paste_params_button`
-- **Forge / ReForge** — тот же extension API, без fork-specific кода
-- Не использует headless `/sdapi/v1/img2img` (только заполнение UI)
 
 ## Troubleshooting
 
 | Симптом | Решение |
 |---------|---------|
-| SD открылся, img2img пустой | Extension не обновлён / UI не в DOM — см. «Где искать UI»; F12 → `[web-chat-bridge]` |
-| Аккордеона нет | Старый скрипт был в dropdown Script — обновите `web_chat_bridge.py` (`AlwaysVisible`) |
-| `Cannot reach web-chat` | Проверить URL в Settings, ping с `.52` до `.44:8090` |
-| HTTP 401/403 на import | Token истёк или уже использован; IP SD не в trusted на web-chat |
-| HTTP 404 на import | web-chat ещё без `/api/sd-bridge` — обновить web-chat |
-| `TypeError: 'NoneType' object is not callable` в ui_settings | Обновите `web_chat_bridge.py`: `section=` в конструкторе `OptionInfo`, не `opt.section(...)` |
+| img2img пустой | Обновить extension; открыта вкладка img2img; F12 `[web-chat-bridge]` |
+| Аккордеона нет | `AlwaysVisible` в `web_chat_bridge.py`; перезапуск WebUI |
+| `Cannot reach web-chat` | URL в Settings; curl с `.52` до `.44:8090` |
+| HTTP 502 на import | SD `/web-chat-bridge/push` недоступен или отклонил push |
+| HTTP 403 push | push только с private/LAN IP |
+| ReForge startup error | `OptionInfo(..., section=...)` — не `.section()` chain |
+
+См. также [`docs/RUNBOOK.md`](../../docs/RUNBOOK.md) — раздел «Gallery → SD WebUI».

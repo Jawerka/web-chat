@@ -105,7 +105,7 @@
     delete: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   };
 
-  /** Действия над сообщением (pin/quote/retry — отложены, см. BACKLOG.md фаза 3). */
+  /** Действия над сообщением (pin/quote/retry — отложены, см. HANDBOOK §22). */
   const MESSAGE_ACTION_DEFS = [
     { key: 'copy', label: 'Копировать', title: 'Скопировать текст', icon: MSG_ICONS.copy },
     { key: 'edit', label: 'Редактировать', title: 'Редактировать', icon: MSG_ICONS.edit },

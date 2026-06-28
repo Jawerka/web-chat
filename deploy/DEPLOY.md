@@ -254,7 +254,7 @@ curl -s http://127.0.0.1:8090/api/presets | jq '.[].slug'
 ```bash
 source .venv/bin/activate
 pytest -q
-# ожидается: все passed (см. HANDBOOK.md §14, BACKLOG.md §0)
+# ожидается: все passed (см. HANDBOOK.md §14)
 ```
 
 ### После перезагрузки ОС
@@ -393,9 +393,11 @@ sudo ./deploy/install.sh --skip-tests
 Для доступа **вне доверенной LAN** не открывайте `8090` напрямую. Используйте HTTPS и аутентификацию на proxy.
 
 Шаблон: **[deploy/nginx-web-chat.conf.template](nginx-web-chat.conf.template)**  
-Документация: **[SECURITY.md](../SECURITY.md)** · вход: **[AUTH.md](AUTH.md)** · multi-user: **[MULTI-USER.md](MULTI-USER.md)** · план работ: **[BACKLOG.md](../BACKLOG.md)** · архитектура: **[HANDBOOK.md](../HANDBOOK.md)**
+Документация: **[SECURITY.md](../docs/SECURITY.md)** · вход: **[AUTH.md](AUTH.md)** · multi-user: **[MULTI-USER.md](MULTI-USER.md)** · архитектура: **[HANDBOOK.md](../docs/HANDBOOK.md)**
 
-**Автотесты:** `pytest -q` → **283 passed** (см. [HANDBOOK.md](../HANDBOOK.md)).
+**Автотесты:** `pytest -q` (см. [HANDBOOK.md](../docs/HANDBOOK.md), каталог `tests/`).
+
+**Browser / SD extensions:** [`extensions/`](../extensions/) — booru-web-chat (Chrome), sd-webui-web-chat-bridge (на хосте SD).
 
 Минимальные шаги:
 
@@ -415,7 +417,7 @@ sudo ./deploy/install.sh --skip-tests
 - В чате: адреса LLM/SD из настроек → `POST /api/config/trusted-internal/sync`.
 - Проверка: с IP LLM `curl -s -o /dev/null -w "%{http_code}" http://<web-chat>:8090/media/asset/<uuid>/llm` → `200`.
 
-Подробнее: [AUTH.md](AUTH.md), [HANDBOOK.md §1.12](../HANDBOOK.md#112-безопасность).
+Подробнее: [AUTH.md](AUTH.md), [HANDBOOK.md §1.12](../docs/HANDBOOK.md#112-безопасность).
 
 Альтернатива: **Caddy** с `basicauth` и автоматическим TLS — принцип тот же (proxy → `127.0.0.1:8090`, WebSocket upgrade).
 
@@ -436,7 +438,7 @@ sudo ./deploy/install.sh --skip-tests
 
 ### Чеклист перед production
 
-Сверка с [HANDBOOK.md §7](../HANDBOOK.md#7-чеклист-перед-production). Для **личного LAN** достаточно пунктов без nginx/auth (см. [§0.5](../HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки)).
+Сверка с [HANDBOOK.md §7](../docs/HANDBOOK.md#7-чеклист-перед-production). Для **личного LAN** достаточно пунктов без nginx/auth (см. [§0.5](../docs/HANDBOOK.md#05-модель-эксплуатации-и-приоритеты-разработки)).
 
 - [ ] С хоста web-chat доступны LLM и SD (`curl` / `/health`)
 - [ ] `PUBLIC_BASE_URL` = URL в браузере
@@ -449,4 +451,4 @@ sudo ./deploy/install.sh --skip-tests
 
 ---
 
-*См. также: [README.md](../README.md), [HANDBOOK.md](../HANDBOOK.md), [BACKLOG.md](../BACKLOG.md).*
+*См. также: [README.md](../README.md), [HANDBOOK.md](../docs/HANDBOOK.md).*

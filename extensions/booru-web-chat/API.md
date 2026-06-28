@@ -32,7 +32,7 @@
   └─ chrome.tabs.create(baseUrl + chat_url)
 ```
 
-**Почему не JSON с `image.url`:** CDN booru (e621, rule34, derpibooru) часто отвечает **403** без Referer со страницы поста. Сервер web-chat и service worker расширения не имеют этого Referer. Загрузка только из **tab context** booru.
+**Почему не JSON с `image.url`:** CDN booru/reddit часто отдаёт **403** без Referer со страницы поста. Сервер web-chat и service worker расширения не имеют этого Referer. Загрузка только из **tab context** booru.
 
 **Почему не `credentials: 'include'`:** cookie `webchat_session` имеет `SameSite=Lax` и **не отправляется** на cross-site POST из origin `chrome-extension://`. Используйте `chrome.cookies.get` + заголовок `Cookie` (см. ниже).
 
@@ -307,6 +307,7 @@ globalThis.__booruWebChat.extractPage()
 |--------|------|----------|
 | [`src/extractors/e621.js`](src/extractors/e621.js) | `#tag-list .tag-list-item[data-name]` | см. [`images.js`](src/extractors/images.js) |
 | [`src/extractors/rule34.js`](src/extractors/rule34.js) | `#tag-sidebar li.tag a` | `#image` src |
+| [`src/extractors/reddit.js`](src/extractors/reddit.js) | post title, `r/subreddit`, flair | `shreddit-post` / `content-href`, srcset |
 | [`src/extractors/derpibooru.js`](src/extractors/derpibooru.js) | hidden `#tags-form_old_tag_input` или `.tag[data-tag-name]` | `#image-display`; `/medium.` → `/full.` |
 | [`src/extractors/generic.js`](src/extractors/generic.js) | fallback | `#image` / `picture img` |
 

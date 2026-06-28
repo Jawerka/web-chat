@@ -26,13 +26,15 @@
 
 ## Trusted internal (LLM / SD)
 
-Браузер ходит с cookie (при auth), **llama-server и SD** — без cookie. С доверенных IP разрешены `GET /media/asset/*`, `GET /api/health/logs`:
+Браузер ходит с cookie (при auth), **llama-server и SD** — без cookie. С доверенных IP разрешены `GET /media/asset/*`, `GET /api/health/logs`, legacy `GET /api/sd-bridge/import/{token}`:
 
 - хосты из `LLM_BASE_URL`, `SD_WEBUI_URL`, `PUBLIC_BASE_URL` (+ VPN);
 - `TRUSTED_INTERNAL_IPS` в `.env`;
 - адреса из настроек чата → `POST /api/config/trusted-internal/sync`.
 
 Подробнее: [deploy/AUTH.md](deploy/AUTH.md).
+
+**Chrome extension booru-web-chat:** permission `cookies`; session передаётся явным заголовком `Cookie`, не cross-site `credentials`. См. [extensions/booru-web-chat/API.md](extensions/booru-web-chat/API.md).
 
 ## Rate limiting
 
@@ -43,10 +45,8 @@ In-memory на процесс (`.env`: `RATE_LIMIT_*`). Ограничивает
 - Prompt-injection hardening, санитизация display_name для LLM.
 - DDoS-защита, Redis-сессии, горизонтальное масштабирование.
 
-См. [BACKLOG.md](BACKLOG.md) — только то, что реально нужно для UX и стенда.
-
 ## Ссылки
 
 - Чеклист стенда: [HANDBOOK.md §7](HANDBOOK.md#7-чеклист-перед-production)
 - Реализованная платформа (auth, rate limit, SSRF): [HANDBOOK.md §21](HANDBOOK.md#21-стабилизация-и-платформа-v2-2026-05-23)
-- План работ: [BACKLOG.md](BACKLOG.md)
+- Планируемые действия: [HANDBOOK.md §22](HANDBOOK.md#22-планируемые-действия)
