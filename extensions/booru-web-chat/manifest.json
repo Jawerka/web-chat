@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Booru → web-chat",
+  "version": "1.0.2",
+  "description": "Copy booru tags and open the post image in a new web-chat conversation",
+  "permissions": ["activeTab", "scripting", "storage", "cookies"],
+  "host_permissions": [
+    "*://*.e621.net/*",
+    "*://*.e926.net/*",
+    "*://*.rule34.xxx/*",
+    "*://*.derpibooru.org/*",
+    "*://*.tantabus.ai/*",
+    "*://tantabuscdn.net/*",
+    "*://*.reddit.com/*",
+    "*://*.redd.it/*",
+    "*://derpicdn.net/*",
+    "http://192.168.88.44:8090/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": false
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Send tags and image to web-chat",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

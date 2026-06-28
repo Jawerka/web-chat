@@ -1,0 +1,19 @@
+{
+  "name": "booru-web-chat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/inject.js --bundle --outfile=dist/inject.js --format=iife --global-name=__booruWebChatBundle",
+    "icons": "node scripts/generate-icons.js",
+    "prepare": "npm run icons && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "sharp": "^0.34.2",
+    "vitest": "^3.0.5"
+  }
+}

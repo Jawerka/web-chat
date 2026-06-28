@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>Booru → web-chat</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 16px;
+        max-width: 480px;
+        color: #1f2937;
+      }
+      label {
+        display: block;
+        margin-top: 12px;
+        font-weight: 600;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 4px;
+        padding: 8px;
+      }
+      button {
+        margin-top: 16px;
+        padding: 8px 14px;
+      }
+      .hint {
+        margin-top: 12px;
+        font-size: 13px;
+        color: #4b5563;
+        line-height: 1.4;
+      }
+      .status {
+        margin-top: 12px;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Booru → web-chat</h1>
+    <form id="options-form">
+      <label>
+        web-chat base URL
+        <input id="web-chat-url" type="url" placeholder="http://192.168.88.44:8090" required />
+      </label>
+      <label>
+        preset slug
+        <input id="preset-slug" type="text" placeholder="img2img" />
+      </label>
+      <button type="submit">Save</button>
+    </form>
+    <p class="hint">
+      Войдите в web-chat в этом браузере перед использованием расширения. Расширение
+      отправляет session cookie на <code>/api/conversations/from-image</code>.
+    </p>
+    <p id="status" class="status" hidden></p>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

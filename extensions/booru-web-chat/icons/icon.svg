@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="Booru web-chat">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="10" x2="112" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#93c5fd"/>
+      <stop offset="0.5" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <filter id="shadow" x="-8%" y="-6%" width="116%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#1e3a8a" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <g filter="url(#shadow)">
+    <rect x="22" y="28" width="58" height="44" rx="8" fill="#eff6ff" stroke="#1d4ed8" stroke-width="3"/>
+    <circle cx="38" cy="44" r="6" fill="#2563eb"/>
+    <path stroke="#1d4ed8" stroke-width="4" stroke-linecap="round" d="M50 58h22M50 48h16"/>
+  </g>
+  <g filter="url(#shadow)">
+    <path fill="#eff6ff" stroke="#1d4ed8" stroke-width="3" d="M58 64h38a8 8 0 0 1 8 8v24a8 8 0 0 1-8 8H58l-12 10v-10H42a8 8 0 0 1-8-8V72a8 8 0 0 1 8-8z"/>
+    <path stroke="#2563eb" stroke-width="3.5" stroke-linecap="round" d="M52 82h34M52 92h24"/>
+  </g>
+</svg>
