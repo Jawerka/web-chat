@@ -1,0 +1,309 @@
+/* Extracted from chat-layout.css (P7.6 split) — requires tokens.css */
+
+body.macros-body {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  margin: 0;
+}
+
+.macros-page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.macros-page-header {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: calc(var(--space-4) + var(--space-1)) calc(var(--space-4) + var(--space-1)) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.macros-page-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  color: var(--text);
+}
+
+.macros-page-subtitle {
+  margin: var(--space-1) 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.macros-page-subtitle code {
+  font-size: 0.85em;
+  padding: 1px calc(var(--space-1) + 1px);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+}
+
+.macros-page-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--space-2) + var(--space-1) / 2);
+}
+
+.macros-page-status {
+  font-size: 0.8rem;
+  color: var(--success);
+  opacity: 0;
+  transition: opacity 0.2s var(--ease);
+  pointer-events: none;
+}
+
+.macros-page-status.is-visible {
+  opacity: 1;
+}
+
+.macros-page-status.is-error {
+  color: var(--danger);
+}
+
+.macros-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--space-3);
+  background: var(--bg);
+}
+
+.macros-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 6px;
+  font-size: 0.875rem;
+}
+
+.macros-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: calc(var(--space-2) + var(--space-1) / 2) var(--space-2);
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.macros-table .col-alias { width: 14%; min-width: 120px; }
+.macros-table .col-label { width: 16%; min-width: 120px; }
+.macros-table .col-body { width: auto; min-width: 200px; }
+.macros-table .col-order { width: 64px; }
+.macros-table .col-actions { width: 40px; }
+
+.macros-table-row td {
+  padding: var(--space-1) calc(var(--space-1) + var(--space-1) / 2);
+  vertical-align: top;
+}
+
+.macros-table-row.is-new td {
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+
+.macros-table-row.is-dirty .macro-cell-field {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.macro-cell-field {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.macro-cell-field:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.macro-cell-field--save {
+  padding-right: 36px;
+}
+
+.macro-cell-input {
+  flex: 1;
+  width: 100%;
+  min-height: 36px;
+  padding: var(--space-2) calc(var(--space-2) + var(--space-1) / 2);
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+  resize: none;
+  outline: none;
+}
+
+.macro-cell-input--grow {
+  overflow-y: hidden;
+}
+
+.macro-cell-input--order {
+  text-align: center;
+  padding: var(--space-2) var(--space-1);
+  -moz-appearance: textfield;
+}
+
+.macro-cell-input--order::-webkit-outer-spin-button,
+.macro-cell-input--order::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.macro-cell-save {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--primary), var(--gradient-primary-end));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 40%, transparent);
+  transition: transform 0.2s var(--ease), background 0.25s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.macro-cell-save:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+.macro-cell-save:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.macro-cell-save:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.macro-cell-save.is-saving .macro-cell-save-icon--disk {
+  animation: settingsSavePulse 0.9s ease-in-out infinite;
+}
+
+.macro-cell-save.is-success {
+  background: linear-gradient(135deg, var(--success), #57bb63);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+.macro-cell-save.is-error {
+  background: linear-gradient(135deg, var(--danger), #e57373);
+}
+
+.macro-cell-save-icon {
+  display: block;
+}
+
+.macro-cell-save-icon--check {
+  display: none;
+}
+
+.macro-cell-save.is-success .macro-cell-save-icon--disk {
+  display: none;
+}
+
+.macro-cell-save.is-success .macro-cell-save-icon--check {
+  display: block;
+}
+
+.macro-row-delete {
+  width: 32px;
+  height: 32px;
+  margin-top: 4px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.macro-row-delete:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.macros-sheet-empty {
+  padding: calc(var(--space-5) * 2) calc(var(--space-4) + var(--space-1));
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.macros-sheet-bar {
+  flex-shrink: 0;
+  display: flex;
+  gap: calc(var(--space-1) / 2);
+  padding: 0 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  overflow-x: auto;
+}
+
+.macros-sheet-tab {
+  flex-shrink: 0;
+  padding: calc(var(--space-2) + var(--space-1) / 2) calc(var(--space-3) + var(--space-1) / 2);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.macros-sheet-tab:hover {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.macros-sheet-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+
+/* P7.12 / P7.14: намеренные !important и motion
+ * !important — не снимать без smoke (chat, login, mobile, dark toggle):
+ *   .hidden, .font-size-input, conv undo, icon-moon, mobile panel .hidden
+ * P7.14: локальные @media (prefers-reduced-motion) не дублируем — только точечно у
+ *   .conv-search-panel (transform off) и глобальный reset ниже для остального UI.
+ * login.css: .hidden — та же утилита
+ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

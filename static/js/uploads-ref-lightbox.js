@@ -13,6 +13,7 @@ class UploadsRefLightbox {
       prev: document.getElementById('uploads-ref-prev'),
       next: document.getElementById('uploads-ref-next'),
       image: document.getElementById('uploads-ref-image'),
+      stage: document.getElementById('uploads-ref-stage'),
       counter: document.getElementById('uploads-ref-counter'),
       prompt: document.getElementById('uploads-ref-prompt'),
       negative: document.getElementById('uploads-ref-negative'),
@@ -42,7 +43,13 @@ class UploadsRefLightbox {
     this.els.root?.addEventListener('click', (e) => {
       if (e.target === this.els.root) this.close();
     });
-    this.els.image?.addEventListener('click', () => this.openZoom());
+    this.els.stage?.addEventListener('click', (e) => {
+      if (e.target === this.els.stage) this.close();
+    });
+    this.els.image?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.openZoom();
+    });
     this.els.zoom?.addEventListener('click', () => this.closeZoom());
     this.els.copyAll?.addEventListener('click', () => this.copyAll());
     this.els.extract?.addEventListener('click', () => {
@@ -111,8 +118,16 @@ class UploadsRefLightbox {
       this.els.image.alt = item.filename || '';
     }
     if (this.els.counter) {
-      this.els.counter.textContent = `${this.index + 1} / ${this.items.length}`;
+      const n = this.items.length;
+      if (n > 1) {
+        this.els.counter.textContent = `${this.index + 1} / ${n}`;
+        this.els.counter.classList.remove('hidden');
+      } else {
+        this.els.counter.classList.add('hidden');
+      }
     }
+    if (this.els.prev) this.els.prev.disabled = this.index <= 0;
+    if (this.els.next) this.els.next.disabled = this.index >= this.items.length - 1;
     const p = item.sd_prompt || '';
     const n = item.sd_negative || '';
     const par = item.sd_params || '';

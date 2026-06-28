@@ -19,8 +19,12 @@
   }
 
   function applyTheme(dark) {
-    document.body.classList.toggle('dark-theme', dark);
-    document.documentElement.classList.toggle('login-dark', dark);
+    if (window.WebChatThemeBoot) {
+      window.WebChatThemeBoot.applyTheme(dark);
+    } else {
+      document.body.classList.toggle('dark-theme', dark);
+      document.documentElement.classList.toggle('login-dark', dark);
+    }
     if (metaTheme) {
       metaTheme.setAttribute('content', dark ? THEME_COLORS.dark : THEME_COLORS.light);
     }
@@ -33,6 +37,10 @@
   }
 
   function loadTheme() {
+    if (window.WebChatThemeBoot) {
+      applyTheme(window.WebChatThemeBoot.resolveDark());
+      return;
+    }
     const stored = localStorage.getItem('webchat_theme');
     const dark = stored === 'dark'
       || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);

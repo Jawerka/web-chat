@@ -437,7 +437,6 @@ class GalleryUploadsApp {
     }
     await window.GalleryCommon.attachImageToNewChat(enriched, {
       btn,
-      userComment: document.getElementById('uploads-ref-chat-comment')?.value?.trim() || '',
       onStatus: (text, isError) => this.flashStatus(text, Boolean(isError)),
     });
   }

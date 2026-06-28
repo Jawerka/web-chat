@@ -524,3 +524,46 @@ body.dark-theme .chat-message.assistant.streaming.is-busy:not(.has-content):not(
   word-break: break-word;
 }
 
+.message-bubble pre {
+  position: relative;
+}
+
+.message-bubble pre.has-copy-btn {
+  padding-top: calc(var(--space-4) + var(--space-1));
+}
+
+.message-bubble .code-copy-btn {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color 0.15s var(--ease),
+    background 0.15s var(--ease),
+    border-color 0.15s var(--ease);
+}
+
+.message-bubble .code-copy-btn:hover,
+.message-bubble .code-copy-btn:focus-visible {
+  color: var(--text);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.message-bubble .code-copy-btn.is-copied {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: color-mix(in srgb, var(--success) 14%, var(--surface));
+  animation: msg-copy-pop 0.35s var(--ease);
+}
+

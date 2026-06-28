@@ -6,28 +6,11 @@
   <title>{{ title }} — web-chat</title>
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/chat-layout.css">
+  <link rel="stylesheet" href="/static/css/shared-ui.css">
   <link rel="stylesheet" href="/static/css/gallery.css">
-  <script>
-    (function () {
-      var stored = localStorage.getItem('webchat_theme');
-      var dark = stored === 'dark'
-        || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      if (dark) document.documentElement.classList.add('gallery-dark');
-    })();
-  </script>
+  <script src="/static/js/theme-boot.js" data-theme-mode="gallery"></script>
 </head>
 <body class="gallery-body styled-scrollbar">
-  <script>
-    if (document.documentElement.classList.contains('gallery-dark')) {
-      document.body.classList.add('dark-theme');
-    }
-    window.addEventListener('storage', function (e) {
-      if (e.key !== 'webchat_theme') return;
-      var dark = e.newValue === 'dark';
-      document.body.classList.toggle('dark-theme', dark);
-      document.documentElement.classList.toggle('gallery-dark', dark);
-    });
-  </script>
 
   <div class="gallery-page">
     <header class="gallery-header">
@@ -67,44 +50,48 @@
     </button>
   </nav>
 
-  <div id="gallery-lightbox" class="lightbox gallery-lightbox hidden" role="dialog" aria-modal="true" aria-label="Просмотр изображения">
-    <button type="button" class="lightbox-nav lightbox-prev" id="gallery-lightbox-prev" title="Предыдущее (←)" aria-label="Предыдущее">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+  <div id="gallery-lightbox" class="lightbox hidden gallery-lightbox" role="dialog" aria-modal="true" aria-label="Просмотр изображения">
+    <button type="button" class="lightbox-nav lightbox-prev" id="gallery-lightbox-prev" title="Предыдущее" aria-label="Предыдущее изображение">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
     </button>
-    <button type="button" class="lightbox-nav lightbox-next" id="gallery-lightbox-next" title="Следующее (→)" aria-label="Следующее">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    <button type="button" class="lightbox-nav lightbox-next" id="gallery-lightbox-next" title="Следующее" aria-label="Следующее изображение">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
     </button>
-    <button type="button" class="lightbox-close" id="gallery-lightbox-close" title="Закрыть (Esc)" aria-label="Закрыть">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    <button type="button" class="lightbox-action lightbox-attach-current" id="gallery-lightbox-attach" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+      </svg>
     </button>
-    <div class="gallery-lightbox-toolbar">
-      <div class="gallery-lightbox-toolbar-left">
-        <span id="gallery-lightbox-title" class="gallery-lightbox-title"></span>
-        <span id="gallery-lightbox-counter" class="gallery-lightbox-counter hidden" aria-live="polite"></span>
-      </div>
-      <div class="gallery-lightbox-actions">
-        <button type="button" class="gallery-toolbar-btn" id="gallery-lightbox-favorite" title="В избранное" aria-label="В избранное">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 15.1 8.5 22 9.3 17 14.1 18.3 21 12 17.5 5.7 21 7 14.1 2 9.3 8.9 8.5 12 2"/></svg>
-        </button>
-        <button type="button" class="gallery-toolbar-btn" id="gallery-lightbox-promote" title="Сохранить в галерею загрузок" aria-label="В загрузки">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        </button>
-        <button type="button" class="gallery-toolbar-btn" id="gallery-lightbox-attach" title="Новый чат с этим изображением" aria-label="Прикрепить в новый чат">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-        <button type="button" class="gallery-toolbar-btn" id="gallery-lightbox-save" title="Сохранить на диск" aria-label="Сохранить">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        </button>
-        <button type="button" class="gallery-toolbar-btn danger" id="gallery-lightbox-delete" title="Удалить" aria-label="Удалить">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </button>
-      </div>
-    </div>
-    <div class="gallery-lightbox-compose">
-      <label for="gallery-lightbox-comment" class="gallery-lightbox-comment-label">Комментарий к отправке в чат</label>
-      <textarea id="gallery-lightbox-comment" class="gallery-lightbox-comment" rows="2" placeholder="Текст для поля ввода (необязательно)" spellcheck="true"></textarea>
-    </div>
-    <div class="lightbox-stage">
+    <button type="button" class="lightbox-action lightbox-save" id="gallery-lightbox-save" title="Сохранить на диск" aria-label="Сохранить">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+    </button>
+    <button type="button" class="lightbox-action lightbox-favorite" id="gallery-lightbox-favorite" title="В избранное" aria-label="В избранное">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <polygon points="12 2 15.1 8.5 22 9.3 17 14.1 18.3 21 12 17.5 5.7 21 7 14.1 2 9.3 8.9 8.5 12 2"/>
+      </svg>
+    </button>
+    <button type="button" class="lightbox-action lightbox-promote" id="gallery-lightbox-promote" title="В галерею загрузок" aria-label="В галерею загрузок">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    </button>
+    <button type="button" class="lightbox-action lightbox-delete danger" id="gallery-lightbox-delete" title="Удалить" aria-label="Удалить">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      </svg>
+    </button>
+    <button type="button" class="lightbox-close" id="gallery-lightbox-close" title="Закрыть" aria-label="Закрыть">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+    <span class="lightbox-counter hidden" id="gallery-lightbox-counter" aria-live="polite"></span>
+    <div class="lightbox-stage" id="gallery-lightbox-stage">
       <div class="lightbox-loader" id="gallery-lightbox-loader" role="status" aria-live="polite" aria-hidden="true">
         <div class="lightbox-loader-spinner" aria-hidden="true"></div>
         <span class="lightbox-loader-label">Загрузка…</span>

@@ -144,6 +144,8 @@
   </div>`;
 
   async function load(app, opts = {}) {
+    // Perf: при лагах на 80–100+ сообщениях — замер DevTools Performance;
+    // virtual list не внедряем без боли; см. BACKLOG Web Worker для markdown.
     const scrollEl = WebChatScroll.chatHistoryScrollEl(app);
     const restoreEntry = opts.restoreScrollEntry || null;
     const wantScrollEnd = restoreEntry
@@ -341,6 +343,7 @@
     }
     if (displayText && bubble) {
       bubble.innerHTML = formatMarkdown(displayText);
+      if (typeof enhanceCodeCopyButtons === 'function') enhanceCodeCopyButtons(bubble);
     } else if (bubble) {
       bubble.innerHTML = '';
     }
@@ -598,6 +601,7 @@
       const bubble = document.createElement('div');
       bubble.className = 'message-bubble';
       bubble.innerHTML = formatMarkdown(displayText);
+      if (typeof enhanceCodeCopyButtons === 'function') enhanceCodeCopyButtons(bubble);
       el.appendChild(bubble);
     }
     if (urls.length) {
@@ -646,11 +650,83 @@
       clone.querySelectorAll('.mention-spoiler-body').forEach((el) => el.remove());
       return clone.textContent.trim();
     }
+    const msgEl = row.querySelector('.chat-message.assistant');
+    if (msgEl?.dataset.rawContent != null && msgEl.dataset.rawContent !== '') {
+      return assistantDisplayText(msgEl.dataset.rawContent);
+    }
+    return htmlBubbleToCopyText(row.querySelector('.message-bubble'));
+  }
+
+  /** Fallback: plain text из HTML-пузыря с сохранением абзацев и переносов. */
+  function htmlBubbleToCopyText(bubble) {
+    if (!bubble) return '';
+    const clone = bubble.cloneNode(true);
+    clone.querySelectorAll('img, .code-copy-btn').forEach((el) => el.remove());
+    clone.querySelectorAll('br').forEach((br) => br.replaceWith('\n'));
+    for (const tag of ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'pre', 'blockquote', 'tr']) {
+      clone.querySelectorAll(tag).forEach((el) => {
+        el.insertAdjacentText('beforebegin', '\n');
+        el.insertAdjacentText('afterend', '\n');
+      });
+    }
+    clone.querySelectorAll('li').forEach((li) => {
+      li.insertAdjacentText('afterbegin', '- ');
+    });
+    return (clone.innerText || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function extractMessageCopyHtml(row, role) {
+    if (!row || role !== 'assistant') return '';
     const bubble = row.querySelector('.message-bubble');
     if (!bubble) return '';
     const clone = bubble.cloneNode(true);
-    clone.querySelectorAll('img').forEach((img) => img.remove());
-    return clone.innerText.trim();
+    clone.querySelectorAll('.code-copy-btn').forEach((el) => el.remove());
+    return clone.innerHTML.trim();
+  }
+
+  async function writeMessageClipboard(payload) {
+    const plain = payload.plain || '';
+    const html = payload.html || '';
+    if (!plain && !html) return false;
+
+    if (plain && html && navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': new Blob([plain], { type: 'text/plain;charset=utf-8' }),
+            'text/html': new Blob([html], { type: 'text/html;charset=utf-8' }),
+          }),
+        ]);
+        return true;
+      } catch {
+        /* fallback to text/plain */
+      }
+    }
+
+    if (!plain) return false;
+    try {
+      await navigator.clipboard.writeText(plain);
+      return true;
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = plain;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        return document.execCommand('copy');
+      } catch {
+        return false;
+      } finally {
+        ta.remove();
+      }
+    }
   }
 
   function flashCopySuccess(app, btn) {
@@ -677,26 +753,16 @@
 
   async function copyMessageText(app, messageId, role, copyBtn) {
     const row = findRow(app, messageId);
-    const text = extractMessagePlainText(app, row, role);
-    if (!text) {
+    const plain = extractMessagePlainText(app, row, role);
+    if (!plain) {
       app.showError('Нет текста для копирования');
       return;
     }
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.setAttribute('readonly', '');
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand('copy');
-      } finally {
-        ta.remove();
-      }
+    const html = extractMessageCopyHtml(row, role);
+    const ok = await writeMessageClipboard({ plain, html });
+    if (!ok) {
+      app.showError('Не удалось скопировать текст');
+      return;
     }
     flashCopySuccess(app, copyBtn);
     app.log?.info('msg', `Текст сообщения скопирован (${role})`);

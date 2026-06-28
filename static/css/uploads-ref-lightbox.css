@@ -36,69 +36,7 @@ html:not(.gallery-dark) .uploads-ref-lightbox {
   display: none;
 }
 
-/* ── Top bar ── */
-.uploads-ref-topbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  padding-top: max(var(--space-2), env(safe-area-inset-top));
-  min-height: 48px;
-}
-
-.uploads-ref-counter {
-  font-size: var(--type-meta-size, 0.8125rem);
-  color: var(--ref-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.uploads-ref-topbar .uploads-ref-attach {
-  flex-shrink: 0;
-}
-
-.uploads-ref-chat-comment {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 28rem;
-  min-height: 2rem;
-  resize: none;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--ref-border, rgba(255, 255, 255, 0.12));
-  background: var(--ref-panel, rgba(0, 0, 0, 0.25));
-  color: inherit;
-  padding: var(--space-1) var(--space-2);
-  font: inherit;
-  line-height: 1.35;
-}
-
-.uploads-ref-close {
-  flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
-  color: inherit;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s var(--ease-motion, ease);
-}
-
-.uploads-ref-close:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-html:not(.gallery-dark) .uploads-ref-close {
-  background: color-mix(in srgb, var(--color-text) 8%, transparent);
-}
-
-html:not(.gallery-dark) .uploads-ref-close:hover {
-  background: color-mix(in srgb, var(--color-text) 14%, transparent);
-}
+/* ── Top bar (removed — controls use shared lightbox classes in image pane) ── */
 
 /* ── Main row ── */
 .uploads-ref-main {
@@ -107,7 +45,7 @@ html:not(.gallery-dark) .uploads-ref-close:hover {
   min-height: 0;
   overflow: hidden;
   gap: var(--space-3);
-  padding: 0 var(--space-3) var(--space-2);
+  padding: max(var(--space-2), env(safe-area-inset-top)) var(--space-3) var(--space-2);
 }
 
 .uploads-ref-image-pane {
@@ -118,57 +56,25 @@ html:not(.gallery-dark) .uploads-ref-close:hover {
   justify-content: center;
   position: relative;
   padding: var(--space-2) 56px;
+  overflow: hidden;
 }
 
-.uploads-ref-image-pane img {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  border-radius: var(--radius-md);
+.uploads-ref-image-pane .lightbox-stage img {
   cursor: zoom-in;
   box-shadow: var(--shadow-md);
 }
 
-.uploads-ref-arrow {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 48px;
-  height: 48px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.06);
-  color: inherit;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, background 0.2s ease, transform 0.2s ease;
-  z-index: 2;
+.uploads-ref-image-pane .lightbox-counter {
+  bottom: max(12px, env(safe-area-inset-bottom));
 }
 
-.uploads-ref-image-pane:hover .uploads-ref-arrow,
-.uploads-ref-arrow:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
+.uploads-ref-image-pane .lightbox-nav {
+  z-index: 3;
 }
 
-.uploads-ref-arrow:hover {
-  background: rgba(255, 255, 255, 0.14);
-  transform: translateY(-50%) scale(1.05);
-}
-
-.uploads-ref-prev {
-  left: max(var(--space-2), env(safe-area-inset-left));
-}
-
-.uploads-ref-next {
-  right: max(var(--space-2), env(safe-area-inset-right));
+.uploads-ref-image-pane .lightbox-action,
+.uploads-ref-image-pane .lightbox-close {
+  z-index: 3;
 }
 
 /* ── Info panel ── */
@@ -386,10 +292,5 @@ html:not(.gallery-dark) .uploads-ref-close:hover {
   .uploads-ref-image-pane {
     flex: 1 1 50%;
     padding: var(--space-2) 44px;
-  }
-
-  .uploads-ref-arrow {
-    opacity: 0.7;
-    pointer-events: auto;
   }
 }

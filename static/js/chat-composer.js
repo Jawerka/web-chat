@@ -79,7 +79,7 @@
     cancelBtn?.classList.add('hidden');
     sendBtn.classList.remove('hidden');
     const inputDisabled = Boolean(app.$.userInput?.disabled);
-    sendBtn.disabled = !app.currentConvId || inputDisabled;
+    sendBtn.disabled = !app.currentConvId || inputDisabled || !hasPayload(app);
   }
 
   function sendBlockedReason(app, text) {
@@ -491,6 +491,7 @@
     } finally {
       setUploading(app, false);
       setFileDragActive(app, false);
+      syncSendState(app);
     }
     if (app.$.fileInput) app.$.fileInput.value = '';
   }
@@ -512,6 +513,7 @@
         app.$.attachmentStrip.classList.add('hidden');
       }
       saveDraft(app, app.currentConvId);
+      syncSendState(app);
     });
     app.$.attachmentStrip.appendChild(chip);
   }
@@ -572,6 +574,7 @@
       autoResizeInput(app);
       scheduleDraftSave(app);
       app._scheduleRagPreview();
+      syncSendState(app);
     });
     app.$.userInput?.addEventListener('paste', (e) => onPaste(app, e));
     window.addEventListener('resize', () => autoResizeInput(app));

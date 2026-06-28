@@ -246,35 +246,118 @@
     return window.WebChatConvTitleFormat?.formatConvTitleForList(title) ?? title;
   }
 
+  const CONV_GROUP_ORDER = ['Сегодня', 'Вчера', 'На этой неделе', 'Ранее'];
+
+  function groupConversations(conversations) {
+    const buckets = new Map();
+    for (const c of conversations) {
+      const label = WebChatDateTime.formatDateGroup(c.updated_at);
+      if (!buckets.has(label)) buckets.set(label, []);
+      buckets.get(label).push(c);
+    }
+    const ordered = [];
+    for (const label of CONV_GROUP_ORDER) {
+      if (buckets.has(label)) ordered.push({ label, items: buckets.get(label) });
+    }
+    for (const [label, items] of buckets) {
+      if (!CONV_GROUP_ORDER.includes(label)) ordered.push({ label, items });
+    }
+    return ordered;
+  }
+
+  function renderConvItem(c, app) {
+    const active = c.id === app.currentConvId ? ' active' : '';
+    const generating = c.in_progress ? ' is-generating' : '';
+    const date = WebChatDateTime.formatDateTime(c.updated_at);
+    return `<li class="conv-item${active}${generating}" data-id="${c.id}" role="listitem">
+      <div class="conv-item-row">
+        <div class="conv-item-main">
+          <div class="conv-item-title" data-id="${c.id}" aria-label="${escapeAttr(c.title)}">
+            <span class="conv-item-title-text">${escapeHtml(listTitle(c.title))}</span>
+            <span class="conv-item-title-tooltip" role="tooltip" aria-hidden="true">
+              <span class="conv-item-title-tooltip-body">${escapeHtml(c.title)}</span>
+              <span class="conv-item-title-tooltip-hint">Двойной клик — переименовать</span>
+            </span>
+          </div>
+          <div class="conv-item-meta">${date}</div>
+        </div>
+        <button type="button" class="conv-item-menu" data-id="${c.id}" title="Действия" aria-label="Действия с беседой" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+        </button>
+        <button type="button" class="conv-item-delete" data-id="${c.id}" title="Удалить в корзину" aria-label="Удалить в корзину">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </li>`;
+  }
+
+  function closeConvItemMenu(app) {
+    app._convMenuTargetId = null;
+    app._convMenuAnchor = null;
+    app.$.convItemMenuPopover?.classList.add('hidden');
+    app.$.convList?.querySelectorAll('.conv-item-menu[aria-expanded="true"]').forEach((btn) => {
+      btn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function openConvItemMenu(app, convId, anchorBtn) {
+    const popover = app.$.convItemMenuPopover;
+    if (!popover || !anchorBtn) return;
+    if (app._convMenuTargetId === convId && !popover.classList.contains('hidden')) {
+      closeConvItemMenu(app);
+      return;
+    }
+    closeConvItemMenu(app);
+    app._convMenuTargetId = convId;
+    app._convMenuAnchor = anchorBtn;
+    anchorBtn.setAttribute('aria-expanded', 'true');
+    popover.classList.remove('hidden');
+    const rect = anchorBtn.getBoundingClientRect();
+    const sheet = app.$.convSidebarSheet?.getBoundingClientRect();
+    const top = rect.bottom + 4;
+    let left = rect.right - popover.offsetWidth;
+    if (sheet) {
+      left = Math.max(sheet.left + 8, Math.min(left, sheet.right - popover.offsetWidth - 8));
+    }
+    popover.style.top = `${top}px`;
+    popover.style.left = `${left}px`;
+  }
+
+  function onConvMenuAction(app, action) {
+    const id = app._convMenuTargetId;
+    if (!id) return;
+    closeConvItemMenu(app);
+    if (action === 'rename') {
+      const titleEl = app.$.convList?.querySelector(`.conv-item[data-id="${id}"] .conv-item-title`);
+      if (titleEl) void startInlineTitleEdit(app, id, titleEl);
+      return;
+    }
+    if (action === 'export') {
+      window.location.assign(`/api/conversations/${id}/export`);
+      if (window.WebChatToast) window.WebChatToast.show('Экспорт начат', 'info');
+      return;
+    }
+    if (action === 'delete') {
+      const btn = app.$.convList?.querySelector(`.conv-item-delete[data-id="${id}"]`);
+      if (btn) onDeleteBtnClick(app, id, btn);
+    }
+  }
+
   function renderList(app) {
     cancelPendingDelete(app);
+    closeConvItemMenu(app);
     const empty = !app.conversations.length;
     app.$.convEmpty.classList.toggle('hidden', !empty);
 
     const newChatRow = app.$.convList.querySelector('.conv-new-item');
-    const convItemsHtml = app.conversations
-      .map((c) => {
-        const active = c.id === app.currentConvId ? ' active' : '';
-        const generating = c.in_progress ? ' is-generating' : '';
-        const date = WebChatDateTime.formatDateTime(c.updated_at);
-        return `<li class="conv-item${active}${generating}" data-id="${c.id}" role="listitem">
-          <div class="conv-item-row">
-            <div class="conv-item-main">
-              <div class="conv-item-title" data-id="${c.id}" aria-label="${escapeAttr(c.title)}">
-                <span class="conv-item-title-text">${escapeHtml(listTitle(c.title))}</span>
-                <span class="conv-item-title-tooltip" role="tooltip" aria-hidden="true">
-                  <span class="conv-item-title-tooltip-body">${escapeHtml(c.title)}</span>
-                  <span class="conv-item-title-tooltip-hint">Двойной клик — переименовать</span>
-                </span>
-              </div>
-              <div class="conv-item-meta">${date}</div>
-            </div>
-            <button type="button" class="conv-item-delete" data-id="${c.id}" title="Удалить в корзину" aria-label="Удалить в корзину">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </button>
-          </div>
-        </li>`;
-      })
+    const groups = groupConversations(app.conversations);
+    const convItemsHtml = groups
+      .map((g) => `<li class="conv-group" role="presentation">
+        <div class="conv-group-label type-section">${escapeHtml(g.label)}</div>
+        <ul class="conv-group-list" role="group" aria-label="${escapeAttr(g.label)}">
+          ${g.items.map((c) => renderConvItem(c, app)).join('')}
+        </ul>
+      </li>`)
       .join('');
 
     app.$.convList.innerHTML = '';
@@ -285,7 +368,7 @@
 
     app.$.convList.querySelectorAll('.conv-item').forEach((el) => {
       el.addEventListener('click', (e) => {
-        if (e.target.closest('.conv-item-delete')) return;
+        if (e.target.closest('.conv-item-delete, .conv-item-menu')) return;
         if (app._inlineTitleConvId) return;
         if (e.target.closest('.conv-item-title') && (e.detail > 1 || app._convTitleEditGuard)) return;
         app.selectConversation(el.dataset.id);
@@ -297,6 +380,13 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         onDeleteBtnClick(app, btn.dataset.id, btn);
+      });
+    });
+
+    app.$.convList.querySelectorAll('.conv-item-menu').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openConvItemMenu(app, btn.dataset.id, btn);
       });
     });
 
@@ -721,12 +811,27 @@
       closeSearchPanel(app);
     };
     document.addEventListener('mousedown', app._convSearchOutsideClick);
+
+    app.$.convItemMenuPopover?.querySelectorAll('.conv-item-menu-action').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onConvMenuAction(app, btn.dataset.action);
+      });
+    });
+    app._convMenuOutsideClick = (e) => {
+      const t = e.target;
+      if (app.$.convItemMenuPopover?.contains(t)) return;
+      if (t.closest?.('.conv-item-menu')) return;
+      closeConvItemMenu(app);
+    };
+    document.addEventListener('mousedown', app._convMenuOutsideClick);
   }
 
   window.WebChatConversations = {
     load,
     loadTrash,
     renderList,
+    closeConvItemMenu,
     fingerprintFrom,
     syncFromServer,
     setSidebarTab,

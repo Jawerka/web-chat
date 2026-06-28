@@ -8,25 +8,9 @@
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/login.css">
-  <script>
-    (function () {
-      var stored = localStorage.getItem('webchat_theme');
-      var dark = stored === 'dark'
-        || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      if (dark) {
-        document.documentElement.classList.add('login-dark');
-        var meta = document.getElementById('meta-theme-color');
-        if (meta) meta.setAttribute('content', '#0f1419');
-      }
-    })();
-  </script>
+  <script src="/static/js/theme-boot.js" data-theme-mode="login" data-meta-theme-color-id="meta-theme-color"></script>
 </head>
 <body class="login-page">
-  <script>
-    if (document.documentElement.classList.contains('login-dark')) {
-      document.body.classList.add('dark-theme');
-    }
-  </script>
 
   <div class="login-shell">
     <button

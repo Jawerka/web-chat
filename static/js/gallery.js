@@ -43,8 +43,8 @@ class GalleryApp {
       lightboxPrev: $('#gallery-lightbox-prev'),
       lightboxNext: $('#gallery-lightbox-next'),
       lightboxClose: $('#gallery-lightbox-close'),
+      lightboxStage: $('#gallery-lightbox-stage'),
       lightboxCounter: $('#gallery-lightbox-counter'),
-      lightboxTitle: $('#gallery-lightbox-title'),
       lightboxSave: $('#gallery-lightbox-save'),
       lightboxFavorite: $('#gallery-lightbox-favorite'),
       lightboxAttach: $('#gallery-lightbox-attach'),
@@ -107,6 +107,9 @@ class GalleryApp {
     });
     this.els.lightbox?.addEventListener('click', (e) => {
       if (e.target === this.els.lightbox) this.closeLightbox();
+    });
+    this.els.lightboxStage?.addEventListener('click', (e) => {
+      if (e.target === this.els.lightboxStage) this.closeLightbox();
     });
     this.els.lightboxSave?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -381,7 +384,6 @@ class GalleryApp {
         const item = g.items[i];
         if (!item) return;
         if (g.els.lightboxImg) g.els.lightboxImg.alt = item.filename;
-        if (g.els.lightboxTitle) g.els.lightboxTitle.textContent = item.filename;
         g._syncFavoriteButton(item);
       },
     };
@@ -486,10 +488,8 @@ class GalleryApp {
       this.flashStatus('Не загружен gallery-common.js', true);
       return;
     }
-    const commentEl = document.getElementById('gallery-lightbox-comment');
     await window.GalleryCommon.attachImageToNewChat(item, {
       btn,
-      userComment: commentEl?.value?.trim() || '',
       onStatus: (text, isError) => this.flashStatus(text, Boolean(isError)),
     });
   }

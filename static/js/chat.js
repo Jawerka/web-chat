@@ -151,6 +151,7 @@ class ChatApp {
       preloadModelsBtn: document.getElementById('preload-models-btn'),
       documentRagPreview: document.getElementById('document-rag-preview'),
       macroInsertMenuBtn: document.getElementById('macro-insert-menu-btn'),
+      convItemMenuPopover: document.getElementById('conv-item-menu-popover'),
       settingsChatTitle: document.getElementById('settings-chat-title'),
       generateConversationTitleBtn: document.getElementById('generate-conversation-title-btn'),
       exportConversationBtn: document.getElementById('export-conversation-btn'),
@@ -1172,6 +1173,7 @@ class ChatApp {
   exportCurrentConversation() {
     if (!this.currentConvId) return;
     window.location.assign(`/api/conversations/${this.currentConvId}/export`);
+    if (window.WebChatToast) window.WebChatToast.show('Экспорт начат', 'info');
   }
 
   _updateExportButton() {
@@ -2710,6 +2712,10 @@ class ChatApp {
   }
 
   showUploadSuccess(message) {
+    if (window.WebChatToast) {
+      window.WebChatToast.show(message, 'success');
+      return;
+    }
     const el = this.$.uploadToast;
     if (!el) return;
     clearTimeout(this._uploadToastTimer);

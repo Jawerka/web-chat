@@ -195,8 +195,98 @@ function formatMarkdown(text) {
   return sanitizeHtml(formatted);
 }
 
+const CODE_COPY_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+const CODE_CHECK_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+
+function extractPreCode(pre) {
+  const codeEl = pre.querySelector('code');
+  if (codeEl) return (codeEl.textContent || '').trim();
+  const clone = pre.cloneNode(true);
+  clone.querySelectorAll('.code-copy-btn').forEach((el) => el.remove());
+  return (clone.textContent || '').trim();
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      ta.remove();
+    }
+  }
+}
+
+function flashCodeCopySuccess(btn) {
+  if (!btn) return;
+  clearTimeout(btn._copyFlashTimer);
+  const prev = {
+    html: btn.innerHTML,
+    title: btn.title,
+    label: btn.getAttribute('aria-label'),
+  };
+  btn.classList.add('is-copied');
+  btn.innerHTML = CODE_CHECK_ICON;
+  btn.title = 'Скопировано';
+  btn.setAttribute('aria-label', 'Скопировано');
+  btn._copyFlashTimer = setTimeout(() => {
+    btn.classList.remove('is-copied');
+    btn.innerHTML = prev.html;
+    btn.title = prev.title;
+    if (prev.label) btn.setAttribute('aria-label', prev.label);
+    else btn.removeAttribute('aria-label');
+    btn._copyFlashTimer = null;
+  }, 1600);
+}
+
+function enhanceCodeCopyButtons(root) {
+  if (!root) return;
+  root.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.code-copy-btn')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'code-copy-btn';
+    btn.title = 'Копировать код';
+    btn.setAttribute('aria-label', 'Копировать код');
+    btn.innerHTML = CODE_COPY_ICON;
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const code = extractPreCode(pre);
+      if (!code) {
+        if (window.WebChatToast) window.WebChatToast.show('Нет кода для копирования', 'error');
+        return;
+      }
+      const ok = await copyTextToClipboard(code);
+      if (ok) {
+        flashCodeCopySuccess(btn);
+      } else if (window.WebChatToast) {
+        window.WebChatToast.show('Не удалось скопировать код', 'error');
+      }
+    });
+    pre.classList.add('has-copy-btn');
+    pre.appendChild(btn);
+  });
+}
+
 window.isAllowedUri = isAllowedUri;
 window.sanitizeHtml = sanitizeHtml;
 window.sanitizeHtmlLegacy = sanitizeHtmlLegacy;
 window.formatMarkdown = formatMarkdown;
+window.enhanceCodeCopyButtons = enhanceCodeCopyButtons;
 window.parseTables = parseTables;

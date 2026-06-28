@@ -6,6 +6,10 @@
   'use strict';
 
   function loadTheme() {
+    if (window.WebChatThemeBoot) {
+      window.WebChatThemeBoot.applyTheme(window.WebChatThemeBoot.resolveDark());
+      return;
+    }
     const dark = localStorage.getItem('webchat_theme') === 'dark'
       || (!localStorage.getItem('webchat_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.body.classList.toggle('dark-theme', dark);
@@ -44,8 +48,12 @@
 
   function toggleTheme(app) {
     const dark = !document.body.classList.contains('dark-theme');
-    document.body.classList.toggle('dark-theme', dark);
     localStorage.setItem('webchat_theme', dark ? 'dark' : 'light');
+    if (window.WebChatThemeBoot) {
+      window.WebChatThemeBoot.applyTheme(dark);
+    } else {
+      document.body.classList.toggle('dark-theme', dark);
+    }
     updateThemeToggleLabel(app);
   }
 
