@@ -678,6 +678,14 @@ class AgentOrchestrator:
                     message_id=user_message.id,
                     conversation_id=conversation_id,
                 )
+            await conv_repo.update(conversation, clear_composer_draft=True)
+            purged = await att_repo.delete_pending_for_conversation(conversation_id)
+            if purged:
+                logger.info(
+                    "Удалено %d неотправленных pending-вложений беседы %s",
+                    purged,
+                    conversation_id,
+                )
 
             await emit("ack", {"user_message_id": str(user_message.id)})
 

@@ -15,6 +15,16 @@ class ConversationCreate(BaseModel):
     """Тело запроса на создание беседы."""
 
     title: str | None = Field(None, max_length=200)
+    text: str | None = Field(
+        None,
+        max_length=100_000,
+        description="Черновик composer (теги, prompt) без отправки агенту",
+    )
+    preset_slug: str | None = Field(
+        None,
+        max_length=64,
+        description="Slug пресета; альтернатива preset_id",
+    )
     preset_id: UUID | None = Field(
         None,
         description="Если не указан — используется пресет с is_default=true",
@@ -54,6 +64,23 @@ class ConversationOut(BaseModel):
         if dt is None:
             return None
         return datetime_to_utc_iso(dt)
+
+
+class ConversationDetailOut(ConversationOut):
+    """Беседа с серверным черновиком composer (GET по id)."""
+
+    message_count: int = 0
+    composer_text: str = ""
+    pending_attachments: list[AttachmentOut] = Field(default_factory=list)
+
+
+class ConversationCreatedOut(ConversationOut):
+    """Ответ POST /api/conversations — handoff для внешних клиентов."""
+
+    conversation_id: UUID
+    composer_text: str = ""
+    chat_url: str
+    attachments: list[AttachmentOut] = Field(default_factory=list)
 
 
 class PresetOut(BaseModel):
@@ -221,3 +248,31 @@ class TurnStartedOut(BaseModel):
 
     status: str = "started"
     conversation_id: UUID
+
+
+class ImageSourceIn(BaseModel):
+    """Источник изображения для POST /api/conversations/from-image (JSON)."""
+
+    asset_id: UUID | None = None
+    disk_filename: str | None = Field(None, max_length=255)
+    url: str | None = Field(None, max_length=2048)
+
+
+class ConversationFromImageCreate(BaseModel):
+    """JSON-тело POST /api/conversations/from-image."""
+
+    text: str | None = Field(None, max_length=100_000)
+    title: str | None = Field(None, max_length=200)
+    preset_slug: str | None = Field("img2img", max_length=64)
+    image: ImageSourceIn
+
+
+class ConversationFromImageOut(BaseModel):
+    """Ответ POST /api/conversations/from-image."""
+
+    conversation_id: UUID
+    title: str
+    preset_id: UUID
+    attachments: list[AttachmentOut]
+    composer_text: str
+    chat_url: str

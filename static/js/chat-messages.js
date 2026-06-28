@@ -830,17 +830,20 @@
   async function regenerateMessage(app, messageId) {
     const row = findRow(app, messageId);
     if (!row) return;
-    if (row.classList.contains('user')) {
-      await runRegenerate(app, messageId);
-    } else {
-      await runRegenerate(app, messageId, { fromAssistant: true });
+    let targetId = messageId;
+    if (row.classList.contains('assistant')) {
+      const userRow = previousUserMessageRow(app, row);
+      if (!userRow?.dataset?.messageId) {
+        app.showError?.('Нет сообщения пользователя для перегенерации');
+        return;
+      }
+      targetId = userRow.dataset.messageId;
     }
+    await runRegenerate(app, targetId);
   }
 
   /**
-   * Перегенерация ответа.
-   * user: удаляет только ответы после сообщения, user остаётся.
-   * assistant: удаляет этот ответ и всё после, затем ответ на предыдущий user.
+   * Перегенерация ответа на user-сообщение: user остаётся, ответы после него удаляются.
    */
 
   function previousUserMessageRow(app, row) {
@@ -870,7 +873,7 @@
     return payloadText || null;
   }
 
-  async function runRegenerate(app, messageId, { fromAssistant = false } = {}) {
+  async function runRegenerate(app, messageId) {
     if (app.streaming || !app.socket || app._preloadingModels) return;
     const row = findRow(app, messageId);
     if (!row) return;
@@ -884,16 +887,11 @@
       return;
     }
 
-    if (fromAssistant) {
-      removeFollowingRows(app, row, true);
-    } else {
-      removeFollowingRows(app, row, false);
-    }
+    removeFollowingRows(app, row, false);
 
-    const userRow = fromAssistant ? previousUserMessageRow(app, row) : row;
-    const llmTextOverride = llmTextForRegenerate(app, userRow);
+    const llmTextOverride = llmTextForRegenerate(app, row);
 
-    app.log?.info('msg', `Перегенерация ${fromAssistant ? 'assistant' : 'user'} ${messageId}`);
+    app.log?.info('msg', `Перегенерация user ${messageId}`);
     app._regenerating = true;
     app.startStreaming();
     try {

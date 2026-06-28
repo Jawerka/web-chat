@@ -243,7 +243,7 @@
   }
 
   function listTitle(title) {
-    return WebChatConvTitleFormat?.formatConvTitleForList(title) ?? title;
+    return window.WebChatConvTitleFormat?.formatConvTitleForList(title) ?? title;
   }
 
   function renderList(app) {

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from httpx import AsyncClient
 
+from app.config import settings
 from app.db.models import Attachment
 from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.db.models import Message, MessageRole
@@ -14,6 +17,10 @@ from app.services.message_builder import (
     append_img2img_init_hints,
     build_img2img_init_hint_text,
     collect_img2img_init_lines,
+)
+
+MINIMAL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
 
@@ -188,3 +195,58 @@ async def test_img2img_prefers_server_init_over_llm_url() -> None:
     call_args = executor._run_sd_image_tool.call_args
     assert call_args[0][1]["init_image_bytes"] == b"from-server"
     assert call_args[0][1]["init_source_name"] == "srv.png"
+
+
+@pytest.mark.asyncio
+async def test_load_init_image_upload_gallery_attachment(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """img2img init из gallery_kind=upload (encrypted) через attachment_id."""
+    from app.db import session as db_session
+    from app.db.repositories import AttachmentRepository, ConversationRepository, PresetRepository
+    from app.services.auth_service import ensure_bootstrap_admin
+    from app.services.gallery_owner import ensure_user_media_token
+    from app.services.media_asset_crypto import encrypt_upload_payload
+
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret", "test-auth-secret-key-32chars-minimum!!")
+
+    async with db_session.async_session_factory() as session:
+        user = await ensure_bootstrap_admin(session)
+        await ensure_user_media_token(user)
+        preset = await PresetRepository(session).get_default()
+        assert preset is not None
+        conv = await ConversationRepository(session).create(
+            title="[pytest] img2img upload init",
+            preset_id=preset.id,
+            owner_user_id=user.id,
+        )
+        asset = await encrypt_upload_payload(
+            session,
+            user,
+            data=MINIMAL_PNG,
+            thumb_data=None,
+            mime_type="image/png",
+            original_name="upload-ref.png",
+            sd=None,
+        )
+        att = await AttachmentRepository(session).create(
+            attachment_id=uuid.uuid4(),
+            original_name="upload-ref.png",
+            mime_type="image/png",
+            size_bytes=len(MINIMAL_PNG),
+            storage_path="",
+            conversation_id=conv.id,
+            media_asset_id=asset.id,
+        )
+        await session.commit()
+        conv_id = conv.id
+        att_id = att.id
+
+    async with db_session.async_session_factory() as session:
+        executor = ToolExecutor(session, conversation_id=conv_id)
+        data, name = await executor._load_init_image(attachment_id=att_id)
+
+    assert data == MINIMAL_PNG
+    assert name == "upload-ref.png"

@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.auth import router as auth_router
 from app.api.config_api import router as config_router
+from app.api.conversation_import import router as conversation_import_router
 from app.api.conversations import router as conversations_router
 from app.api.document_rag import router as document_rag_router
 from app.api.health import router as health_router
@@ -22,6 +23,7 @@ api_router.include_router(health_router)
 api_router.include_router(logs_router)
 api_router.include_router(config_router)
 api_router.include_router(conversations_router)
+api_router.include_router(conversation_import_router)
 api_router.include_router(document_rag_router)
 api_router.include_router(search_router)
 api_router.include_router(messages_router)

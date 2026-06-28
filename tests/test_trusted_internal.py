@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import uuid
 
 import pytest
@@ -16,6 +17,10 @@ from app.security.trusted_internal import (
     refresh_trusted_internal_from_settings,
     register_integration_urls,
     resolve_host_to_ips,
+)
+
+MINIMAL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
 
@@ -58,12 +63,89 @@ async def test_media_llm_allowed_for_trusted_loopback(
 
     async with db_session.async_session_factory() as session:
         service = MediaService(session)
-        asset = await service.create_from_bytes(b"\x89PNG\r\n\x1a\n", "image/png")
+        asset = await service.create_from_bytes(MINIMAL_PNG, "image/png")
         await session.commit()
         asset_id = asset.id
 
     resp = await client.get(f"/media/asset/{asset_id}/llm")
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_media_llm_upload_allowed_when_referenced_by_attachment(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import session as db_session
+    from app.db.repositories import AttachmentRepository
+    from app.services.auth_service import ensure_bootstrap_admin
+    from app.services.gallery_owner import ensure_user_media_token
+    from app.services.media_asset_crypto import encrypt_upload_payload
+
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret", "test-auth-secret-key-32chars-minimum!!")
+    monkeypatch.setattr(settings, "trusted_internal_allow_loopback", True)
+    refresh_trusted_internal_from_settings()
+
+    async with db_session.async_session_factory() as session:
+        user = await ensure_bootstrap_admin(session)
+        await ensure_user_media_token(user)
+        asset = await encrypt_upload_payload(
+            session,
+            user,
+            data=MINIMAL_PNG,
+            thumb_data=None,
+            mime_type="image/png",
+            original_name="upload.png",
+            sd=None,
+        )
+        await AttachmentRepository(session).create(
+            attachment_id=uuid.uuid4(),
+            original_name="upload.png",
+            mime_type="image/png",
+            size_bytes=len(MINIMAL_PNG),
+            storage_path="",
+            media_asset_id=asset.id,
+        )
+        await session.commit()
+        asset_id = asset.id
+
+    resp = await client.get(f"/media/asset/{asset_id}/llm")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_media_llm_upload_denied_for_trusted_without_attachment(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import session as db_session
+    from app.services.auth_service import ensure_bootstrap_admin
+    from app.services.gallery_owner import ensure_user_media_token
+    from app.services.media_asset_crypto import encrypt_upload_payload
+
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret", "test-auth-secret-key-32chars-minimum!!")
+    monkeypatch.setattr(settings, "trusted_internal_allow_loopback", True)
+    refresh_trusted_internal_from_settings()
+
+    async with db_session.async_session_factory() as session:
+        user = await ensure_bootstrap_admin(session)
+        await ensure_user_media_token(user)
+        asset = await encrypt_upload_payload(
+            session,
+            user,
+            data=MINIMAL_PNG,
+            thumb_data=None,
+            mime_type="image/png",
+            original_name="orphan.png",
+            sd=None,
+        )
+        await session.commit()
+        asset_id = asset.id
+
+    resp = await client.get(f"/media/asset/{asset_id}/llm")
+    assert resp.status_code == 403
 
 
 @pytest.mark.asyncio

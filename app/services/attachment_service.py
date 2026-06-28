@@ -12,15 +12,9 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Attachment
+from app.db.models import Attachment, MediaAsset
 from app.db.repositories import AttachmentRepository, ConversationRepository
 from app.integrations.document_extractor import extract_text_from_file, truncate_text
-from app.services.job_queue import JobCancelled, heavy_job_queue
-from app.integrations.upload_validation import (
-    UploadBytesValidationError,
-    validate_document_bytes,
-    validate_image_bytes,
-)
 from app.integrations.media_utils import (
     UPLOAD_ROOT,
     asset_llm_media_url,
@@ -29,6 +23,12 @@ from app.integrations.media_utils import (
     safe_filename,
     upload_media_url,
 )
+from app.integrations.upload_validation import (
+    UploadBytesValidationError,
+    validate_document_bytes,
+    validate_image_bytes,
+)
+from app.services.job_queue import JobCancelled, heavy_job_queue
 from app.services.media_service import MediaService
 
 ALLOWED_MIMES = frozenset(
@@ -178,6 +178,92 @@ class AttachmentService:
             storage_path=storage_path,
             conversation_id=conversation_id,
             media_asset_id=media_asset_id,
+        )
+
+    async def register_image_bytes(
+        self,
+        content: bytes,
+        *,
+        mime: str,
+        original_name: str,
+        conversation_id: uuid.UUID | None = None,
+    ) -> Attachment:
+        """Сохранить изображение из байтов (без UploadFile)."""
+        if conversation_id is not None:
+            conversation = await self._conv_repo.get_by_id(conversation_id)
+            if conversation is None:
+                raise UploadValidationError(
+                    "Беседа не найдена",
+                    status_code=404,
+                )
+
+        safe_name = safe_filename(original_name) or "image.png"
+        mime_norm = self.normalize_mime(safe_name, mime)
+        self.validate_mime(mime_norm)
+
+        size = len(content)
+        if size > self.max_bytes():
+            raise UploadValidationError(
+                f"Файл превышает лимит {settings.max_upload_mb} МБ",
+                status_code=413,
+            )
+        if size == 0:
+            raise UploadValidationError("Пустой файл", status_code=400)
+
+        try:
+            validate_image_bytes(content, mime_norm)
+        except UploadBytesValidationError as exc:
+            raise UploadValidationError(exc.message, status_code=415) from exc
+
+        asset = await MediaService(self._session).create_from_bytes(
+            content,
+            mime_norm,
+            conversation_id=conversation_id,
+            original_name=original_name,
+        )
+        return await self._repo.create(
+            attachment_id=uuid.uuid4(),
+            original_name=original_name,
+            mime_type=mime_norm,
+            size_bytes=size,
+            storage_path="",
+            conversation_id=conversation_id,
+            media_asset_id=asset.id,
+        )
+
+    async def create_from_media_asset(
+        self,
+        *,
+        asset: MediaAsset,
+        conversation_id: uuid.UUID,
+        original_name: str | None = None,
+    ) -> Attachment:
+        """
+        Создать вложение-ссылку на существующий MediaAsset (без копирования BLOB).
+        """
+        if conversation_id is not None:
+            conversation = await self._conv_repo.get_by_id(conversation_id)
+            if conversation is None:
+                raise UploadValidationError(
+                    "Беседа не найдена",
+                    status_code=404,
+                )
+
+        if not is_image_mime(asset.mime_type):
+            raise UploadValidationError(
+                "MediaAsset не является изображением",
+                status_code=415,
+            )
+
+        name = (original_name or asset.original_name or "image").strip() or "image"
+        return await self._repo.create(
+            attachment_id=uuid.uuid4(),
+            original_name=name,
+            mime_type=asset.mime_type,
+            size_bytes=len(asset.data),
+            storage_path="",
+            conversation_id=conversation_id,
+            media_asset_id=asset.id,
         )
 
     @staticmethod

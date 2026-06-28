@@ -343,7 +343,7 @@ sudo systemctl status web-chat
 - После SD ingest в БД всегда **`gallery_kind=generation`** (даже если есть `conversation_id` в чате).
 - Сетка превью, клик — lightbox.
 - **Скачать**, **избранное**, **В галерею загрузок** (копия без перехода со страницы).
-- **В чат** — новая беседа с вложением (`sessionStorage` `webchat_pending_attachments`).
+- **В чат** — новая беседа с вложением через `POST /api/conversations/from-image` (см. [docs/API-FROM-IMAGE.md](docs/API-FROM-IMAGE.md)).
 
 ### Галерея загрузок (`/gallery/uploads`)
 
@@ -353,7 +353,7 @@ sudo systemctl status web-chat
 - Клик по карточке — лайтбокс с панелями SD prompt / negative / params (`uploads-ref-lightbox`).
 - Drag-and-drop и кнопка «Загрузить»; хранение без срока.
 - Имена файлов с SD Seed: `MM-DD HH-MM [md5×5] - Seed.ext` (как в `refs/main.py`), в `original_name` и при скачивании.
-- **В чат** — новая беседа с вложением (как в галерее генераций).
+- **В чат** — новая беседа с вложением (см. [docs/API-FROM-IMAGE.md](docs/API-FROM-IMAGE.md)).
 - Deep link: `#upload-{uuid}`.
 
 API: `GET/POST /api/gallery/uploads`, `POST /api/gallery/{id}/promote-to-uploads`.
@@ -458,7 +458,8 @@ REST: `/api/prompt-macros`, `GET /api/prompt-macros/search?q=`, `POST /api/promp
 | POST | `/auth/login`, `/auth/logout` | Сессия (при `AUTH_ENABLED`) |
 | GET | `/auth/me` | Текущий пользователь |
 | GET/POST | `/users` | Список / создание (admin) |
-| GET/POST | `/conversations` | Список / создание |
+| POST | `/conversations/from-image` | Новая беседа + изображение + текст composer ([документация](docs/API-FROM-IMAGE.md)) |
+| GET/POST | `/conversations` | Список / создание (POST: `text`, `chat_url`, handoff) |
 | GET | `/conversations/trash` | Беседы в корзине |
 | DELETE | `/conversations/trash` | Очистить корзину |
 | POST | `/conversations/{id}/restore` | Восстановить из корзины |

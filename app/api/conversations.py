@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import (
     ConversationCreate,
+    ConversationCreatedOut,
+    ConversationDetailOut,
     ConversationOut,
     ConversationUpdate,
     GenerateTitleCreate,
@@ -19,14 +21,18 @@ from app.api.schemas import (
     TurnStartedOut,
 )
 from app.api.ws_manager import manager
-from app.integrations.runtime_config import IntegrationOverrides, parse_optional_url
-from app.services.prompt_macro_service import parse_macro_context_mode
-from app.services.generation_state import get_generation_state
 from app.constants import DEFAULT_CONVERSATION_TITLE
 from app.db.repositories import ConversationRepository, PresetRepository
 from app.db.session import get_db
+from app.integrations.runtime_config import IntegrationOverrides, parse_optional_url
 from app.services.conversation_access import get_accessible_conversation
+from app.services.conversation_draft_service import (
+    build_conversation_detail_out,
+    chat_url_for_conversation,
+)
 from app.services.conversation_export_service import build_conversation_markdown
+from app.services.generation_state import get_generation_state
+from app.services.prompt_macro_service import parse_macro_context_mode
 from app.services.request_user import RequestUser, get_request_user, owner_user_id_for_request
 from app.services.user_quotas import ensure_can_create_conversation
 
@@ -52,16 +58,23 @@ async def list_conversations(
     return result
 
 
-@router.post("", response_model=ConversationOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ConversationCreatedOut, status_code=status.HTTP_201_CREATED)
 async def create_conversation(
     body: ConversationCreate,
     db: AsyncSession = Depends(get_db),
     user: RequestUser | None = Depends(get_request_user),
-) -> ConversationOut:
+) -> ConversationCreatedOut:
     """Создать беседу; preset_id опционален — берётся default."""
     preset_repo = PresetRepository(db)
     if body.preset_id is not None:
         preset = await preset_repo.get_by_id(body.preset_id)
+        if preset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Пресет не найден",
+            )
+    elif body.preset_slug and body.preset_slug.strip():
+        preset = await preset_repo.get_by_slug(body.preset_slug.strip())
         if preset is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -76,15 +89,24 @@ async def create_conversation(
             )
 
     title = body.title.strip() if body.title and body.title.strip() else DEFAULT_CONVERSATION_TITLE
+    composer_text = (body.text or "").strip()
     await ensure_can_create_conversation(db, user)
     conv_repo = ConversationRepository(db)
     conversation = await conv_repo.create(
         title=title,
         preset_id=preset.id,
         owner_user_id=owner_user_id_for_request(user),
+        composer_draft_text=composer_text or None,
     )
     await db.commit()
-    return ConversationOut.model_validate(conversation)
+    base = ConversationOut.model_validate(conversation)
+    return ConversationCreatedOut(
+        **base.model_dump(),
+        conversation_id=conversation.id,
+        composer_text=composer_text,
+        chat_url=chat_url_for_conversation(conversation.id),
+        attachments=[],
+    )
 
 
 @router.get("/trash", response_model=list[ConversationOut])
@@ -264,20 +286,25 @@ async def start_conversation_turn(
     return TurnStartedOut(conversation_id=conversation_id)
 
 
-@router.get("/{conversation_id}", response_model=ConversationOut)
+@router.get("/{conversation_id}", response_model=ConversationDetailOut)
 async def get_conversation(
     conversation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     user: RequestUser | None = Depends(get_request_user),
-) -> ConversationOut:
-    """Одна беседа по id."""
+) -> ConversationDetailOut:
+    """Одна беседа по id (с серверным черновиком composer)."""
     conversation = await get_accessible_conversation(db, conversation_id, user)
     if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Беседа не найдена",
         )
-    return ConversationOut.model_validate(conversation)
+    busy = manager.busy_conversation_ids()
+    return await build_conversation_detail_out(
+        db,
+        conversation,
+        in_progress=conversation.id in busy,
+    )
 
 
 @router.patch("/{conversation_id}", response_model=ConversationOut)

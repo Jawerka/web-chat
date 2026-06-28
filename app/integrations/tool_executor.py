@@ -224,7 +224,10 @@ class ToolExecutor:
                     raise ValueError("img2img поддерживает только изображения")
                 if att.media_asset_id is not None:
                     media = MediaService(session)
-                    result = await media.get_bytes(att.media_asset_id)
+                    result = await media.get_bytes(
+                        att.media_asset_id,
+                        trusted_internal=True,
+                    )
                     if result is None:
                         raise ValueError(
                             f"Изображение вложения {attachment_id} не найдено в БД",
@@ -245,7 +248,7 @@ class ToolExecutor:
                 asset = await media.get_asset(asset_id)
                 if asset is not None:
                     self._assert_media_asset_scope(asset)
-                result = await media.get_bytes(asset_id)
+                result = await media.get_bytes(asset_id, trusted_internal=True)
                 if result is not None:
                     data, _mime = result
                     return data, f"{asset_id}.png"

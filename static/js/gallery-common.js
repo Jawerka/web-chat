@@ -27,62 +27,82 @@
   }
 
   /**
-   * @param {{ url: string, filename?: string, sd_prompt?: string, sd_negative?: string, sd_params?: string }} item
-   * @param {{ btn?: HTMLButtonElement, onStatus?: (text: string, isError?: boolean) => void }} [options]
+   * Собрать сопровождающий текст: комментарий пользователя + SD metadata.
+   * @param {{ sd_prompt?: string, sd_negative?: string, sd_params?: string }} item
+   * @param {string} [userComment]
+   * @returns {string}
+   */
+  function buildComposerText(item, userComment = '') {
+    const comment = (userComment || '').trim();
+    const metadata = formatUploadMetadataForComposer(item);
+    if (comment && metadata) return `${comment}\n${metadata}`;
+    return comment || metadata;
+  }
+
+  /**
+   * @param {{ source?: string, id?: string, filename?: string }} item
+   * @returns {{ asset_id?: string, disk_filename?: string }}
+   */
+  function resolveImageSource(item) {
+    if (!item) throw new Error('Нет изображения');
+    if (item.source === 'disk' && item.filename) {
+      return { disk_filename: item.filename };
+    }
+    if (item.id) {
+      return { asset_id: item.id };
+    }
+    throw new Error('Неизвестный источник изображения');
+  }
+
+  /**
+   * @param {{ source?: string, id?: string, filename?: string, url?: string, sd_prompt?: string, sd_negative?: string, sd_params?: string }} item
+   * @param {{ btn?: HTMLButtonElement, onStatus?: (text: string, isError?: boolean) => void, userComment?: string }} [options]
    */
   async function attachImageToNewChat(item, options = {}) {
-    const { btn, onStatus } = options;
-    if (!item?.url) return;
+    const { btn, onStatus, userComment = '' } = options;
+    if (!item?.id && !(item?.source === 'disk' && item?.filename)) return;
     const prevDisabled = btn?.disabled;
     if (btn) btn.disabled = true;
     onStatus?.('Создаём чат…', false);
     try {
-      const presetsRes = await fetch('/api/presets');
-      if (!presetsRes.ok) throw new Error('Не удалось загрузить пресеты');
-      const presets = await presetsRes.json();
-      const img2imgPreset = presets.find((p) => p.slug === IMG2IMG_PRESET_SLUG);
+      const composerText = buildComposerText(item, userComment);
+      const body = {
+        text: composerText,
+        title: DEFAULT_CONV_TITLE,
+        preset_slug: IMG2IMG_PRESET_SLUG,
+        image: resolveImageSource(item),
+      };
 
-      const convBody = { title: DEFAULT_CONV_TITLE };
-      if (img2imgPreset?.id) convBody.preset_id = img2imgPreset.id;
-
-      const convRes = await fetch('/api/conversations', {
+      const res = await fetch('/api/conversations/from-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(convBody),
+        body: JSON.stringify(body),
       });
-      if (!convRes.ok) {
-        const errBody = await convRes.json().catch(() => ({}));
-        throw new Error(errBody.detail || convRes.statusText);
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        const detail = errBody.detail;
+        throw new Error(
+          typeof detail === 'string' ? detail : res.statusText || 'Ошибка создания чата',
+        );
       }
-      const conv = await convRes.json();
+      const data = await res.json();
 
-      const imgRes = await fetch(item.url);
-      if (!imgRes.ok) throw new Error('Не удалось загрузить изображение');
-      const blob = await imgRes.blob();
-      const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
-      const file = new File([blob], item.filename || 'image.png', { type: mime });
-
-      const fd = new FormData();
-      fd.append('files', file);
-      fd.append('conversation_id', conv.id);
-
-      const upRes = await fetch('/api/upload', { method: 'POST', body: fd });
-      if (!upRes.ok) {
-        const errBody = await upRes.json().catch(() => ({}));
-        throw new Error(errBody.detail || 'Ошибка загрузки вложения');
+      if (window.WebChatComposer?.primeComposerDraft) {
+        window.WebChatComposer.primeComposerDraft(data.conversation_id, {
+          text: data.composer_text ?? composerText,
+          attachments: data.attachments || [],
+        });
+      } else {
+        const pending = {
+          conversation_id: data.conversation_id,
+          attachments: data.attachments || [],
+        };
+        if (composerText) pending.composer_text = composerText;
+        sessionStorage.setItem(PENDING_ATTACHMENTS_KEY, JSON.stringify(pending));
       }
-      const uploadData = await upRes.json();
 
-      const composerText = formatUploadMetadataForComposer(item);
-      const pending = {
-        conversation_id: conv.id,
-        attachments: uploadData.attachments || [],
-      };
-      if (composerText) pending.composer_text = composerText;
-
-      sessionStorage.setItem(PENDING_ATTACHMENTS_KEY, JSON.stringify(pending));
-      localStorage.setItem('webchat_conv_id', conv.id);
-      window.location.href = '/';
+      localStorage.setItem('webchat_conv_id', data.conversation_id);
+      window.location.href = data.chat_url || `/?conv=${data.conversation_id}`;
     } catch (err) {
       onStatus?.(err.message || 'Ошибка', true);
       if (btn) btn.disabled = prevDisabled ?? false;
@@ -94,6 +114,8 @@
     DEFAULT_CONV_TITLE,
     IMG2IMG_PRESET_SLUG,
     formatUploadMetadataForComposer,
+    buildComposerText,
+    resolveImageSource,
     attachImageToNewChat,
   };
 

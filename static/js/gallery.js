@@ -486,8 +486,10 @@ class GalleryApp {
       this.flashStatus('Не загружен gallery-common.js', true);
       return;
     }
+    const commentEl = document.getElementById('gallery-lightbox-comment');
     await window.GalleryCommon.attachImageToNewChat(item, {
       btn,
+      userComment: commentEl?.value?.trim() || '',
       onStatus: (text, isError) => this.flashStatus(text, Boolean(isError)),
     });
   }

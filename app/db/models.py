@@ -172,6 +172,11 @@ class Conversation(Base):
         nullable=True,
         index=True,
     )
+    composer_draft_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Черновик composer (внешняя галерея / from-image), очищается после send",
+    )
 
     preset: Mapped[Preset] = relationship(back_populates="conversations")
     owner: Mapped[User | None] = relationship(back_populates="conversations")

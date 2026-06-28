@@ -148,6 +148,16 @@ class PresetRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_slug(self, slug: str) -> Preset | None:
+        """Пресет по slug или None."""
+        normalized = slug.strip().lower()
+        if not normalized:
+            return None
+        result = await self._session.execute(
+            select(Preset).where(Preset.slug == normalized).limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def set_default(self, preset_id: uuid.UUID) -> Preset | None:
         """
         Сделать пресет default для новых бесед.
@@ -274,6 +284,7 @@ class ConversationRepository:
         title: str,
         preset_id: uuid.UUID,
         owner_user_id: uuid.UUID | None = None,
+        composer_draft_text: str | None = None,
     ) -> Conversation:
         """Создать беседу."""
         now = datetime.now(UTC)
@@ -281,6 +292,7 @@ class ConversationRepository:
             title=title,
             preset_id=preset_id,
             owner_user_id=owner_user_id,
+            composer_draft_text=composer_draft_text,
             created_at=now,
             updated_at=now,
         )
@@ -317,12 +329,18 @@ class ConversationRepository:
         *,
         title: str | None = None,
         preset_id: uuid.UUID | None = None,
+        composer_draft_text: str | None = None,
+        clear_composer_draft: bool = False,
     ) -> Conversation:
         """Обновить поля беседы."""
         if title is not None:
             conversation.title = title
         if preset_id is not None:
             conversation.preset_id = preset_id
+        if clear_composer_draft:
+            conversation.composer_draft_text = None
+        elif composer_draft_text is not None:
+            conversation.composer_draft_text = composer_draft_text
         conversation.updated_at = datetime.now(UTC)
         await self._session.flush()
         await self._session.refresh(conversation)
@@ -430,6 +448,16 @@ class MediaAssetRepository:
     async def exists(self, asset_id: uuid.UUID) -> bool:
         """Строка есть в БД без чтения BLOB (P4.6)."""
         stmt = select(MediaAsset.id).where(MediaAsset.id == asset_id).limit(1)
+        row = await self._session.execute(stmt)
+        return row.scalar_one_or_none() is not None
+
+    async def is_referenced_by_attachment(self, asset_id: uuid.UUID) -> bool:
+        """Ассет используется вложением чата (LLM vision / WD14)."""
+        stmt = (
+            select(Attachment.id)
+            .where(Attachment.media_asset_id == asset_id)
+            .limit(1)
+        )
         row = await self._session.execute(stmt)
         return row.scalar_one_or_none() is not None
 
@@ -784,6 +812,41 @@ class AttachmentRepository:
         )
         return list(result.scalars().all())
 
+    async def list_pending_for_conversation(
+        self,
+        conversation_id: uuid.UUID,
+    ) -> list[Attachment]:
+        """Вложения беседы без message_id (черновик composer)."""
+        result = await self._session.execute(
+            select(Attachment).where(
+                Attachment.conversation_id == conversation_id,
+                Attachment.message_id.is_(None),
+            ),
+        )
+        return list(result.scalars().all())
+
+    async def delete_pending_for_conversation(
+        self,
+        conversation_id: uuid.UUID,
+    ) -> int:
+        """Удалить pending-вложения беседы (message_id IS NULL)."""
+        import shutil
+
+        from app.integrations import media_utils
+
+        pending = await self.list_pending_for_conversation(conversation_id)
+        removed = 0
+        for att in pending:
+            if att.storage_path and not att.media_asset_id:
+                upload_dir = media_utils.UPLOAD_ROOT / str(att.id)
+                if upload_dir.is_dir():
+                    shutil.rmtree(upload_dir, ignore_errors=True)
+            await self._session.delete(att)
+            removed += 1
+        if removed:
+            await self._session.flush()
+        return removed
+
     async def count_uploads_for_owner(
         self,
         owner_user_id: uuid.UUID,
@@ -949,6 +1012,15 @@ class MessageRepository:
             .order_by(Message.created_at.asc())
         )
         return list(result.scalars().all())
+
+    async def count_for_conversation(self, conversation_id: uuid.UUID) -> int:
+        """Число сообщений в беседе."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.conversation_id == conversation_id),
+        )
+        return int(result.scalar() or 0)
 
     async def search_in_content(
         self,

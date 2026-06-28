@@ -29,6 +29,32 @@
     }
   }
 
+  function primeComposerDraft(convId, { text = '', attachments = [] } = {}) {
+    if (!convId) return;
+    const list = Array.isArray(attachments)
+      ? attachments
+          .filter((a) => a?.id)
+          .map((a) => ({
+            id: a.id,
+            original_name: a.original_name,
+            mime_type: a.mime_type,
+            size_bytes: a.size_bytes,
+            preview_url: a.preview_url,
+          }))
+      : [];
+    const drafts = readComposerDrafts();
+    drafts[convId] = {
+      text: typeof text === 'string' ? text : '',
+      attachments: list,
+      updatedAt: Date.now(),
+    };
+    try {
+      localStorage.setItem(COMPOSER_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+    } catch {
+      // ignore quota errors
+    }
+  }
+
   function hasPayload(app, text) {
     const trimmed = (text ?? app.$.userInput?.value ?? '').trim();
     return Boolean(trimmed || app.pendingAttachments.length);
@@ -113,6 +139,38 @@
       app.$.userInput.value = '';
       autoResizeInput(app);
     }
+  }
+
+  function applyDraftToUi(app, { text = '', attachments = [] } = {}) {
+    if (typeof text === 'string' && app.$.userInput) {
+      app.$.userInput.value = text;
+      autoResizeInput(app);
+    }
+    const list = Array.isArray(attachments) ? attachments : [];
+    for (const att of list) {
+      if (!att?.id) continue;
+      if (app.pendingAttachments.some((a) => a.id === att.id)) continue;
+      app.pendingAttachments.push(att);
+      renderAttachmentChip(app, att);
+    }
+    if (app.pendingAttachments.length) {
+      app.$.attachmentStrip.classList.remove('hidden');
+    }
+    if (app.pendingAttachments.length || (app.$.userInput?.value || '').trim()) {
+      app.$.userInput?.focus();
+    }
+  }
+
+  function restoreServerDraft(app, conv) {
+    if (!conv?.id) return false;
+    if ((conv.message_count ?? 0) > 0) return false;
+    const text = conv.composer_text ?? '';
+    const attachments = conv.pending_attachments ?? [];
+    if (!text && !attachments.length) return false;
+    primeComposerDraft(conv.id, { text, attachments });
+    applyDraftToUi(app, { text, attachments });
+    saveDraft(app, conv.id);
+    return true;
   }
 
   function restoreDraft(app, convId) {
@@ -544,7 +602,10 @@
     uploadFiles,
     renderAttachmentChip,
     clearAttachments,
+    primeComposerDraft,
     restorePendingFromSession,
+    restoreServerDraft,
+    applyDraftToUi,
     initScrollPadObserver,
     disconnectComposer,
     syncScrollPad,

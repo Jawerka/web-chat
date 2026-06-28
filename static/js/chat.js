@@ -300,9 +300,16 @@ class ChatApp {
       }, затем удаляются навсегда`;
     }
     this.promptMacros.bindInputAutocomplete(this.$.userInput);
-    const saved = localStorage.getItem('webchat_conv_id');
-    if (saved && this.conversations.some((c) => c.id === saved)) {
-      await this.selectConversation(saved);
+    const urlConv = new URLSearchParams(window.location.search).get('conv');
+    const savedConv = urlConv || localStorage.getItem('webchat_conv_id');
+    if (savedConv && this.conversations.some((c) => c.id === savedConv)) {
+      await this.selectConversation(savedConv);
+      if (urlConv) {
+        const clean = new URL(window.location.href);
+        clean.searchParams.delete('conv');
+        const nextUrl = clean.pathname + (clean.search || '') + (clean.hash || '');
+        window.history.replaceState({}, '', nextUrl);
+      }
     }
     this._startGlobalSync();
   }
@@ -1337,8 +1344,11 @@ class ChatApp {
         }
 
         await this._resumeOngoingGeneration(generationStatus || {});
-        WebChatComposer.restoreDraft(this, id);
-        WebChatComposer.restorePendingFromSession(this);
+        const serverRestored = WebChatComposer.restoreServerDraft(this, this.currentConv);
+        if (!serverRestored) {
+          WebChatComposer.restoreDraft(this, id);
+          WebChatComposer.restorePendingFromSession(this);
+        }
         this.renderConvList();
       } catch (err) {
         this.showError(err.message || 'Не удалось загрузить беседу');
@@ -1357,7 +1367,13 @@ class ChatApp {
         this.$.chatHistory.classList.add('hidden');
         this.$.chatComposer.classList.add('hidden');
       }
-      this.showError(err.message || 'Не удалось открыть беседу');
+      const authHint = (err?.message || '').includes('Требуется вход');
+      this.showError(
+        authHint
+          ? 'Войдите в web-chat под тем же пользователем, что использует галерея (например, admin).'
+          : (err.message || 'Не удалось открыть беседу'),
+        authHint ? 10000 : 8000,
+      );
       this.log?.error('chat', err.message || 'selectConversation failed');
     } finally {
       this._endConvSwitchOverlay();

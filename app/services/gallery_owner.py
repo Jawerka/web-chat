@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import GalleryKind, MediaAsset, User
-from app.db.repositories import UserRepository
+from app.db.repositories import MediaAssetRepository, UserRepository
 from app.security.media_encryption import generate_media_token
 from app.services.request_user import RequestUser
 
@@ -87,7 +87,8 @@ async def assert_gallery_media_access(
     Запрет чтения BLOB чужого пользователя (403).
 
     Legacy без owner_user_id и однопользовательский режим — без проверки.
-    Доверенный IP (LLM vision): chat/generation, не upload.
+    Доверенный IP (LLM vision) и in-process tools (img2img, WD14):
+    chat/generation; upload — только если есть вложение.
     """
     if asset.owner_user_id is None:
         return
@@ -95,7 +96,9 @@ async def assert_gallery_media_access(
         return
     if trusted_internal and request_user is None:
         if asset.gallery_kind == GalleryKind.UPLOAD.value:
-            raise PermissionError("forbidden")
+            repo = MediaAssetRepository(session)
+            if not await repo.is_referenced_by_attachment(asset.id):
+                raise PermissionError("forbidden")
         return
     if request_user is None and asset.gallery_kind in (
         GalleryKind.CHAT.value,
