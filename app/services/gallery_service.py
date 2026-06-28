@@ -57,6 +57,7 @@ class GalleryItem:
     source: str = "disk"  # "db" | "disk"
     is_favorite: bool = False
     favorite_at: float | None = None
+    has_metadata: bool = False
 
     def to_api_dict(self) -> dict:
         return {
@@ -69,6 +70,7 @@ class GalleryItem:
             "source": self.source,
             "is_favorite": self.is_favorite,
             "favorite_at": self.favorite_at,
+            "has_metadata": self.has_metadata,
         }
 
 
@@ -85,6 +87,7 @@ def _item_from_gallery_meta(meta: GalleryAssetMeta) -> GalleryItem:
         size_kb=round(meta.size_bytes / 1024, 1),
         mtime=meta.created_at.timestamp(),
         source="db",
+        has_metadata=meta.has_metadata,
     )
 
 
@@ -117,6 +120,7 @@ def _list_local_generated_images(limit: int) -> list[GalleryItem]:
                 size_kb=round(stat.st_size / 1024, 1),
                 mtime=stat.st_mtime,
                 source="disk",
+                has_metadata=path.suffix.lower() == ".png",
             )
         )
     return items

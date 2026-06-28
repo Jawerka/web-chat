@@ -30,6 +30,7 @@ class GalleryUploadsApp {
     this.lightbox = new UploadsRefLightbox();
     this.lightbox.onExtract = (item) => void this.extractMetadata(item);
     this.lightbox.onAttach = (item, btn) => void this.attachToNewChat(item, btn);
+    this.lightbox.onOpenSd = (item, btn) => void this.openInSdWebui(item, btn);
     this.els = {
       grid: $('#uploads-grid'),
       empty: $('#uploads-empty'),
@@ -448,6 +449,23 @@ class GalleryUploadsApp {
       this.flashStatus('Сохранено');
     } catch (err) {
       this.flashStatus(err.message, true);
+    }
+  }
+
+  async openInSdWebui(item, btn) {
+    if (!item || typeof GallerySdBridge === 'undefined') return;
+    const prevDisabled = btn?.disabled;
+    if (btn) btn.disabled = true;
+    try {
+      await GallerySdBridge.openGalleryItemInSd({ ...item, source: 'db' });
+    } catch (err) {
+      this.flashStatus(err.message || 'Не удалось открыть SD WebUI', true);
+    } finally {
+      if (btn && !prevDisabled) {
+        GallerySdBridge.syncSdOpenButton(btn, item);
+      } else if (btn) {
+        btn.disabled = prevDisabled ?? false;
+      }
     }
   }
 

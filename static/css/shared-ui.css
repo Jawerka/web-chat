@@ -354,16 +354,20 @@ a.btn {
   right: calc(max(16px, env(safe-area-inset-right)) + 52px);
 }
 
-.lightbox-favorite {
+.lightbox-open-sd {
   right: calc(max(16px, env(safe-area-inset-right)) + 104px);
 }
 
-.lightbox-promote {
+.lightbox-favorite {
   right: calc(max(16px, env(safe-area-inset-right)) + 156px);
 }
 
-.lightbox-delete {
+.lightbox-promote {
   right: calc(max(16px, env(safe-area-inset-right)) + 208px);
+}
+
+.lightbox-delete {
+  right: calc(max(16px, env(safe-area-inset-right)) + 260px);
 }
 
 .lightbox-action.danger:hover {

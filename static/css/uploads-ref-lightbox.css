@@ -77,6 +77,10 @@ html:not(.gallery-dark) .uploads-ref-lightbox {
   z-index: 3;
 }
 
+.uploads-ref-image-pane .lightbox-open-sd {
+  right: calc(max(16px, env(safe-area-inset-right)) + 52px);
+}
+
 /* ── Info panel ── */
 .uploads-ref-info {
   flex: 0 0 42%;

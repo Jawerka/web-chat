@@ -35,6 +35,11 @@ def _is_public_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES)
 
 
+def _is_sd_bridge_token_fetch(request: Request) -> bool:
+    """SD extension on .52: одноразовый token вместо cookie."""
+    return request.method == "GET" and request.url.path.startswith("/api/sd-bridge/import/")
+
+
 class SessionAuthMiddleware(BaseHTTPMiddleware):
     """Требовать сессию для HTML и REST (кроме публичных путей)."""
 
@@ -44,6 +49,9 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
         if _is_public_path(path):
+            return await call_next(request)
+
+        if _is_sd_bridge_token_fetch(request):
             return await call_next(request)
 
         if is_trusted_internal_request(request):

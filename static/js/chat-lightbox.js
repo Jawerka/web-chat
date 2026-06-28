@@ -82,6 +82,32 @@
       const url = currentUrl(app);
       if (url) void app._syncFavoriteVisualByUrl(url, app.$.lightboxFavorite);
     }
+    if (typeof GallerySdBridge !== 'undefined' && app.$.lightboxOpenSd) {
+      const item = GallerySdBridge.itemFromMediaUrl(currentUrl(app));
+      GallerySdBridge.syncSdOpenButton(app.$.lightboxOpenSd, item);
+    }
+  }
+
+  async function openInSdWebui(app) {
+    const url = currentUrl(app);
+    if (!url || typeof GallerySdBridge === 'undefined') return;
+    const btn = app.$.lightboxOpenSd;
+    const item = GallerySdBridge.itemFromMediaUrl(url);
+    const prevDisabled = btn?.disabled;
+    if (btn) btn.disabled = true;
+    try {
+      await GallerySdBridge.openGalleryItemInSd(item);
+    } catch (err) {
+      if (typeof app.showError === 'function') {
+        app.showError(err.message || 'Не удалось открыть SD WebUI');
+      }
+    } finally {
+      if (btn && !prevDisabled) {
+        GallerySdBridge.syncSdOpenButton(btn, item);
+      } else if (btn) {
+        btn.disabled = prevDisabled ?? false;
+      }
+    }
   }
 
   function showAt(app, index) {
@@ -164,6 +190,10 @@
       e.stopPropagation();
       const url = currentUrl(app);
       if (url) void app._promoteToUploadsByUrl(url, app.$.lightboxPromote);
+    });
+    app.$.lightboxOpenSd?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void openInSdWebui(app);
     });
     app.$.lightboxAttachCurrent?.addEventListener('click', (e) => {
       e.stopPropagation();

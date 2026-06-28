@@ -773,12 +773,20 @@
     right: calc(max(6px, env(safe-area-inset-right)) + 46px);
   }
 
-  .lightbox-favorite {
+  .lightbox-open-sd {
     right: calc(max(6px, env(safe-area-inset-right)) + 92px);
   }
 
-  .lightbox-promote {
+  .lightbox-favorite {
     right: calc(max(6px, env(safe-area-inset-right)) + 138px);
+  }
+
+  .lightbox-promote {
+    right: calc(max(6px, env(safe-area-inset-right)) + 184px);
+  }
+
+  .gallery-lightbox .lightbox-delete {
+    right: calc(max(6px, env(safe-area-inset-right)) + 230px);
   }
 
   .lightbox-action,

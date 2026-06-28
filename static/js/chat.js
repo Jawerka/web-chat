@@ -205,6 +205,7 @@ class ChatApp {
       lightboxSave: document.getElementById('lightbox-save'),
       lightboxFavorite: document.getElementById('lightbox-favorite'),
       lightboxPromote: document.getElementById('lightbox-promote'),
+      lightboxOpenSd: document.getElementById('lightbox-open-sd'),
       lightboxAttachCurrent: document.getElementById('lightbox-attach-current'),
       themeToggle: document.getElementById('theme-toggle'),
       themeToggleLabel: document.getElementById('theme-toggle-label'),

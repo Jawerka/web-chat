@@ -22,6 +22,7 @@ class UploadsRefLightbox {
       copyAll: document.getElementById('uploads-ref-copy-all'),
       extract: document.getElementById('uploads-ref-extract'),
       attach: document.getElementById('uploads-ref-attach'),
+      openSd: document.getElementById('uploads-ref-open-sd'),
       zoom: document.getElementById('uploads-ref-zoom'),
       zoomImg: document.getElementById('uploads-ref-zoom-img'),
     };
@@ -61,6 +62,13 @@ class UploadsRefLightbox {
       const item = this.current();
       if (item && typeof this.onAttach === 'function') {
         this.onAttach(item, this.els.attach);
+      }
+    });
+    this.els.openSd?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = this.current();
+      if (item && typeof this.onOpenSd === 'function') {
+        this.onOpenSd(item, this.els.openSd);
       }
     });
     this.els.root?.querySelectorAll('.uploads-ref-copy').forEach((btn) => {
@@ -136,6 +144,9 @@ class UploadsRefLightbox {
     if (this.els.params) this.els.params.value = par || '—';
     const hasMeta = item.has_metadata || p || n || par;
     this.els.extract?.classList.toggle('hidden', !!hasMeta);
+    if (typeof GallerySdBridge !== 'undefined') {
+      GallerySdBridge.syncSdOpenButton(this.els.openSd, item);
+    }
 
     if (this.els.strip) {
       this.els.strip.innerHTML = '';

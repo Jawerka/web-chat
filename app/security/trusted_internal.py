@@ -239,6 +239,8 @@ def trusted_internal_hosts_summary() -> dict[str, list[str]]:
 def is_trusted_internal_path(path: str) -> bool:
     if path in _TRUSTED_PATH_EXACT:
         return True
+    if path.startswith("/api/sd-bridge/import/"):
+        return True
     return any(path.startswith(prefix) for prefix in _TRUSTED_PATH_PREFIXES)
 
 
