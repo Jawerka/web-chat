@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from app.services.media_service import _generated_url_variants
 from app.services.message_builder import (
+    build_img2img_batch_hint_text,
     canonical_stored_image_urls,
     finalize_assistant_text,
     is_img2img_gen_preset_instruction_block,
+    parse_img2img_variant_count,
     rewrite_media_urls_in_text,
     strip_img2img_gen_preset_prefix,
     strip_legacy_thumb_urls_from_text,
     strip_llm_image_context_note,
     strip_markdown_images,
 )
-from app.services.media_service import _generated_url_variants
 
 
 def test_strip_markdown_images() -> None:
@@ -33,6 +35,24 @@ def test_strip_img2img_gen_preset_prefix_with_prompt() -> None:
 def test_strip_img2img_gen_preset_prefix_only_hint() -> None:
     raw = "denoising 0.40-0.50; CFG 5.0-7.0; Сделай 10 изображений."
     assert strip_img2img_gen_preset_prefix(raw) == ""
+
+
+def test_parse_img2img_variant_count_from_ui_prefix() -> None:
+    raw = "denoising 0.74-0.90; CFG 5.0-7.0; Сделай 12 изображений.\n\n@tags"
+    assert parse_img2img_variant_count(raw) == 12
+
+
+def test_build_img2img_batch_hint_includes_denoise_range() -> None:
+    raw = "denoising 0.74-0.90; Сделай 12 изображений.\n\n@tags"
+    hint = build_img2img_batch_hint_text(raw)
+    assert "12" in hint
+    assert "0.74" in hint
+    assert "0.90" in hint
+    assert "один" in hint.lower() or "один" in hint
+
+
+def test_build_img2img_batch_hint_skips_single() -> None:
+    assert build_img2img_batch_hint_text("перерисуй один раз") == ""
 
 
 def test_strip_llm_image_context_note_old_and_new() -> None:

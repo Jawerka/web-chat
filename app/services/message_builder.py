@@ -11,6 +11,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.db.models import Attachment, Message, MessageRole
 from app.diag_logging import log_event
 from app.integrations.media_utils import (
@@ -21,8 +23,6 @@ from app.integrations.media_utils import (
     rewrite_image_url_for_llm,
 )
 from app.public_url import strip_public_base
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.services.attachment_service import AttachmentService
 from app.services.media_service import MediaService
 from app.services.prompt_macro_service import expand_macro_text, expand_parts_for_llm
@@ -369,6 +369,92 @@ def build_img2img_init_hint_text(
     )
 
 
+_IMG2IMG_BATCH_HINT_MARK = "[Подсказка img2img:"
+
+_IMG2IMG_VARIANT_COUNT_RE = re.compile(
+    r"(?:"
+    r"Сделай\s+(\d{1,2})\s+изображен\w*"
+    r"|(\d{1,2})\s+(?:изображени|картин|вариант)"
+    r"|(?:make|generate)\s+(\d{1,2})\s+(?:image|variant)s?"
+    r")",
+    re.IGNORECASE,
+)
+
+_IMG2IMG_DENOISE_RANGE_RE = re.compile(
+    r"denoising\s+([\d.]+)\s*-\s*([\d.]+)",
+    re.IGNORECASE,
+)
+
+
+def parse_img2img_variant_count(text: str) -> int | None:
+    """Число запрошенных вариантов из текста пользователя или префикса img2img UI."""
+    if not text:
+        return None
+    for match in _IMG2IMG_VARIANT_COUNT_RE.finditer(text):
+        for group in match.groups():
+            if group:
+                try:
+                    count = int(group)
+                except ValueError:
+                    continue
+                if 2 <= count <= 12:
+                    return count
+    return None
+
+
+def parse_img2img_denoise_range(text: str) -> tuple[float, float] | None:
+    """Диапазон denoise из префикса UI («denoising 0.74-0.90»)."""
+    match = _IMG2IMG_DENOISE_RANGE_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        lo = float(match.group(1))
+        hi = float(match.group(2))
+    except ValueError:
+        return None
+    if lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def build_img2img_batch_hint_text(text: str) -> str:
+    """
+    Подсказка LLM: N>1 вариантов → один img2img с denoising_strengths.
+
+    Срабатывает на «Сделай 12 изображений» из панели img2img и свободный текст.
+    """
+    count = parse_img2img_variant_count(text)
+    if count is None:
+        return ""
+    denoise = parse_img2img_denoise_range(text)
+    if denoise:
+        lo, hi = denoise
+        range_part = (
+            f" равномерно распределённых значений denoising_strengths "
+            f"от {lo:.2f} до {hi:.2f}"
+        )
+    else:
+        range_part = f" значений denoising_strengths (ровно {count} штук)"
+    return (
+        f"{_IMG2IMG_BATCH_HINT_MARK} пользователь просит {count} вариант(ов). "
+        f"Обязательно **один** вызов `img2img` с массивом{range_part}. "
+        f"Запрещено: {count} отдельных вызовов img2img — сервер остановит после 3.]"
+    )
+
+
+def append_img2img_batch_hint(
+    parts: list[dict[str, Any]],
+    user_text: str,
+) -> list[dict[str, Any]]:
+    """Добавить подсказку пакетного img2img, если в тексте запрошено несколько вариантов."""
+    hint = build_img2img_batch_hint_text(user_text)
+    if not hint:
+        return parts
+    out = list(parts)
+    out.append({"type": "text", "text": hint})
+    return out
+
+
 def append_img2img_init_hints(
     parts: list[dict[str, Any]],
     attachments: list[Attachment],
@@ -376,7 +462,8 @@ def append_img2img_init_hints(
     image_parts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Добавить текстовую подсказку с ID/URL вложений-картинок."""
-    hint = build_img2img_init_hint_text(attachments, image_parts if image_parts is not None else parts)
+    parts_for_hint = image_parts if image_parts is not None else parts
+    hint = build_img2img_init_hint_text(attachments, parts_for_hint)
     if not hint:
         return parts
     out = list(parts)

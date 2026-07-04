@@ -18,7 +18,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.diag_logging import log_event, summarize_llm_messages
 from app.db.models import Conversation, Message, MessageRole
 from app.db.repositories import (
     AttachmentRepository,
@@ -27,41 +26,38 @@ from app.db.repositories import (
     PresetRepository,
     PromptMacroRepository,
 )
+from app.diag_logging import log_event, summarize_llm_messages
 from app.integrations.llm_client import LLMClient, LLMCompletion
-from app.integrations.tool_definitions import tools_for_preset_slug
 from app.integrations.media_utils import asset_llm_media_url, rewrite_image_url_for_llm
+from app.integrations.tool_definitions import tools_for_preset_slug
 from app.integrations.tool_executor import ToolExecutor, ToolResult
 from app.services.attachment_service import AttachmentService
 from app.services.conversation_title_service import maybe_generate_conversation_title
+from app.services.img2img_tool_coalesce import (
+    COALESCED_TOOL_NOTE,
+    ToolCallBatch,
+    group_tool_call_batches,
+)
 from app.services.message_builder import (
-    canonical_stored_image_urls,
-    strip_img2img_gen_preset_prefix,
-    is_img2img_gen_preset_instruction_block,
+    append_img2img_batch_hint,
     append_img2img_init_hints,
     build_img2img_init_hint_text,
     build_user_content,
+    canonical_stored_image_urls,
     filter_available_image_attachments,
     filter_unreachable_image_parts,
     finalize_assistant_text,
     format_wd14_tag_block,
     history_to_llm_messages,
+    is_img2img_gen_preset_instruction_block,
     refresh_user_parts_for_regenerate,
     sanitize_llm_messages_for_vision,
+    strip_img2img_gen_preset_prefix,
 )
 from app.services.prompt_macro_service import (
     alias_map_from_macros,
     expand_parts_for_llm,
 )
-from app.services.conversation_tool_state import ConversationToolState
-from app.services.turn_realtime import emit_turn_progress, turn_realtime
-from app.services.user_progress import (
-    STAGE_LLM_THINKING,
-    STAGE_LLM_TOOLS,
-    STAGE_WD_TAGGER,
-    build_progress,
-    is_sd_tool,
-)
-from app.services.wd14_tag_service import tag_user_attachments
 from app.services.streaming_draft import AssistantStreamDraft
 from app.services.turn_context import TurnContext
 from app.services.turn_db import open_turn_session
@@ -70,7 +66,16 @@ from app.services.turn_exceptions import (
     ToolLoopExceeded,
     TurnCancelled,
 )
+from app.services.turn_realtime import emit_turn_progress, turn_realtime
 from app.services.turn_status import patch_completed
+from app.services.user_progress import (
+    STAGE_LLM_THINKING,
+    STAGE_LLM_TOOLS,
+    STAGE_WD_TAGGER,
+    build_progress,
+    is_sd_tool,
+)
+from app.services.wd14_tag_service import tag_user_attachments
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +451,31 @@ class AgentOrchestrator:
             }
         )
 
+    async def _apply_coalesced_sibling_tool_message(
+        self,
+        *,
+        ctx: TurnContext,
+        tc: dict[str, Any],
+        name: str,
+        result: ToolResult,
+    ) -> None:
+        """Ответ LLM на объединённый sibling tool_call (без повторной отправки картинок)."""
+        stream_draft = ctx.stream_draft
+        assert stream_draft is not None
+        note = f"{COALESCED_TOOL_NOTE}\n\n{result.content[:500]}"
+        await stream_draft.set_active_tool(name)
+        await ctx.emit(
+            "tool_done",
+            {"name": name, "summary": COALESCED_TOOL_NOTE[:200], "coalesced": True},
+        )
+        ctx.llm_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": note,
+            }
+        )
+
     async def _run_completion_tool_calls(
         self,
         *,
@@ -459,17 +489,27 @@ class AgentOrchestrator:
         assert stream_draft is not None
         reasoning = self._turn_reasoning(stream_draft, completion)
 
-        pending: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
-
+        parsed: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
         for tc in completion.tool_calls:
             fn = tc["function"]
-            name = fn["name"]
-            args = self._llm.parse_tool_arguments(fn["arguments"])
+            parsed.append(
+                (
+                    tc,
+                    fn["name"],
+                    self._llm.parse_tool_arguments(fn["arguments"]),
+                )
+            )
+        batches = group_tool_call_batches(parsed)
+        pending: list[ToolCallBatch] = []
+
+        for batch in batches:
+            tc, name, _args = batch.primary
+            exec_args = batch.execution_args()
 
             try:
                 ctx.tool_state.before_tool(
                     name,
-                    args,
+                    exec_args,
                     cancel_event=ctx.cancel_event,
                 )
             except ToolAntiLoopExceeded as exc:
@@ -481,23 +521,24 @@ class AgentOrchestrator:
                     tool=name,
                     kind=exc.kind,
                 )
-                await stream_draft.set_active_tool(name)
-                await ctx.emit(
-                    "tool_done",
-                    {
-                        "name": name,
-                        "summary": self._ANTI_LOOP_SKIP_MSG[:200],
-                        "skipped": True,
-                        "kind": exc.kind,
-                    },
-                )
-                ctx.llm_messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": self._ANTI_LOOP_SKIP_MSG,
-                    }
-                )
+                for sibling_tc, sibling_name, _ in batch.entries:
+                    await stream_draft.set_active_tool(sibling_name)
+                    await ctx.emit(
+                        "tool_done",
+                        {
+                            "name": sibling_name,
+                            "summary": self._ANTI_LOOP_SKIP_MSG[:200],
+                            "skipped": True,
+                            "kind": exc.kind,
+                        },
+                    )
+                    ctx.llm_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": sibling_tc["id"],
+                            "content": self._ANTI_LOOP_SKIP_MSG,
+                        }
+                    )
                 if exc.kind == "duplicate":
                     ctx.consecutive_tool_skips += 1
                 should_finish = exc.kind == "max_same" or (
@@ -522,30 +563,38 @@ class AgentOrchestrator:
                     break
                 continue
 
-            pending.append((tc, name, args))
+            pending.append(batch)
 
         if pending:
             executed = await asyncio.gather(
                 *[
                     self._execute_single_tool_call(
                         ctx=ctx,
-                        tc=tc,
-                        name=name,
-                        args=args,
+                        tc=batch.primary[0],
+                        name=batch.name,
+                        args=batch.execution_args(),
                         turn_executor=turn_executor,
                         round_idx=round_idx,
                     )
-                    for tc, name, args in pending
+                    for batch in pending
                 ],
             )
             ctx.consecutive_tool_skips = 0
-            for tc, name, result in executed:
+            for batch, (_tc, name, result) in zip(pending, executed, strict=True):
+                primary_tc = batch.primary[0]
                 await self._apply_tool_result_to_ctx(
                     ctx=ctx,
-                    tc=tc,
+                    tc=primary_tc,
                     name=name,
                     result=result,
                 )
+                for sibling_tc, sibling_name, _ in batch.entries[1:]:
+                    await self._apply_coalesced_sibling_tool_message(
+                        ctx=ctx,
+                        tc=sibling_tc,
+                        name=sibling_name,
+                        result=result,
+                    )
         return None
 
     @staticmethod
@@ -662,6 +711,7 @@ class AgentOrchestrator:
                     attachments,
                     image_parts=llm_parts,
                 )
+                llm_parts = append_img2img_batch_hint(llm_parts, llm_text_for_build)
             content_json: dict[str, Any] = {"parts": stored_parts}
             if wd14_entries:
                 content_json["wd14"] = [e.to_dict() for e in wd14_entries]

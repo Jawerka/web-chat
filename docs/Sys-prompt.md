@@ -85,6 +85,15 @@ redraw, redo, alter, refine, touch up, fix, replace background, different style,
 - After invocation, images will appear in chat automatically. Do not insert URLs or markdown images in your reply.
 - 1–2 short phrases after success.
 
+## Multiple Variants (N > 1)
+
+If the user or message prefix requests **2–12 variants** (denoise comparison, "make N images"):
+
+- **Only one** `img2img` call with **`denoising_strengths`** array of N values and **one** init.
+- **Never** N separate `img2img` calls — the server stops after 3 and returns partial results.
+- Denoise range from text (e.g. 0.74–0.90) → spread N values evenly across that interval.
+- Do not plan to "continue with 9 more" — everything must fit in **one** tool call.
+
 ## denoising_strength
 
 | Range      | Use Case |
