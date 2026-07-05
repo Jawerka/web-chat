@@ -35,7 +35,9 @@ def test_resolve_literal_ip() -> None:
 def test_is_trusted_internal_path() -> None:
     assert is_trusted_internal_path("/media/asset/x/llm")
     assert is_trusted_internal_path("/api/health/logs")
+    assert is_trusted_internal_path("/api/prompt-macros")
     assert not is_trusted_internal_path("/api/conversations")
+    assert not is_trusted_internal_path("/api/prompt-macros/abc")
 
 
 def test_register_integration_urls_adds_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,6 +193,19 @@ async def test_health_logs_via_trusted_loopback(
     refresh_trusted_internal_from_settings()
     response = await client.get("/api/health/logs?limit=50")
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_prompt_macros_list_via_trusted_loopback(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "trusted_internal_allow_loopback", True)
+    refresh_trusted_internal_from_settings()
+    response = await client.get("/api/prompt-macros")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
 
 
 @pytest.mark.asyncio

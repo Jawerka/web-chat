@@ -45,14 +45,6 @@ function webChatBridgeSyncInput(input) {
     }
 }
 
-function webChatBridgeSetValue(elemId, value) {
-    const input = webChatBridgeFindInput(elemId);
-    if (!input) return false;
-    input.value = value;
-    webChatBridgeSyncInput(input);
-    return true;
-}
-
 function webChatBridgeClick(elemId) {
     const wrap = webChatBridgeFindWrap(elemId);
     if (!wrap) return false;
@@ -91,8 +83,38 @@ function webChatBridgeEnsureImg2imgTab() {
     return false;
 }
 
+function webChatBridgeBridgeHasImage() {
+    const wrap = webChatBridgeFindWrap("web_chat_bridge_image");
+    if (!wrap) return false;
+    const img = wrap.querySelector("img");
+    if (!img || !img.src) return false;
+    if (img.src.includes("data:image/gif") && img.naturalWidth <= 1) return false;
+    return img.naturalWidth > 0 || img.offsetWidth > 0;
+}
+
 function webChatBridgeClickSendToImg2img() {
+    if (!webChatBridgeBridgeHasImage()) {
+        webChatBridgeWarn("send to img2img blocked: bridge image empty");
+        return [];
+    }
     webChatBridgeClick("web_chat_bridge_send_i2i");
+    return [];
+}
+
+/** Paste into img2img only when Python set paste_ok=1 and image is present. */
+function webChatBridgeAfterApply(pasteOk) {
+    const ok = String(pasteOk || "0") === "1";
+    if (!ok) {
+        return [];
+    }
+    setTimeout(function () {
+        if (webChatBridgeBridgeHasImage()) {
+            webChatBridgeLog("paste to img2img");
+            webChatBridgeClickSendToImg2img();
+        } else {
+            webChatBridgeWarn("paste skipped: bridge image not ready");
+        }
+    }, 350);
     return [];
 }
 
@@ -123,11 +145,6 @@ function webChatBridgeApplyPending(filename, attempt) {
     webChatBridgeApplying = true;
     webChatBridgeLog("applying queued import: " + (filename || ""));
 
-    webChatBridgeSetValue(
-        "web_chat_bridge_status",
-        "Applying " + (filename || "import") + "…"
-    );
-
     if (!webChatBridgeClick("web_chat_bridge_apply_queued")) {
         webChatBridgeApplying = false;
         webChatBridgeWarn("apply button click failed");
@@ -136,7 +153,7 @@ function webChatBridgeApplyPending(filename, attempt) {
 
     setTimeout(function () {
         webChatBridgeApplying = false;
-    }, 3000);
+    }, 4000);
 }
 
 function webChatBridgeCheckPending() {
@@ -203,7 +220,6 @@ function webChatBridgeWaitLoop() {
 }
 
 function webChatBridgeStartWatchers() {
-    webChatBridgeEnsureImg2imgTab();
     webChatBridgeCheckPending();
     webChatBridgeWaitLoop();
     setInterval(webChatBridgeCheckPending, 2500);

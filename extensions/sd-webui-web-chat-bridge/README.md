@@ -122,6 +122,7 @@ extensions/sd-webui-web-chat-bridge/
 | Симптом | Решение |
 |---------|---------|
 | img2img пустой | Обновить extension; открыта вкладка img2img; F12 `[web-chat-bridge]` |
+| `'NoneType' object has no attribute 'mode'` при Generate | Нет init-картинки в img2img (bridge вставил пусто или batch-папка пуста). Перезапустите WebUI после обновления bridge; загрузите PNG вручную или дождитесь «Applied …» в Status |
 | Аккордеона нет | `AlwaysVisible` в `web_chat_bridge.py`; перезапуск WebUI |
 | `Cannot reach web-chat` | URL в Settings; curl с `.52` до `.44:8090` |
 | HTTP 502 на import | SD `/web-chat-bridge/push` недоступен или отклонил push |

@@ -30,7 +30,11 @@ _CACHE_TTL_SEC = 30.0
 _TRUSTED_PATH_PREFIXES = (
     "/media/asset/",
 )
-_TRUSTED_PATH_EXACT = frozenset({"/api/health", "/api/health/logs"})
+_TRUSTED_PATH_EXACT = frozenset({
+    "/api/health",
+    "/api/health/logs",
+    "/api/prompt-macros",
+})
 
 _lock = Lock()
 _dynamic_hosts: set[str] = set()

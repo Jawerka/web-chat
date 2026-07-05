@@ -136,21 +136,21 @@ def wait_for_queued_import(timeout_sec: float = 20.0) -> dict | None:
             _queue_notify.wait(timeout=min(_WAIT_POLL_SEC, remaining))
 
 
-def _apply_queued_import() -> tuple[object | None, str, str]:
+def _apply_queued_import() -> tuple[object, str, str, str]:
     data = take_queued_import()
     if data is None:
         logger.debug("web-chat bridge: apply called but queue empty")
-        return None, gr.update(), "Очередь пуста."
+        return gr.update(), gr.update(), "Очередь пуста.", "0"
 
     pil_image = data.get("pil_image")
     infotext = (data.get("infotext") or "").strip()
     filename = data.get("filename") or "web-chat-import.png"
     if pil_image is None or not infotext:
         logger.warning("web-chat bridge: queued import incomplete for %s", filename)
-        return None, gr.update(), "Queued import is incomplete."
+        return gr.update(), gr.update(), "Queued import is incomplete.", "0"
 
     logger.info("web-chat bridge: applying queued %s", filename)
-    return pil_image, infotext, f"Applied {filename} from web-chat queue."
+    return pil_image, infotext, f"Applied {filename} from web-chat queue.", "1"
 
 
 def fetch_import_payload(token: str) -> tuple[object | None, str, str]:
@@ -201,11 +201,11 @@ def fetch_import_payload(token: str) -> tuple[object | None, str, str]:
     return pil_image, infotext, f"Loaded {filename} from web-chat."
 
 
-def _fetch_import_payload(token: str) -> tuple[object | None, str, str]:
+def _fetch_import_payload(token: str) -> tuple[object, str, str, str]:
     pil_image, infotext, status = fetch_import_payload(token)
     if pil_image is None:
-        return None, gr.update(), status
-    return pil_image, infotext, status
+        return gr.update(), gr.update(), status, "0"
+    return pil_image, infotext, status, "1"
 
 
 def _client_ip_allowed(client_host: str | None) -> bool:
@@ -360,6 +360,11 @@ class WebChatBridgeScript(scripts.Script):
                 visible=False,
                 elem_id="web_chat_bridge_send_i2i",
             )
+            bridge_paste_ok = gr.Textbox(
+                value="0",
+                visible=False,
+                elem_id="web_chat_bridge_paste_ok",
+            )
 
         if not _BRIDGE_PASTE_REGISTERED:
             register_paste_params_button(
@@ -375,12 +380,12 @@ class WebChatBridgeScript(scripts.Script):
         bridge_apply.click(
             fn=_apply_queued_import,
             inputs=None,
-            outputs=[bridge_image, bridge_info, bridge_status],
+            outputs=[bridge_image, bridge_info, bridge_status, bridge_paste_ok],
             show_progress=False,
         ).then(
             fn=None,
-            _js="webChatBridgeClickSendToImg2img",
-            inputs=None,
+            _js="webChatBridgeAfterApply",
+            inputs=[bridge_paste_ok],
             outputs=None,
             show_progress=False,
         )
@@ -388,12 +393,12 @@ class WebChatBridgeScript(scripts.Script):
         bridge_fetch.click(
             fn=_fetch_import_payload,
             inputs=[bridge_token],
-            outputs=[bridge_image, bridge_info, bridge_status],
+            outputs=[bridge_image, bridge_info, bridge_status, bridge_paste_ok],
             show_progress=False,
         ).then(
             fn=None,
-            _js="webChatBridgeClickSendToImg2img",
-            inputs=None,
+            _js="webChatBridgeAfterApply",
+            inputs=[bridge_paste_ok],
             outputs=None,
             show_progress=False,
         )
@@ -406,4 +411,5 @@ class WebChatBridgeScript(scripts.Script):
             bridge_apply,
             bridge_fetch,
             bridge_send_i2i,
+            bridge_paste_ok,
         )
